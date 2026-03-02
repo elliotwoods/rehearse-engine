@@ -1,0 +1,23 @@
+import type { ReloadableDescriptor } from "@/core/hotReload/types";
+import { PLUGIN_ACTOR_SCHEMA } from "@/features/actors/actorTypes";
+
+interface PluginRuntime {
+  pluginId: string;
+  entry: string;
+}
+
+export const pluginActorDescriptor: ReloadableDescriptor<PluginRuntime> = {
+  id: "actor.plugin",
+  kind: "actor",
+  version: 1,
+  schema: PLUGIN_ACTOR_SCHEMA,
+  createRuntime: ({ params }) => ({
+    pluginId: typeof params.pluginId === "string" ? params.pluginId : "",
+    entry: typeof params.entry === "string" ? params.entry : ""
+  }),
+  updateRuntime(runtime, { params }) {
+    runtime.pluginId = typeof params.pluginId === "string" ? params.pluginId : runtime.pluginId;
+    runtime.entry = typeof params.entry === "string" ? params.entry : runtime.entry;
+  }
+};
+

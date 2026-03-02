@@ -1,0 +1,52 @@
+const { contextBridge, ipcRenderer } = require("electron");
+
+function serializeReason(reason) {
+  if (reason instanceof Error) {
+    return {
+      name: reason.name,
+      message: reason.message,
+      stack: reason.stack
+    };
+  }
+  if (typeof reason === "object" && reason !== null) {
+    return reason;
+  }
+  return {
+    value: String(reason)
+  };
+}
+
+window.addEventListener("error", (event) => {
+  ipcRenderer.send("renderer:runtime-error", {
+    type: "window.error",
+    message: event.message,
+    filename: event.filename,
+    lineno: event.lineno,
+    colno: event.colno,
+    error: serializeReason(event.error)
+  });
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  ipcRenderer.send("renderer:runtime-error", {
+    type: "window.unhandledrejection",
+    reason: serializeReason(event.reason)
+  });
+});
+
+const api = {
+  mode: "electron-rw",
+  listSessions: () => ipcRenderer.invoke("sessions:list"),
+  loadDefaults: () => ipcRenderer.invoke("defaults:load"),
+  saveDefaults: (pointer) => ipcRenderer.invoke("defaults:save", pointer),
+  loadSession: (sessionName) => ipcRenderer.invoke("session:load", sessionName),
+  saveSession: (sessionName, payload) => ipcRenderer.invoke("session:save", sessionName, payload),
+  importAsset: (args) => ipcRenderer.invoke("asset:import", args),
+  transcodeHdriToKtx2: (args) => ipcRenderer.invoke("asset:transcode-hdri", args),
+  deleteAsset: (args) => ipcRenderer.invoke("asset:delete", args),
+  resolveAssetPath: (args) => ipcRenderer.invoke("asset:resolve-path", args),
+  logRuntimeError: (payload) => ipcRenderer.send("renderer:runtime-error", payload)
+};
+
+contextBridge.exposeInMainWorld("electronAPI", api);
+

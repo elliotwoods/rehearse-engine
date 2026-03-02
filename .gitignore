@@ -1,0 +1,26 @@
+node_modules/
+dist/
+**/dist/
+dist-electron/
+.vite/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+src/**/*.js
+src/**/*.js.map
+logs/
+
+# Local environment and OS files
+.env
+.env.local
+.DS_Store
+Thumbs.db
+
+# Editor files
+.idea/
+.vscode/
+
+# Runtime data
+savedata/*/autosave.json
+savedata/*/tmp/

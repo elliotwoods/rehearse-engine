@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "appMode": "web-ro",
+  "sessionName": "demo",
+  "createdAtIso": "2026-03-02T00:00:00.000Z",
+  "updatedAtIso": "2026-03-02T00:00:00.000Z",
+  "scene": {
+    "id": "scene-demo",
+    "name": "Scene",
+    "enabled": true,
+    "kind": "scene",
+    "actorIds": ["actor-root"],
+    "sceneComponentIds": []
+  },
+  "actors": {
+    "actor-root": {
+      "id": "actor-root",
+      "name": "Root",
+      "enabled": true,
+      "kind": "actor",
+      "actorType": "empty",
+      "parentActorId": null,
+      "childActorIds": [],
+      "componentIds": [],
+      "transform": {
+        "position": [0, 0, 0],
+        "rotation": [0, 0, 0],
+        "scale": [1, 1, 1]
+      },
+      "params": {}
+    }
+  },
+  "components": {},
+  "camera": {
+    "mode": "perspective",
+    "position": [6, 4, 6],
+    "target": [0, 0, 0],
+    "fov": 50,
+    "zoom": 1,
+    "near": 0.01,
+    "far": 1000
+  },
+  "cameraBookmarks": [],
+  "time": {
+    "running": false,
+    "speed": 1,
+    "fixedStepSeconds": 0.016666666666666666,
+    "elapsedSimSeconds": 0
+  },
+  "assets": []
+}
+
