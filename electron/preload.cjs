@@ -45,8 +45,18 @@ const api = {
   transcodeHdriToKtx2: (args) => ipcRenderer.invoke("asset:transcode-hdri", args),
   deleteAsset: (args) => ipcRenderer.invoke("asset:delete", args),
   resolveAssetPath: (args) => ipcRenderer.invoke("asset:resolve-path", args),
-  logRuntimeError: (payload) => ipcRenderer.send("renderer:runtime-error", payload)
+  logRuntimeError: (payload) => ipcRenderer.send("renderer:runtime-error", payload),
+  getWindowState: () => ipcRenderer.invoke("window:get-state"),
+  windowMinimize: () => ipcRenderer.invoke("window:minimize"),
+  windowToggleMaximize: () => ipcRenderer.invoke("window:toggle-maximize"),
+  windowClose: () => ipcRenderer.invoke("window:close"),
+  onWindowStateChange: (listener) => {
+    const handler = (_event, state) => listener(state);
+    ipcRenderer.on("window:state", handler);
+    return () => {
+      ipcRenderer.removeListener("window:state", handler);
+    };
+  }
 };
 
 contextBridge.exposeInMainWorld("electronAPI", api);
-

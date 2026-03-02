@@ -16,6 +16,7 @@ import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import type { CameraPreset, TimeSpeedPreset } from "@/core/types";
 import { loadPluginFromModule } from "@/features/plugins/pluginLoader";
+import { AddActorMenu } from "@/ui/components/AddActorMenu";
 
 const SPEEDS: TimeSpeedPreset[] = [0.125, 0.25, 0.5, 1, 2, 4];
 const CAMERA_PRESETS: CameraPreset[] = ["perspective", "isometric", "top", "left", "front", "back"];
@@ -177,6 +178,11 @@ export function TopBarPanel(props: TopBarPanelProps) {
         <button type="button" title="Redo" onClick={() => kernel.store.getState().actions.redo()}>
           <FontAwesomeIcon icon={faRotateRight} />
         </button>
+      </div>
+
+      <div className="toolbar-group">
+        <label title="Add actor">Add</label>
+        <AddActorMenu disabled={isReadOnly} label="Add..." />
       </div>
 
       <div className="toolbar-group">

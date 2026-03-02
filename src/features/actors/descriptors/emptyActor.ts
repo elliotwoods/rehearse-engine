@@ -10,6 +10,10 @@ export const emptyActorDescriptor: ReloadableDescriptor<EmptyRuntime> = {
   kind: "actor",
   version: 1,
   schema: EMPTY_ACTOR_SCHEMA,
+  spawn: {
+    actorType: "empty",
+    label: "Empty"
+  },
   createRuntime: () => ({
     tickCount: 0
   }),

@@ -1,4 +1,4 @@
-import type { ParameterSchema, ParameterValues } from "@/core/types";
+import type { ActorType, ParameterSchema, ParameterValues } from "@/core/types";
 
 export type DescriptorKind = "actor" | "component" | "system";
 
@@ -13,6 +13,11 @@ export interface ReloadableDescriptor<TRuntime = unknown> {
   kind: DescriptorKind;
   version: number;
   schema: ParameterSchema;
+  spawn?: {
+    actorType: ActorType;
+    pluginType?: string;
+    label?: string;
+  };
   createRuntime(args: { params: ParameterValues }): TRuntime;
   updateRuntime(runtime: TRuntime, args: { params: ParameterValues; dtSeconds: number }): void;
   disposeRuntime?(runtime: TRuntime): void;

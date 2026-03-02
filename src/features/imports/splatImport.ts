@@ -1,4 +1,5 @@
 import type { AppKernel } from "@/app/kernel";
+import { createActorFromDescriptor } from "@/features/actors/actorCatalog";
 
 export interface SplatImportRequest {
   sessionName: string;
@@ -12,10 +13,10 @@ export async function importGaussianSplat(kernel: AppKernel, request: SplatImpor
     kind: "gaussian-splat"
   });
 
-  const actorId = kernel.store.getState().actions.createActor({
-    actorType: "gaussian-splat",
-    name: "Gaussian Splat"
-  });
+  const actorId = createActorFromDescriptor(kernel, "actor.gaussianSplat");
+  if (!actorId) {
+    throw new Error("Missing actor descriptor: actor.gaussianSplat");
+  }
   kernel.store.getState().actions.updateActorParams(actorId, {
     assetId: asset.id,
     opacity: 1,

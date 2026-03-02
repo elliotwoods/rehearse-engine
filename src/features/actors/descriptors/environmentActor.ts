@@ -11,6 +11,10 @@ export const environmentActorDescriptor: ReloadableDescriptor<EnvironmentRuntime
   kind: "actor",
   version: 1,
   schema: ENVIRONMENT_ACTOR_SCHEMA,
+  spawn: {
+    actorType: "environment",
+    label: "Environment"
+  },
   createRuntime: ({ params }) => ({
     assetId: typeof params.assetId === "string" ? params.assetId : undefined,
     intensity: typeof params.intensity === "number" ? params.intensity : 1

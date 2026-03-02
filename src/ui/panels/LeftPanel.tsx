@@ -1,9 +1,8 @@
-import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import { SceneTree } from "@/ui/components/SceneTree";
+import { AddActorMenu } from "@/ui/components/AddActorMenu";
 
 export function LeftPanel() {
-  const kernel = useKernel();
   const stats = useAppStore((store) => store.state.stats);
   const selection = useAppStore((store) => store.state.selection);
   const mode = useAppStore((store) => store.state.mode);
@@ -15,22 +14,7 @@ export function LeftPanel() {
         <header>
           <h3>Scene Graph</h3>
           <div className="inline-actions">
-            <button
-              type="button"
-              disabled={readOnly}
-              title="Create Empty Actor"
-              onClick={() => kernel.store.getState().actions.createActor({ actorType: "empty", name: "Empty" })}
-            >
-              + Empty
-            </button>
-            <button
-              type="button"
-              disabled={readOnly}
-              title="Create Environment Actor"
-              onClick={() => kernel.store.getState().actions.createActor({ actorType: "environment", name: "Environment" })}
-            >
-              + Env
-            </button>
+            <AddActorMenu disabled={readOnly} label="Add..." />
           </div>
         </header>
         <SceneTree />

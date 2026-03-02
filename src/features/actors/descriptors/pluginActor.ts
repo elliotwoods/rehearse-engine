@@ -11,6 +11,10 @@ export const pluginActorDescriptor: ReloadableDescriptor<PluginRuntime> = {
   kind: "actor",
   version: 1,
   schema: PLUGIN_ACTOR_SCHEMA,
+  spawn: {
+    actorType: "plugin",
+    label: "Plugin Actor"
+  },
   createRuntime: ({ params }) => ({
     pluginId: typeof params.pluginId === "string" ? params.pluginId : "",
     entry: typeof params.entry === "string" ? params.entry : ""

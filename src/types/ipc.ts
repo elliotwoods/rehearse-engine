@@ -38,5 +38,10 @@ export interface ElectronApi {
   deleteAsset(args: { sessionName: string; relativePath: string }): Promise<void>;
   resolveAssetPath(args: { sessionName: string; relativePath: string }): Promise<string>;
   logRuntimeError(payload: Record<string, unknown>): void;
+  getWindowState(): Promise<{ isMaximized: boolean }>;
+  windowMinimize(): Promise<void>;
+  windowToggleMaximize(): Promise<void>;
+  windowClose(): Promise<void>;
+  onWindowStateChange(listener: (state: { isMaximized: boolean }) => void): () => void;
 }
 

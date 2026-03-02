@@ -12,6 +12,10 @@ export const gaussianSplatActorDescriptor: ReloadableDescriptor<GaussianSplatRun
   kind: "actor",
   version: 1,
   schema: GAUSSIAN_SPLAT_SCHEMA,
+  spawn: {
+    actorType: "gaussian-splat",
+    label: "Gaussian Splat"
+  },
   createRuntime: ({ params }) => ({
     assetId: typeof params.assetId === "string" ? params.assetId : undefined,
     opacity: typeof params.opacity === "number" ? params.opacity : 1,

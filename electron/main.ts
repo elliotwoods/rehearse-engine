@@ -150,7 +150,9 @@ function createWindow(): BrowserWindow {
     height: 960,
     minWidth: 1200,
     minHeight: 720,
+    frame: false,
     backgroundColor: "#0a0f17",
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(getRepoRoot(), "electron", "preload.cjs"),
       contextIsolation: true,
@@ -214,6 +216,19 @@ function createWindow(): BrowserWindow {
     void writeRuntimeLog("window", "BrowserWindow closed");
   });
 
+  const pushWindowState = () => {
+    mainWindow.webContents.send("window:state", {
+      isMaximized: mainWindow.isMaximized()
+    });
+  };
+  mainWindow.on("maximize", pushWindowState);
+  mainWindow.on("unmaximize", pushWindowState);
+  mainWindow.on("enter-full-screen", pushWindowState);
+  mainWindow.on("leave-full-screen", pushWindowState);
+  mainWindow.webContents.once("did-finish-load", () => {
+    pushWindowState();
+  });
+
   if (IS_DEV && DEV_SERVER_URL) {
     void mainWindow.loadURL(DEV_SERVER_URL).catch((error) => {
       void writeRuntimeLog("window", "Failed to load DEV server URL", error);
@@ -234,6 +249,29 @@ function registerIpcHandlers(): void {
   });
 
   ipcMain.handle("mode:get", () => "electron-rw");
+  ipcMain.handle("window:get-state", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    return { isMaximized: win?.isMaximized() ?? false };
+  });
+  ipcMain.handle("window:minimize", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    win?.minimize();
+  });
+  ipcMain.handle("window:toggle-maximize", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) {
+      return;
+    }
+    if (win.isMaximized()) {
+      win.unmaximize();
+      return;
+    }
+    win.maximize();
+  });
+  ipcMain.handle("window:close", (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    win?.close();
+  });
 
   ipcMain.handle("sessions:list", async () => {
     await fs.mkdir(getSaveDataRoot(), { recursive: true });

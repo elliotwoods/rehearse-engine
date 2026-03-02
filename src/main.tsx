@@ -1,5 +1,5 @@
 import ReactDOM from "react-dom/client";
-import "flexlayout-react/style/light.css";
+import "flexlayout-react/style/dark.css";
 import "@/styles.css";
 import { App } from "@/app/App";
 import { getKernel } from "@/app/kernel";
