@@ -9,7 +9,11 @@ interface ViewportRuntime {
   stop(): void;
 }
 
-export function ViewportPanel() {
+interface ViewportPanelProps {
+  suspended?: boolean;
+}
+
+export function ViewportPanel(props: ViewportPanelProps) {
   const kernel = useKernel();
   const backend = useAppStore((store) => store.state.scene.renderEngine);
   const antialiasing = useAppStore((store) => store.state.scene.antialiasing);
@@ -21,6 +25,9 @@ export function ViewportPanel() {
   const [showResolutionOverlay, setShowResolutionOverlay] = useState(false);
 
   useEffect(() => {
+    if (props.suspended) {
+      return;
+    }
     if (!hostRef.current) {
       return;
     }
@@ -45,7 +52,7 @@ export function ViewportPanel() {
       viewport.stop();
       viewportRef.current = null;
     };
-  }, [antialiasing, backend, kernel]);
+  }, [antialiasing, backend, kernel, props.suspended]);
 
   useEffect(() => {
     if (!hostRef.current) {
@@ -123,6 +130,7 @@ export function ViewportPanel() {
   return (
       <div className="viewport-panel">
       <div className="viewport-canvas-host" ref={hostRef} />
+      {props.suspended ? <div className="viewport-suspended-overlay">Viewport suspended during render</div> : null}
       <div className={`viewport-resolution-overlay${showResolutionOverlay ? " is-visible" : ""}`}>
         {viewportSize.width} x {viewportSize.height} ({backend === "webgl2" ? "WEBGL2" : "WEBGPU"})
       </div>

@@ -208,6 +208,7 @@ interface FlexLayoutHostProps {
   titleBar: React.ReactNode;
   topBar: React.ReactNode;
   pendingDropFileName?: string | null;
+  viewportSuspended?: boolean;
 }
 
 export function FlexLayoutHost(props: FlexLayoutHostProps) {
@@ -219,7 +220,7 @@ export function FlexLayoutHost(props: FlexLayoutHostProps) {
       case "left":
         return <LeftPanel pendingDropFileName={props.pendingDropFileName} />;
       case "center":
-        return <ViewportPanel />;
+        return <ViewportPanel suspended={props.viewportSuspended} />;
       case "right":
         return <RightPanel />;
       case "console":

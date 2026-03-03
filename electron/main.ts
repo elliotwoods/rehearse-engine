@@ -18,6 +18,18 @@ const DEFAULT_WINDOW_WIDTH = 1680;
 const DEFAULT_WINDOW_HEIGHT = 960;
 const MIN_WINDOW_WIDTH = 1200;
 const MIN_WINDOW_HEIGHT = 720;
+const renderPipeJobs = new Map<string, { child: ReturnType<typeof spawn>; encoder: string; outputPath: string }>();
+const renderTempJobs = new Map<
+  string,
+  {
+    frameFolderPath: string;
+    framePatternPath: string;
+    outputPath: string;
+    fps: number;
+    bitrateMbps: number;
+    encoder: string;
+  }
+>();
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -327,6 +339,97 @@ async function runToktx({
   });
 }
 
+function ffmpegPath(): string {
+  return "ffmpeg";
+}
+
+async function detectH265Encoder(): Promise<string> {
+  return await new Promise<string>((resolve, reject) => {
+    const child = spawn(ffmpegPath(), ["-hide_banner", "-encoders"], {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let text = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      text += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      text += chunk.toString("utf8");
+    });
+    child.on("error", (error) => {
+      reject(new Error(`Unable to run ffmpeg: ${error.message}`));
+    });
+    child.on("close", () => {
+      if (/\bhevc_nvenc\b/.test(text)) {
+        resolve("hevc_nvenc");
+        return;
+      }
+      if (/\blibx265\b/.test(text)) {
+        resolve("libx265");
+        return;
+      }
+      reject(new Error("No H.265 encoder found. Install FFmpeg with hevc_nvenc or libx265."));
+    });
+  });
+}
+
+function bitrateArg(bitrateMbps: number): string {
+  const safe = Number.isFinite(bitrateMbps) ? Math.max(1, Math.floor(bitrateMbps)) : 100;
+  return `${String(safe)}M`;
+}
+
+function pipeEncodeArgs(args: {
+  fps: number;
+  bitrateMbps: number;
+  encoder: string;
+  outputPath: string;
+}): string[] {
+  const fps = Math.max(1, Math.floor(args.fps));
+  return [
+    "-y",
+    "-f",
+    "image2pipe",
+    "-vcodec",
+    "png",
+    "-framerate",
+    String(fps),
+    "-i",
+    "-",
+    "-an",
+    "-c:v",
+    args.encoder,
+    "-b:v",
+    bitrateArg(args.bitrateMbps),
+    "-pix_fmt",
+    "yuv420p",
+    args.outputPath
+  ];
+}
+
+function tempEncodeArgs(args: {
+  fps: number;
+  bitrateMbps: number;
+  encoder: string;
+  framePatternPath: string;
+  outputPath: string;
+}): string[] {
+  const fps = Math.max(1, Math.floor(args.fps));
+  return [
+    "-y",
+    "-framerate",
+    String(fps),
+    "-i",
+    args.framePatternPath,
+    "-an",
+    "-c:v",
+    args.encoder,
+    "-b:v",
+    bitrateArg(args.bitrateMbps),
+    "-pix_fmt",
+    "yuv420p",
+    args.outputPath
+  ];
+}
+
 function createWindow(): BrowserWindow {
   const persisted = readPersistedWindowState();
   const usePersistedBounds = persisted && isWindowBoundsVisible(persisted);
@@ -532,10 +635,290 @@ function registerIpcHandlers(): void {
       return result.filePaths[0] ?? null;
     }
   );
+  ipcMain.handle(
+    "dialog:save-file",
+    async (
+      event,
+      args: {
+        title?: string;
+        defaultFileName?: string;
+        filters?: FileDialogFilter[];
+      }
+    ) => {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      const result = win
+        ? await dialog.showSaveDialog(win, {
+            title: args.title ?? "Save file",
+            defaultPath: args.defaultFileName,
+            filters: args.filters
+          })
+        : await dialog.showSaveDialog({
+            title: args.title ?? "Save file",
+            defaultPath: args.defaultFileName,
+            filters: args.filters
+          });
+      if (result.canceled) {
+        return null;
+      }
+      return result.filePath ?? null;
+    }
+  );
+  ipcMain.handle(
+    "dialog:open-directory",
+    async (
+      event,
+      args: {
+        title?: string;
+      }
+    ) => {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      const result = win
+        ? await dialog.showOpenDialog(win, {
+            title: args.title ?? "Choose folder",
+            properties: ["openDirectory", "createDirectory"]
+          })
+        : await dialog.showOpenDialog({
+            title: args.title ?? "Choose folder",
+            properties: ["openDirectory", "createDirectory"]
+          });
+      if (result.canceled) {
+        return null;
+      }
+      return result.filePaths[0] ?? null;
+    }
+  );
 
   ipcMain.handle("plugins:discover-local", async () => {
     return await discoverLocalPlugins();
   });
+  ipcMain.handle(
+    "render:pipe-open",
+    async (
+      _event,
+      args: {
+        outputPath: string;
+        fps: number;
+        bitrateMbps: number;
+      }
+    ) => {
+      const encoder = await detectH265Encoder();
+      const pipeId = randomUUID();
+      const ffmpegArgs = pipeEncodeArgs({
+        fps: args.fps,
+        bitrateMbps: args.bitrateMbps,
+        encoder,
+        outputPath: args.outputPath
+      });
+      const child = spawn(ffmpegPath(), ffmpegArgs, {
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      let stderrText = "";
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderrText += chunk.toString("utf8");
+      });
+      child.on("error", (error) => {
+        void writeRuntimeLog("render:pipe", "ffmpeg spawn failed", error);
+      });
+      (child as any).__stderrTextRef = () => stderrText;
+      renderPipeJobs.set(pipeId, {
+        child,
+        encoder,
+        outputPath: args.outputPath
+      });
+      return {
+        pipeId,
+        encoder
+      };
+    }
+  );
+  ipcMain.handle(
+    "render:pipe-write-frame",
+    async (
+      _event,
+      args: {
+        pipeId: string;
+        framePngBytes: Uint8Array;
+      }
+    ) => {
+      const job = renderPipeJobs.get(args.pipeId);
+      if (!job) {
+        throw new Error("Render pipe job not found.");
+      }
+      const buffer = Buffer.from(args.framePngBytes);
+      await new Promise<void>((resolve, reject) => {
+        const writable = job.child.stdin;
+        if (!writable || writable.destroyed) {
+          reject(new Error("Render pipe stdin is unavailable."));
+          return;
+        }
+        const ok = writable.write(buffer, (error) => {
+          if (error) {
+            reject(error);
+            return;
+          }
+          resolve();
+        });
+        if (!ok) {
+          writable.once("drain", () => resolve());
+        }
+      });
+    }
+  );
+  ipcMain.handle(
+    "render:pipe-close",
+    async (
+      _event,
+      args: {
+        pipeId: string;
+      }
+    ) => {
+      const job = renderPipeJobs.get(args.pipeId);
+      if (!job) {
+        throw new Error("Render pipe job not found.");
+      }
+      renderPipeJobs.delete(args.pipeId);
+      const stderrReader = (job.child as any).__stderrTextRef as (() => string) | undefined;
+      await new Promise<void>((resolve, reject) => {
+        const stdin = job.child.stdin;
+        if (stdin && !stdin.destroyed) {
+          stdin.end();
+        }
+        job.child.once("close", (code) => {
+          if (code === 0) {
+            resolve();
+            return;
+          }
+          reject(new Error(`ffmpeg exited with code ${String(code)}. ${stderrReader?.() ?? ""}`.trim()));
+        });
+      });
+      return {
+        summary: `Saved ${job.outputPath} (${job.encoder})`
+      };
+    }
+  );
+  ipcMain.handle(
+    "render:pipe-abort",
+    async (
+      _event,
+      args: {
+        pipeId: string;
+      }
+    ) => {
+      const job = renderPipeJobs.get(args.pipeId);
+      if (!job) {
+        return;
+      }
+      renderPipeJobs.delete(args.pipeId);
+      job.child.kill("SIGTERM");
+    }
+  );
+  ipcMain.handle(
+    "render:temp-init",
+    async (
+      _event,
+      args: {
+        folderPath: string;
+        fps: number;
+        bitrateMbps: number;
+        outputFileName?: string;
+      }
+    ) => {
+      const encoder = await detectH265Encoder();
+      const safeFolder = path.resolve(args.folderPath);
+      await fs.mkdir(safeFolder, { recursive: true });
+      const jobId = randomUUID();
+      const frameFolderPath = path.join(safeFolder, `frames-${jobId}`);
+      await fs.mkdir(frameFolderPath, { recursive: true });
+      const outputPath = path.join(safeFolder, args.outputFileName && args.outputFileName.trim() ? args.outputFileName : "render.mp4");
+      const framePatternPath = path.join(frameFolderPath, "frame_%06d.png");
+      renderTempJobs.set(jobId, {
+        frameFolderPath,
+        framePatternPath,
+        outputPath,
+        fps: Math.max(1, Math.floor(args.fps)),
+        bitrateMbps: Math.max(1, Math.floor(args.bitrateMbps)),
+        encoder
+      });
+      return {
+        jobId,
+        frameFolderPath,
+        outputPath,
+        encoder
+      };
+    }
+  );
+  ipcMain.handle(
+    "render:temp-write-frame",
+    async (
+      _event,
+      args: {
+        jobId: string;
+        frameIndex: number;
+        framePngBytes: Uint8Array;
+      }
+    ) => {
+      const job = renderTempJobs.get(args.jobId);
+      if (!job) {
+        throw new Error("Render temp job not found.");
+      }
+      const frameName = `frame_${String(Math.max(0, Math.floor(args.frameIndex))).padStart(6, "0")}.png`;
+      const framePath = path.join(job.frameFolderPath, frameName);
+      await fs.writeFile(framePath, Buffer.from(args.framePngBytes));
+    }
+  );
+  ipcMain.handle(
+    "render:temp-finalize",
+    async (
+      _event,
+      args: {
+        jobId: string;
+      }
+    ) => {
+      const job = renderTempJobs.get(args.jobId);
+      if (!job) {
+        throw new Error("Render temp job not found.");
+      }
+      renderTempJobs.delete(args.jobId);
+      const ffmpegArgs = tempEncodeArgs({
+        fps: job.fps,
+        bitrateMbps: job.bitrateMbps,
+        encoder: job.encoder,
+        framePatternPath: job.framePatternPath,
+        outputPath: job.outputPath
+      });
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(ffmpegPath(), ffmpegArgs, {
+          stdio: ["ignore", "pipe", "pipe"]
+        });
+        let stderrText = "";
+        child.stderr.on("data", (chunk: Buffer) => {
+          stderrText += chunk.toString("utf8");
+        });
+        child.on("error", (error) => reject(new Error(`Unable to run ffmpeg: ${error.message}`)));
+        child.on("close", (code) => {
+          if (code === 0) {
+            resolve();
+            return;
+          }
+          reject(new Error(`ffmpeg exited with code ${String(code)}. ${stderrText}`));
+        });
+      });
+      return {
+        summary: `Saved ${job.outputPath} (${job.encoder})`
+      };
+    }
+  );
+  ipcMain.handle(
+    "render:temp-abort",
+    async (
+      _event,
+      args: {
+        jobId: string;
+      }
+    ) => {
+      renderTempJobs.delete(args.jobId);
+    }
+  );
 
   ipcMain.handle("sessions:list", async () => {
     await fs.mkdir(getSaveDataRoot(), { recursive: true });

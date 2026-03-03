@@ -24,6 +24,16 @@ export interface FileDialogFilter {
   extensions: string[];
 }
 
+export interface SaveDialogArgs {
+  title?: string;
+  defaultFileName?: string;
+  filters?: FileDialogFilter[];
+}
+
+export interface DirectoryDialogArgs {
+  title?: string;
+}
+
 export interface LocalPluginCandidate {
   modulePath: string;
   sourceGroup: "plugins-local" | "plugins";
@@ -62,7 +72,22 @@ export interface ElectronApi {
   resolveAssetPath(args: { sessionName: string; relativePath: string }): Promise<string>;
   readAssetBytes(args: { sessionName: string; relativePath: string }): Promise<Uint8Array>;
   openFileDialog(args: { title?: string; filters?: FileDialogFilter[] }): Promise<string | null>;
+  openSaveDialog(args: SaveDialogArgs): Promise<string | null>;
+  openDirectoryDialog(args: DirectoryDialogArgs): Promise<string | null>;
   discoverLocalPlugins(): Promise<LocalPluginCandidate[]>;
+  renderPipeOpen(args: { outputPath: string; fps: number; bitrateMbps: number }): Promise<{ pipeId: string; encoder: string }>;
+  renderPipeWriteFrame(args: { pipeId: string; framePngBytes: Uint8Array }): Promise<void>;
+  renderPipeClose(args: { pipeId: string }): Promise<{ summary: string }>;
+  renderPipeAbort(args: { pipeId: string }): Promise<void>;
+  renderTempInit(args: {
+    folderPath: string;
+    fps: number;
+    bitrateMbps: number;
+    outputFileName?: string;
+  }): Promise<{ jobId: string; frameFolderPath: string; outputPath: string; encoder: string }>;
+  renderTempWriteFrame(args: { jobId: string; frameIndex: number; framePngBytes: Uint8Array }): Promise<void>;
+  renderTempFinalize(args: { jobId: string }): Promise<{ summary: string }>;
+  renderTempAbort(args: { jobId: string }): Promise<void>;
   logRuntimeError(payload: Record<string, unknown>): void;
   getWindowState(): Promise<{ isMaximized: boolean }>;
   windowMinimize(): Promise<void>;

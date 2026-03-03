@@ -6,6 +6,7 @@ import {
   faCirclePause,
   faCirclePlay,
   faForwardStep,
+  faFilm,
   faKeyboard,
   faRotateLeft,
   faRotateRight
@@ -29,6 +30,7 @@ function formatSpeed(speed: TimeSpeedPreset): string {
 
 interface TopBarPanelProps {
   onToggleKeyboardMap: () => void;
+  onOpenRender: () => void;
   requestTextInput(args: {
     title: string;
     label: string;
@@ -196,6 +198,13 @@ export function TopBarPanel(props: TopBarPanelProps) {
       <div className="toolbar-group">
         <label title="Add actor">Add</label>
         <AddActorMenu disabled={isReadOnly} />
+      </div>
+
+      <div className="toolbar-group">
+        <label title="Render">Render</label>
+        <button type="button" title="Render video" onClick={props.onOpenRender}>
+          <FontAwesomeIcon icon={faFilm} />
+        </button>
       </div>
 
       <div className="toolbar-group">

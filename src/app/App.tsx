@@ -17,7 +17,15 @@ import { TitleBarPanel } from "@/ui/panels/TitleBarPanel";
 import { FileImportModal } from "@/ui/components/FileImportModal";
 import { KeyboardMapModal } from "@/ui/components/KeyboardMapModal";
 import { TextInputModal } from "@/ui/components/TextInputModal";
+import { RenderSettingsModal } from "@/ui/components/RenderSettingsModal";
+import { RenderOverlay } from "@/ui/components/RenderOverlay";
 import type { CameraState } from "@/core/types";
+import type { RenderProgress, RenderSettings } from "@/features/render/types";
+import { computeFrameCount, frameProgress, frameSimTime } from "@/features/render/timeline";
+import { solveRenderCamera, type ArcLengthSample } from "@/features/render/cameraSolver";
+import { canvasToPngBytes, createRenderExporter } from "@/features/render/exporters";
+import { WebGlViewport } from "@/render/webglRenderer";
+import { WebGpuViewport } from "@/render/webgpuRenderer";
 
 function dataTransferHasFiles(dataTransfer: DataTransfer | null): boolean {
   if (!dataTransfer) {
@@ -72,8 +80,17 @@ export function App() {
     confirmLabel?: string;
     resolve: (value: string | null) => void;
   } | null>(null);
+  const [renderModalOpen, setRenderModalOpen] = useState(false);
+  const [renderOverlayOpen, setRenderOverlayOpen] = useState(false);
+  const [renderProgress, setRenderProgress] = useState<RenderProgress | null>(null);
+  const [renderHostEl, setRenderHostEl] = useState<HTMLDivElement | null>(null);
+  const [mainViewportSuspended, setMainViewportSuspended] = useState(false);
+  const renderCancelRequestedRef = useRef(false);
   const activeSessionName = useAppStore((store) => store.state.activeSessionName);
   const mode = useAppStore((store) => store.state.mode);
+  const sceneRenderEngine = useAppStore((store) => store.state.scene.renderEngine);
+  const sceneAntialiasing = useAppStore((store) => store.state.scene.antialiasing);
+  const actors = useAppStore((store) => store.state.actors);
   const readOnly = mode === "web-ro";
 
   const fileExtensionFromName = (fileName: string): string => {
@@ -291,6 +308,96 @@ export function App() {
     [kernel, sampleActiveCameraTween, startCameraTween]
   );
 
+  const runRender = useCallback(
+    async (settings: RenderSettings) => {
+      const stateBefore = kernel.store.getState().state;
+      const previousCamera = structuredClone(stateBefore.camera);
+      const previousTime = structuredClone(stateBefore.time);
+      setRenderModalOpen(false);
+      setRenderOverlayOpen(true);
+      setMainViewportSuspended(true);
+      renderCancelRequestedRef.current = false;
+      setRenderProgress({ frameIndex: 0, frameCount: 1, message: "Preparing..." });
+      let viewport: { start(): Promise<void>; stop(): void } | null = null;
+      let exporter: { abort(): Promise<void> } | null = null;
+      try {
+        let waitCount = 0;
+        while (!renderHostEl && waitCount < 120) {
+          await new Promise((resolve) => setTimeout(resolve, 16));
+          waitCount += 1;
+        }
+        if (!renderHostEl) {
+          throw new Error("Render viewport host was not created.");
+        }
+        renderHostEl.style.width = `${String(settings.width)}px`;
+        renderHostEl.style.height = `${String(settings.height)}px`;
+        viewport =
+          sceneRenderEngine === "webgl2"
+            ? new WebGlViewport(kernel, renderHostEl, { antialias: sceneAntialiasing })
+            : new WebGpuViewport(kernel, renderHostEl, { antialias: sceneAntialiasing });
+        await viewport.start();
+        const frameCount = computeFrameCount(settings.durationSeconds, settings.fps);
+        const startTime = settings.startTimeMode === "zero" ? 0 : previousTime.elapsedSimSeconds;
+        const writeExporter = await createRenderExporter(settings);
+        exporter = writeExporter;
+        const pathArcTableCache = new Map<string, ArcLengthSample[]>();
+
+        kernel.store.getState().actions.setTimeRunning(false);
+        kernel.store.getState().actions.setTimeSpeed(1);
+
+        for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
+          if (renderCancelRequestedRef.current) {
+            throw new Error("Render cancelled.");
+          }
+          const progress = frameProgress(frameIndex, frameCount);
+          const simTime = frameSimTime(startTime, frameIndex, settings.fps);
+          kernel.store.getState().actions.setElapsedSimSeconds(simTime);
+          const nextCamera = solveRenderCamera(
+            kernel.store.getState().state,
+            previousCamera,
+            progress,
+            settings.cameraPathActorId,
+            settings.cameraTargetActorId,
+            pathArcTableCache
+          );
+          kernel.store.getState().actions.setCameraState(nextCamera, false);
+          setRenderProgress({ frameIndex, frameCount, message: "Rendering frame..." });
+          await nextAnimationFrame();
+          await nextAnimationFrame();
+          const canvas = renderHostEl.querySelector("canvas");
+          if (!(canvas instanceof HTMLCanvasElement)) {
+            throw new Error("Render canvas is unavailable.");
+          }
+          const bytes = await canvasToPngBytes(canvas);
+          await writeExporter.writeFrame(bytes, frameIndex);
+          setRenderProgress({ frameIndex, frameCount, message: "Writing frame..." });
+        }
+        const result = await writeExporter.finalize();
+        kernel.store.getState().actions.setStatus(`Render finished. ${result.summary}`);
+        viewport.stop();
+        viewport = null;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown render failure";
+        kernel.store.getState().actions.setStatus(`Render failed: ${message}`);
+        if (exporter) {
+          await exporter.abort().catch(() => undefined);
+        }
+      } finally {
+        if (viewport) {
+          viewport.stop();
+        }
+        kernel.store.getState().actions.setCameraState(previousCamera, false);
+        kernel.store.getState().actions.setElapsedSimSeconds(previousTime.elapsedSimSeconds);
+        kernel.store.getState().actions.setTimeRunning(previousTime.running);
+        kernel.store.getState().actions.setTimeSpeed(previousTime.speed);
+        setMainViewportSuspended(false);
+        setRenderOverlayOpen(false);
+        setRenderProgress(null);
+      }
+    },
+    [kernel, renderHostEl, sceneAntialiasing, sceneRenderEngine]
+  );
+
   useEffect(() => {
     registerCoreActorDescriptors(kernel);
     setupActorHotReload(kernel);
@@ -439,6 +546,7 @@ export function App() {
     () => (
       <TopBarPanel
         onToggleKeyboardMap={() => setKeyboardMapOpen((value) => !value)}
+        onOpenRender={() => setRenderModalOpen(true)}
         requestTextInput={requestTextInput}
       />
     ),
@@ -457,7 +565,12 @@ export function App() {
       onDragLeave={handleDragLeave}
       onDrop={handleRootDrop}
     >
-      <FlexLayoutHost titleBar={titleBar} topBar={topBar} pendingDropFileName={dragImportState?.fileName ?? null} />
+      <FlexLayoutHost
+        titleBar={titleBar}
+        topBar={topBar}
+        pendingDropFileName={dragImportState?.fileName ?? null}
+        viewportSuspended={mainViewportSuspended}
+      />
       {dragImportState ? (
         <div className="file-drop-overlay">
           <div className="file-drop-overlay-head">
@@ -507,6 +620,47 @@ export function App() {
           request?.resolve(null);
         }}
       />
+      <RenderSettingsModal
+        open={renderModalOpen}
+        isElectron={Boolean(window.electronAPI)}
+        defaults={buildDefaultRenderSettings()}
+        curveActors={Object.values(actors)
+          .filter((actor) => actor.actorType === "curve")
+          .map((actor) => ({ id: actor.id, label: actor.name }))}
+        targetActors={Object.values(actors).map((actor) => ({ id: actor.id, label: actor.name }))}
+        onCancel={() => setRenderModalOpen(false)}
+        onConfirm={(settings) => {
+          void runRender(settings);
+        }}
+      />
+      <RenderOverlay
+        open={renderOverlayOpen}
+        progress={renderProgress}
+        onHostReady={setRenderHostEl}
+        onCancel={() => {
+          renderCancelRequestedRef.current = true;
+        }}
+      />
     </div>
   );
+}
+
+function nextAnimationFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+}
+
+function buildDefaultRenderSettings(): RenderSettings {
+  return {
+    width: 1920,
+    height: 1080,
+    fps: 24,
+    bitrateMbps: 100,
+    durationSeconds: 10,
+    startTimeMode: "current",
+    cameraPathActorId: "",
+    cameraTargetActorId: "",
+    strategy: window.electronAPI ? "pipe" : "temp-folder"
+  };
 }

@@ -67,6 +67,7 @@ export interface AppActions {
   setTimeRunning(running: boolean): void;
   stepTime(stepMultiplier?: number): void;
   setTimeSpeed(speed: TimeSpeedPreset): void;
+  setElapsedSimSeconds(seconds: number): void;
   applyCameraPreset(preset: CameraPreset): void;
   setCameraState(camera: Partial<AppState["camera"]>, markDirty?: boolean): void;
   saveCameraBookmark(name: string): void;
@@ -593,6 +594,13 @@ export function createAppStore(mode: AppMode): AppStoreApi {
         set({
           state: produce(get().state, (draft) => {
             draft.time.speed = speed;
+          })
+        });
+      },
+      setElapsedSimSeconds(seconds) {
+        set({
+          state: produce(get().state, (draft) => {
+            draft.time.elapsedSimSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : draft.time.elapsedSimSeconds;
           })
         });
       },
