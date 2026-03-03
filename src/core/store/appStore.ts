@@ -4,6 +4,7 @@ import { createId } from "@/core/ids";
 import { createInitialState, DEFAULT_CAMERA } from "@/core/defaults";
 import type {
   ActorNode,
+  ActorVisibilityMode,
   AppState,
   CameraPreset,
   ConsoleCommandEntry,
@@ -44,12 +45,14 @@ export interface AppActions {
   deleteSelection(): void;
   renameNode(node: SelectionEntry, name: string): void;
   setActorTransform(actorId: string, key: "position" | "rotation" | "scale", value: [number, number, number]): void;
+  setActorVisibilityMode(actorId: string, mode: ActorVisibilityMode): void;
   setNodeEnabled(node: SelectionEntry, enabled: boolean): void;
   select(nodes: SelectionEntry[], additive?: boolean): void;
   clearSelection(): void;
   reorderActor(actorId: string, newParentId: string | null, index: number): void;
   updateComponentParams(componentId: string, partial: ParameterValues): void;
   updateActorParams(actorId: string, partial: ParameterValues): void;
+  updateActorParamsNoHistory(actorId: string, partial: ParameterValues): void;
   setTimeRunning(running: boolean): void;
   stepTime(stepMultiplier?: number): void;
   setTimeSpeed(speed: TimeSpeedPreset): void;
@@ -297,6 +300,7 @@ export function createAppStore(mode: AppMode): AppStoreApi {
           enabled: true,
           kind: "actor",
           actorType,
+          visibilityMode: "visible",
           pluginType,
           parentActorId,
           childActorIds: [],
@@ -397,6 +401,19 @@ export function createAppStore(mode: AppMode): AppStoreApi {
           })
         });
       },
+      setActorVisibilityMode(actorId, mode) {
+        withHistory(get, set, "Set actor visibility");
+        set({
+          state: produce(get().state, (draft) => {
+            const actor = draft.actors[actorId];
+            if (!actor) {
+              return;
+            }
+            actor.visibilityMode = mode;
+            draft.dirty = true;
+          })
+        });
+      },
       setNodeEnabled(node, enabled) {
         withHistory(get, set, "Toggle enabled");
         set({
@@ -447,6 +464,23 @@ export function createAppStore(mode: AppMode): AppStoreApi {
             if (!actor) {
               return;
             }
+            if (newParentId === actorId) {
+              return;
+            }
+            if (newParentId && !draft.actors[newParentId]) {
+              return;
+            }
+            if (newParentId) {
+              // Reject cycles: parent candidate cannot be inside actor's descendant chain.
+              let cursor: string | null = newParentId;
+              while (cursor) {
+                if (cursor === actorId) {
+                  return;
+                }
+                cursor = draft.actors[cursor]?.parentActorId ?? null;
+              }
+            }
+
             if (actor.parentActorId) {
               const oldParent = draft.actors[actor.parentActorId];
               if (oldParent) {
@@ -461,7 +495,8 @@ export function createAppStore(mode: AppMode): AppStoreApi {
             if (!targetList) {
               return;
             }
-            targetList.splice(index, 0, actorId);
+            const safeIndex = Math.max(0, Math.min(targetList.length, Math.floor(index)));
+            targetList.splice(safeIndex, 0, actorId);
             draft.dirty = true;
           })
         });
@@ -481,6 +516,18 @@ export function createAppStore(mode: AppMode): AppStoreApi {
       },
       updateActorParams(actorId, partial) {
         withHistory(get, set, "Update actor params");
+        set({
+          state: produce(get().state, (draft) => {
+            const actor = draft.actors[actorId];
+            if (!actor) {
+              return;
+            }
+            actor.params = { ...actor.params, ...partial };
+            draft.dirty = true;
+          })
+        });
+      },
+      updateActorParamsNoHistory(actorId, partial) {
         set({
           state: produce(get().state, (draft) => {
             const actor = draft.actors[actorId];

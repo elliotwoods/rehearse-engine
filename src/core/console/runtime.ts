@@ -1,5 +1,5 @@
 import type { AppKernel } from "@/app/kernel";
-import type { ActorNode, ComponentNode, SelectionEntry } from "@/core/types";
+import type { ActorNode, ActorVisibilityMode, ComponentNode, ParameterValues, SelectionEntry } from "@/core/types";
 import { createActorFromDescriptor, listActorCreationOptions } from "@/features/actors/actorCatalog";
 import { loadPluginFromModule } from "@/features/plugins/pluginLoader";
 
@@ -103,6 +103,18 @@ const METHOD_DOCS: ConsoleMethodDoc[] = [
     signature: "actor.params.set(target, patch)",
     description: "Set actor params.",
     examples: ["actor.params.set('@selected', { opacity: 0.5 })"]
+  },
+  {
+    path: "actor.visibility.get",
+    signature: "actor.visibility.get(target)",
+    description: "Get actor visibility mode.",
+    examples: ["actor.visibility.get('@selected')"]
+  },
+  {
+    path: "actor.visibility.set",
+    signature: "actor.visibility.set(target, mode)",
+    description: "Set actor visibility mode.",
+    examples: ["actor.visibility.set('@selected', 'hidden')"]
   },
   { path: "component.list", signature: "component.list(filter?)", description: "List components.", examples: ["component.list()"] },
   { path: "component.select", signature: "component.select(target, options?)", description: "Select components.", examples: ["component.select('@selected')"] },
@@ -507,9 +519,30 @@ function buildRuntimeApi(kernel: AppKernel) {
         assertWritable(kernel);
         const targets = resolveActorTargets(kernel, target);
         for (const entry of targets) {
-          kernel.store.getState().actions.updateActorParams(entry.id, patch as Record<string, number | string | boolean>);
+          kernel.store.getState().actions.updateActorParams(entry.id, patch as ParameterValues);
         }
         return { updated: targets.length };
+      }
+    },
+    visibility: {
+      get(target: TargetInput) {
+        const targets = resolveActorTargets(kernel, target);
+        return targets.map((entry) => ({
+          actorId: entry.id,
+          name: entry.name,
+          visibilityMode: entry.visibilityMode ?? "visible"
+        }));
+      },
+      set(target: TargetInput, mode: ActorVisibilityMode) {
+        assertWritable(kernel);
+        if (mode !== "visible" && mode !== "hidden" && mode !== "selected") {
+          throw new Error("Invalid visibility mode. Use 'visible', 'hidden', or 'selected'.");
+        }
+        const targets = resolveActorTargets(kernel, target);
+        for (const entry of targets) {
+          kernel.store.getState().actions.setActorVisibilityMode(entry.id, mode);
+        }
+        return { updated: targets.length, mode };
       }
     }
   };
@@ -564,7 +597,7 @@ function buildRuntimeApi(kernel: AppKernel) {
         assertWritable(kernel);
         const targets = resolveComponentTargets(kernel, target);
         for (const entry of targets) {
-          kernel.store.getState().actions.updateComponentParams(entry.id, patch as Record<string, number | string | boolean>);
+          kernel.store.getState().actions.updateComponentParams(entry.id, patch as ParameterValues);
         }
         return { updated: targets.length };
       }

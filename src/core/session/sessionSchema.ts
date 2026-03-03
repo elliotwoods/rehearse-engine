@@ -3,13 +3,17 @@ import { SESSION_SCHEMA_VERSION } from "@/core/types";
 import type { SessionManifest } from "@/core/types";
 
 const vector3Schema = z.tuple([z.number(), z.number(), z.number()]);
+const parameterValueSchema: z.ZodTypeAny = z.lazy(() =>
+  z.union([z.number(), z.string(), z.boolean(), z.null(), z.array(parameterValueSchema), z.record(parameterValueSchema)])
+);
 
 const actorSchema = z.object({
   id: z.string(),
   name: z.string(),
   enabled: z.boolean(),
   kind: z.literal("actor"),
-  actorType: z.enum(["empty", "environment", "gaussian-splat", "mesh", "primitive", "plugin"]),
+  actorType: z.enum(["empty", "environment", "gaussian-splat", "mesh", "primitive", "curve", "plugin"]),
+  visibilityMode: z.enum(["visible", "hidden", "selected"]).default("visible"),
   pluginType: z.string().optional(),
   parentActorId: z.string().nullable(),
   childActorIds: z.array(z.string()),
@@ -19,7 +23,7 @@ const actorSchema = z.object({
     rotation: vector3Schema,
     scale: vector3Schema
   }),
-  params: z.record(z.union([z.number(), z.string(), z.boolean()]))
+  params: z.record(parameterValueSchema)
 });
 
 const componentSchema = z.object({
@@ -30,7 +34,7 @@ const componentSchema = z.object({
   parentActorId: z.string().nullable(),
   componentType: z.string(),
   schemaId: z.string(),
-  params: z.record(z.union([z.number(), z.string(), z.boolean()]))
+  params: z.record(parameterValueSchema)
 });
 
 const sessionSchema = z.object({

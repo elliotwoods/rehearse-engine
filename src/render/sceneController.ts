@@ -8,12 +8,27 @@ import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
 import type { AppKernel } from "@/app/kernel";
 import type { ActorNode } from "@/core/types";
+import { getGaussianFilterMode, getGaussianFilterRegionActorIds, hasActiveGaussianFilter } from "@/render/gaussianFilter";
 
 const GAUSSIAN_RENDER_ROOT_NAME = "gaussian-splat-render-root";
 const GAUSSIAN_RENDER_MESH_NAME = "gaussian-splat-render";
 const MESH_RENDER_ROOT_NAME = "mesh-render-root";
 const SPLAT_COORDINATE_CORRECTION_EULER = new THREE.Euler(-Math.PI / 2, 0, 0, "XYZ");
 const SPLAT_COORDINATE_CORRECTION_QUATERNION = new THREE.Quaternion().setFromEuler(SPLAT_COORDINATE_CORRECTION_EULER);
+const MATRIX_IDENTITY = new THREE.Matrix4().identity();
+
+interface GaussianFallbackFilterRegion {
+  actorId: string;
+  shape: "sphere" | "cube" | "cylinder";
+  size: number;
+  worldMatrixElements: number[];
+  gaussianLocalToPrimitive: any;
+}
+
+interface GaussianFallbackFilterSpec {
+  mode: "inside" | "outside";
+  regions: GaussianFallbackFilterRegion[];
+}
 
 function formatLoadError(error: unknown): string {
   if (error instanceof Error) {
@@ -102,6 +117,8 @@ export class SceneController {
   private readonly gaussianBoundsHelpers = new Map<string, any>();
   private readonly meshLoadTokenByActorId = new Map<string, number>();
   private readonly primitiveSignatureByActorId = new Map<string, string>();
+  private readonly gaussianGeometryByActorId = new Map<string, any>();
+  private readonly gaussianVisualSignatureByActorId = new Map<string, string>();
   private readonly plyLoader = new PLYLoader();
   private readonly gltfLoader = new GLTFLoader();
   private readonly fbxLoader = new FBXLoader();
@@ -135,7 +152,7 @@ export class SceneController {
       if (!actorIds.has(existing)) {
         const object = this.actorObjects.get(existing);
         if (object) {
-          this.scene.remove(object);
+          object.parent?.remove(object);
         }
         this.actorObjects.delete(existing);
         this.gaussianAssetByActorId.delete(existing);
@@ -145,24 +162,33 @@ export class SceneController {
         this.meshLoadTokenByActorId.delete(existing);
         const helper = this.gaussianBoundsHelpers.get(existing);
         if (helper) {
-          this.scene.remove(helper);
+          helper.parent?.remove(helper);
           this.gaussianBoundsHelpers.delete(existing);
         }
+        this.gaussianGeometryByActorId.delete(existing);
+        this.gaussianVisualSignatureByActorId.delete(existing);
         this.kernel.store.getState().actions.setActorStatus(existing, null);
         this.primitiveSignatureByActorId.delete(existing);
       }
     }
 
     for (const actor of Object.values(state.actors)) {
-      if (actor.actorType === "gaussian-splat" && !this.renderGaussianSplatFallback) {
+      if (
+        actor.actorType === "gaussian-splat" &&
+        !this.renderGaussianSplatFallback &&
+        !hasActiveGaussianFilter(actor, state.actors)
+      ) {
         const existing = this.actorObjects.get(actor.id);
         if (existing) {
-          this.scene.remove(existing);
+          existing.parent?.remove(existing);
           this.actorObjects.delete(actor.id);
         }
+        this.gaussianGeometryByActorId.delete(actor.id);
+        this.gaussianVisualSignatureByActorId.delete(actor.id);
         continue;
       }
       await this.ensureActorObject(actor);
+      this.syncActorParentAttachment(actor.id, actor.parentActorId);
       if (actor.actorType === "gaussian-splat" && this.renderGaussianSplatFallback) {
         await this.syncGaussianSplatAsset(actor);
       }
@@ -173,6 +199,9 @@ export class SceneController {
         this.syncPrimitiveActor(actor);
       }
       this.applyActorTransform(actor);
+    }
+    for (const actor of Object.values(state.actors)) {
+      this.syncActorParentAttachment(actor.id, actor.parentActorId);
     }
 
     await this.updateEnvironmentTexture();
@@ -186,8 +215,21 @@ export class SceneController {
     if (!this.actorObjects.has(actor.id)) {
       const object = await this.createObjectForActor(actor);
       this.actorObjects.set(actor.id, object);
-      this.scene.add(object);
     }
+  }
+
+  private syncActorParentAttachment(actorId: string, parentActorId: string | null): void {
+    const object = this.actorObjects.get(actorId);
+    if (!object) {
+      return;
+    }
+    const parentObject = parentActorId ? this.actorObjects.get(parentActorId) : this.scene;
+    const targetParent = parentObject ?? this.scene;
+    if (object.parent === targetParent) {
+      return;
+    }
+    object.parent?.remove(object);
+    targetParent.add(object);
   }
 
   private async createObjectForActor(actor: ActorNode): Promise<any> {
@@ -312,7 +354,11 @@ export class SceneController {
     if (!object) {
       return;
     }
-    object.visible = actor.enabled;
+    const selection = this.kernel.store.getState().state.selection;
+    const isSelected = selection.some((entry) => entry.kind === "actor" && entry.id === actor.id);
+    const visibilityMode = actor.visibilityMode ?? "visible";
+    const visibleByMode = visibilityMode === "visible" || (visibilityMode === "selected" && isSelected);
+    object.visible = actor.enabled && visibleByMode;
     object.position.set(...actor.transform.position);
     object.rotation.set(...actor.transform.rotation);
     object.scale.set(...actor.transform.scale);
@@ -349,6 +395,10 @@ export class SceneController {
     const previousAssetId = this.gaussianAssetByActorId.get(actor.id) ?? "";
     const previousReloadToken = this.gaussianReloadTokenByActorId.get(actor.id) ?? 0;
     if (assetId === previousAssetId && reloadToken === previousReloadToken) {
+      const geometry = this.gaussianGeometryByActorId.get(actor.id);
+      if (geometry) {
+        this.syncGaussianFallbackVisual(actor, correctedRoot, geometry);
+      }
       return;
     }
     this.gaussianAssetByActorId.set(actor.id, assetId);
@@ -364,6 +414,8 @@ export class SceneController {
         correctedRoot.remove(helper);
         this.gaussianBoundsHelpers.delete(actor.id);
       }
+      this.gaussianGeometryByActorId.delete(actor.id);
+      this.gaussianVisualSignatureByActorId.delete(actor.id);
       return;
     }
 
@@ -403,26 +455,9 @@ export class SceneController {
         const position = geometry.getAttribute("position");
         const pointCount = position?.count ?? 0;
         const bounds = geometry.boundingBox;
-        const existing = correctedRoot.getObjectByName(GAUSSIAN_RENDER_MESH_NAME);
-        if (existing) {
-          correctedRoot.remove(existing);
-        }
-        let pointSize = 0.02;
-        let suggestedPointSize = 0.02;
-        if (bounds) {
-          const correctedBounds = correctedBoundsForViewport(bounds);
-          const maxExtent = Math.max(
-            correctedBounds.max.x - correctedBounds.min.x,
-            correctedBounds.max.y - correctedBounds.min.y,
-            correctedBounds.max.z - correctedBounds.min.z
-          );
-          suggestedPointSize = Math.max(0.02, Math.min(0.25, maxExtent / 1200));
-          pointSize = suggestedPointSize;
-        }
-        const opacity = Number(actor.params.opacity ?? 1);
-        const renderMesh = this.buildGaussianFallbackMesh(geometry, pointSize, opacity);
-        renderMesh.name = GAUSSIAN_RENDER_MESH_NAME;
-        correctedRoot.add(renderMesh);
+        this.gaussianGeometryByActorId.set(actor.id, geometry);
+        this.gaussianVisualSignatureByActorId.delete(actor.id);
+        this.syncGaussianFallbackVisual(actor, correctedRoot, geometry);
 
         if (bounds) {
           const correctedBounds = correctedBoundsForViewport(bounds);
@@ -474,6 +509,8 @@ export class SceneController {
       undefined,
       (error) => {
         const errorMessage = formatLoadError(error);
+        this.gaussianGeometryByActorId.delete(actor.id);
+        this.gaussianVisualSignatureByActorId.delete(actor.id);
         this.kernel.store.getState().actions.setActorStatus(actor.id, {
           values: {
             backend: this.renderGaussianSplatFallback ? "fallback-ply" : "dedicated-overlay",
@@ -679,7 +716,165 @@ export class SceneController {
     }
   }
 
-  private buildGaussianFallbackMesh(geometry: any, pointSize: number, opacity: number): any {
+  private syncGaussianFallbackVisual(actor: ActorNode, correctedRoot: any, geometry: any): void {
+    const opacity = Number(actor.params.opacity ?? 1);
+    const pointSize = this.suggestGaussianPointSize(geometry);
+    const filterSpec = this.buildGaussianFilterSpec(actor);
+    const visualSignature = JSON.stringify({
+      opacity: Number.isFinite(opacity) ? opacity : 1,
+      pointSize,
+      filterSpec
+    });
+    const previous = this.gaussianVisualSignatureByActorId.get(actor.id);
+    if (visualSignature === previous) {
+      return;
+    }
+    this.gaussianVisualSignatureByActorId.set(actor.id, visualSignature);
+    const existing = correctedRoot.getObjectByName(GAUSSIAN_RENDER_MESH_NAME);
+    if (existing) {
+      correctedRoot.remove(existing);
+    }
+    const renderMesh = this.buildGaussianFallbackMesh(geometry, pointSize, opacity, filterSpec);
+    renderMesh.name = GAUSSIAN_RENDER_MESH_NAME;
+    correctedRoot.add(renderMesh);
+  }
+
+  private suggestGaussianPointSize(geometry: any): number {
+    const bounds = geometry.boundingBox;
+    if (!bounds) {
+      return 0.02;
+    }
+    const correctedBounds = correctedBoundsForViewport(bounds);
+    const maxExtent = Math.max(
+      correctedBounds.max.x - correctedBounds.min.x,
+      correctedBounds.max.y - correctedBounds.min.y,
+      correctedBounds.max.z - correctedBounds.min.z
+    );
+    return Math.max(0.02, Math.min(0.25, maxExtent / 1200));
+  }
+
+  private buildGaussianFilterSpec(actor: ActorNode): GaussianFallbackFilterSpec | null {
+    const state = this.kernel.store.getState().state;
+    const mode = getGaussianFilterMode(actor);
+    if (mode === "off") {
+      return null;
+    }
+    const regionIds = getGaussianFilterRegionActorIds(actor);
+    if (regionIds.length === 0) {
+      return null;
+    }
+
+    const gaussianWorld = this.resolveActorWorldMatrix(actor.id, state.actors);
+    const correctionMatrix = new THREE.Matrix4().makeRotationFromQuaternion(SPLAT_COORDINATE_CORRECTION_QUATERNION);
+    const gaussianLocalToWorld = gaussianWorld.clone().multiply(correctionMatrix);
+    const worldToGaussianLocal = gaussianLocalToWorld.clone().invert();
+    const regions: GaussianFallbackFilterRegion[] = [];
+
+    for (const regionId of regionIds) {
+      const regionActor = state.actors[regionId];
+      if (!regionActor || !regionActor.enabled || regionActor.actorType !== "primitive") {
+        continue;
+      }
+      const shape = typeof regionActor.params.shape === "string" ? regionActor.params.shape : "cube";
+      if (shape !== "sphere" && shape !== "cube" && shape !== "cylinder") {
+        continue;
+      }
+      const size = Number(regionActor.params.size ?? 1);
+      const safeSize = Number.isFinite(size) && size > 0 ? size : 1;
+      const primitiveWorld = this.resolveActorWorldMatrix(regionActor.id, state.actors);
+      const primitiveToGaussianLocal = worldToGaussianLocal.clone().multiply(primitiveWorld);
+      const gaussianLocalToPrimitive = primitiveToGaussianLocal.clone().invert();
+      regions.push({
+        actorId: regionActor.id,
+        shape,
+        size: safeSize,
+        worldMatrixElements: primitiveWorld.elements.map((value: number) => Number(value.toFixed(6))),
+        gaussianLocalToPrimitive
+      });
+    }
+
+    if (regions.length === 0) {
+      return null;
+    }
+
+    return { mode, regions };
+  }
+
+  private isGaussianPointVisible(
+    positionInGaussianLocal: any,
+    filterSpec: GaussianFallbackFilterSpec,
+    tempLocal: any
+  ): boolean {
+    let insideAnyRegion = false;
+    for (const region of filterSpec.regions) {
+      if (this.isPointInsideFilterRegion(positionInGaussianLocal, region, tempLocal)) {
+        insideAnyRegion = true;
+        break;
+      }
+    }
+    return filterSpec.mode === "inside" ? insideAnyRegion : !insideAnyRegion;
+  }
+
+  private isPointInsideFilterRegion(
+    positionInGaussianLocal: any,
+    region: GaussianFallbackFilterRegion,
+    target: any
+  ): boolean {
+    const local = target.copy(positionInGaussianLocal).applyMatrix4(region.gaussianLocalToPrimitive);
+    const halfSize = region.size * 0.5;
+    if (region.shape === "sphere") {
+      return local.lengthSq() <= halfSize * halfSize;
+    }
+    if (region.shape === "cube") {
+      return (
+        Math.abs(local.x) <= halfSize &&
+        Math.abs(local.y) <= halfSize &&
+        Math.abs(local.z) <= halfSize
+      );
+    }
+    const radiusSq = local.x * local.x + local.z * local.z;
+    return radiusSq <= halfSize * halfSize && Math.abs(local.y) <= halfSize;
+  }
+
+  private resolveActorWorldMatrix(actorId: string, actors: Record<string, ActorNode>): any {
+    const chain: ActorNode[] = [];
+    const visited = new Set<string>();
+    let cursor: ActorNode | undefined = actors[actorId];
+    while (cursor) {
+      if (visited.has(cursor.id)) {
+        break;
+      }
+      visited.add(cursor.id);
+      chain.push(cursor);
+      cursor = cursor.parentActorId ? actors[cursor.parentActorId] : undefined;
+    }
+    const worldMatrix = MATRIX_IDENTITY.clone();
+    for (let index = chain.length - 1; index >= 0; index -= 1) {
+      const actor = chain[index];
+      if (!actor) {
+        continue;
+      }
+      worldMatrix.multiply(this.actorLocalMatrix(actor.transform));
+    }
+    return worldMatrix;
+  }
+
+  private actorLocalMatrix(transform: ActorNode["transform"]): any {
+    const matrix = new THREE.Matrix4();
+    const position = new THREE.Vector3(...transform.position);
+    const rotation = new THREE.Euler(...transform.rotation, "XYZ");
+    const quaternion = new THREE.Quaternion().setFromEuler(rotation);
+    const scale = new THREE.Vector3(...transform.scale);
+    matrix.compose(position, quaternion, scale);
+    return matrix;
+  }
+
+  private buildGaussianFallbackMesh(
+    geometry: any,
+    pointSize: number,
+    opacity: number,
+    filterSpec: GaussianFallbackFilterSpec | null
+  ): any {
     const position = geometry.getAttribute("position");
     if (!position) {
       return new THREE.Group();
@@ -732,8 +927,17 @@ export class SceneController {
     const SH_C0 = 0.28209479177387814;
 
     let cursor = 0;
+    const samplePosition = new THREE.Vector3();
+    const localSampleInRegion = new THREE.Vector3();
     for (let index = 0; index < position.count; index += stride) {
       translation.set(position.getX(index), position.getY(index), position.getZ(index));
+      if (filterSpec) {
+        samplePosition.copy(translation);
+        const shouldRender = this.isGaussianPointVisible(samplePosition, filterSpec, localSampleInRegion);
+        if (!shouldRender) {
+          continue;
+        }
+      }
 
       if (scale0 && scale1 && scale2) {
         // Some exports store log-scales, others store linear dimensions.
@@ -787,6 +991,7 @@ export class SceneController {
       }
       cursor += 1;
     }
+    mesh.count = cursor;
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) {
       mesh.instanceColor.needsUpdate = true;

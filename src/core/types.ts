@@ -3,7 +3,8 @@ import type { AppMode, HdriTranscodeOptions, SessionAssetRef } from "@/types/ipc
 export const SESSION_SCHEMA_VERSION = 1;
 
 export type SceneNodeKind = "scene" | "actor" | "component";
-export type ActorType = "empty" | "environment" | "gaussian-splat" | "mesh" | "primitive" | "plugin";
+export type ActorType = "empty" | "environment" | "gaussian-splat" | "mesh" | "primitive" | "curve" | "plugin";
+export type ActorVisibilityMode = "visible" | "hidden" | "selected";
 export type CameraPreset = "perspective" | "top" | "left" | "front" | "back" | "isometric";
 export type TimeSpeedPreset = 0.125 | 0.25 | 0.5 | 1 | 2 | 4;
 export type SelectionKind = "actor" | "component";
@@ -26,7 +27,7 @@ export interface ParameterDefinitionBase {
   key: string;
   label: string;
   description?: string;
-  defaultValue?: number | string | boolean;
+  defaultValue?: number | string | boolean | string[];
 }
 
 export interface NumberParameterDefinition extends ParameterDefinitionBase {
@@ -52,6 +53,18 @@ export interface SelectParameterDefinition extends ParameterDefinitionBase {
   options: string[];
 }
 
+export interface ActorRefParameterDefinition extends ParameterDefinitionBase {
+  type: "actor-ref";
+  allowedActorTypes?: ActorType[];
+  allowSelf?: boolean;
+}
+
+export interface ActorRefListParameterDefinition extends ParameterDefinitionBase {
+  type: "actor-ref-list";
+  allowedActorTypes?: ActorType[];
+  allowSelf?: boolean;
+}
+
 export interface FileParameterImportAsset {
   mode: "import-asset";
   kind: SessionAssetRef["kind"];
@@ -74,6 +87,8 @@ export type ParameterDefinition =
   | BooleanParameterDefinition
   | StringParameterDefinition
   | SelectParameterDefinition
+  | ActorRefParameterDefinition
+  | ActorRefListParameterDefinition
   | FileParameterDefinition;
 
 export interface ParameterSchema {
@@ -82,7 +97,15 @@ export interface ParameterSchema {
   params: ParameterDefinition[];
 }
 
-export type ParameterValues = Record<string, number | string | boolean>;
+export type ParameterValue =
+  | number
+  | string
+  | boolean
+  | null
+  | ParameterValue[]
+  | { [key: string]: ParameterValue };
+
+export type ParameterValues = Record<string, ParameterValue>;
 
 export interface ComponentNode extends SceneNodeBase {
   kind: "component";
@@ -95,6 +118,7 @@ export interface ComponentNode extends SceneNodeBase {
 export interface ActorNode extends SceneNodeBase {
   kind: "actor";
   actorType: ActorType;
+  visibilityMode: ActorVisibilityMode;
   pluginType?: string;
   parentActorId: string | null;
   childActorIds: string[];

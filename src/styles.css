@@ -836,6 +836,28 @@ select {
   padding: 0;
 }
 
+.scene-tree-expand.placeholder {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.scene-tree-visibility {
+  width: 24px;
+  min-width: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scene-tree-visibility.hidden {
+  color: var(--text-muted);
+}
+
+.scene-tree-visibility.selected {
+  color: var(--accent-2);
+}
+
 .scene-tree-label {
   width: 100%;
   justify-content: flex-start;
@@ -845,6 +867,17 @@ select {
 .scene-tree-label.selected {
   border-color: var(--accent-2);
   background: #12293b;
+}
+
+.scene-tree-rename-input {
+  width: 100%;
+  min-height: 28px;
+  border: 1px solid var(--accent);
+  background: #0f1f33;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 0 6px;
 }
 
 .scene-tree-load-state {
@@ -1222,6 +1255,31 @@ body.is-scrubbing-number * {
   width: 100%;
   min-height: 28px;
   padding: 0 8px;
+}
+
+.widget-actor-ref-list {
+  position: relative;
+}
+
+.widget-actor-ref-list-select {
+  min-height: 132px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+
+.widget-actor-ref-list-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: var(--text-muted);
+  opacity: 0.5;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-family: var(--font-mono);
 }
 
 .widget-file {

@@ -3,14 +3,15 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCopy } from "@fortawesome/free-solid-svg-icons";
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
-import type { ActorNode, FileParameterDefinition, ParameterDefinition } from "@/core/types";
+import type { ActorNode, ActorVisibilityMode, FileParameterDefinition, ParameterDefinition } from "@/core/types";
 import type { ActorStatusEntry, ReloadableDescriptor } from "@/core/hotReload/types";
 import { importFileForActorParam } from "@/features/imports/fileParameterImport";
-import { DigitScrubInput, FileField, NumberField, SelectField, TextField, ToggleField } from "@/ui/widgets";
+import { ActorRefField, ActorRefListField, DigitScrubInput, FileField, NumberField, SelectField, TextField, ToggleField } from "@/ui/widgets";
 
-type BindingValue = number | string | boolean;
+type BindingValue = number | string | boolean | string[];
 const RAD_TO_DEG = 180 / Math.PI;
 const DEG_TO_RAD = Math.PI / 180;
+const VISIBILITY_OPTIONS: ActorVisibilityMode[] = ["visible", "hidden", "selected"];
 
 function resolveActorDescriptor(
   actor: ActorNode,
@@ -92,6 +93,9 @@ function defaultValueForDefinition(definition: ParameterDefinition): BindingValu
   if (definition.type === "select") {
     return definition.options[0] ?? "";
   }
+  if (definition.type === "actor-ref-list") {
+    return [];
+  }
   return "";
 }
 
@@ -126,7 +130,17 @@ function isMixedValue(values: BindingValue[]): boolean {
   if (first === undefined) {
     return false;
   }
-  return values.some((value) => value !== first);
+  return values.some((value) => !bindingValuesEqual(value, first));
+}
+
+function bindingValuesEqual(a: BindingValue, b: BindingValue): boolean {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) {
+      return false;
+    }
+    return a.every((entry, index) => entry === b[index]);
+  }
+  return a === b;
 }
 
 function isMixedNumber(values: number[]): boolean {
@@ -164,6 +178,29 @@ async function pickFileFromDialog(definition: FileParameterDefinition): Promise<
     title: definition.dialogTitle ?? `Select ${definition.label}`,
     filters: buildFileFilters(definition)
   });
+}
+
+function actorRefOptionsForDefinition(
+  definition: Extract<ParameterDefinition, { type: "actor-ref" | "actor-ref-list" }>,
+  actors: Record<string, ActorNode>,
+  selectedActors: ActorNode[]
+): { id: string; label: string }[] {
+  const selectedIds = new Set(selectedActors.map((actor) => actor.id));
+  return Object.values(actors)
+    .filter((actor) => {
+      if (!definition.allowSelf && selectedIds.has(actor.id)) {
+        return false;
+      }
+      if (definition.allowedActorTypes && definition.allowedActorTypes.length > 0) {
+        return definition.allowedActorTypes.includes(actor.actorType);
+      }
+      return true;
+    })
+    .map((actor) => ({
+      id: actor.id,
+      label: `${actor.name} (${actor.actorType})`
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label));
 }
 
 export function InspectorPane() {
@@ -255,6 +292,13 @@ export function InspectorPane() {
     scheduleAutosave();
   };
 
+  const updateSelectedActorVisibility = (nextMode: ActorVisibilityMode): void => {
+    for (const actor of actorSelection) {
+      kernel.store.getState().actions.setActorVisibilityMode(actor.id, nextMode);
+    }
+    scheduleAutosave();
+  };
+
   const updateSelectedActorTransformAxis = (
     key: "position" | "rotation",
     axisIndex: 0 | 1 | 2,
@@ -301,6 +345,9 @@ export function InspectorPane() {
   const enabledValues = actorSelection.map((actor) => actor.enabled);
   const enabledMixed = enabledValues.some((value) => value !== enabledValues[0]);
   const enabledValue = enabledValues[0] ?? true;
+  const visibilityValues = actorSelection.map((actor) => actor.visibilityMode ?? "visible");
+  const visibilityMixed = visibilityValues.some((value) => value !== visibilityValues[0]);
+  const visibilityValue = visibilityValues[0] ?? "visible";
 
   const positionValuesByAxis: [number[], number[], number[]] = [
     actorSelection.map((actor) => actor.transform.position[0]),
@@ -330,6 +377,28 @@ export function InspectorPane() {
               embedded
               onChange={(next) => updateSelectedActorEnabled(next)}
             />
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Visibility</span>
+            <select
+              className="widget-select"
+              value={visibilityMixed ? "" : visibilityValue}
+              disabled={readOnly}
+              onChange={(event) => {
+                const next = event.target.value as ActorVisibilityMode;
+                if (!next) {
+                  return;
+                }
+                updateSelectedActorVisibility(next);
+              }}
+            >
+              {visibilityMixed ? <option value="">Mixed...</option> : null}
+              {VISIBILITY_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option === "visible" ? "Visible" : option === "hidden" ? "Hidden" : "Visible When Selected"}
+                </option>
+              ))}
+            </select>
           </div>
           <div className="inspector-common-row">
             <span className="inspector-common-label">Translate</span>
@@ -423,6 +492,40 @@ export function InspectorPane() {
               value={typeof current === "string" ? current : ""}
               mixed={mixed}
               options={definition.options}
+              disabled={readOnly}
+              onChange={(next) => {
+                updateSelectedActorParams(definition.key, next);
+              }}
+            />
+          );
+        }
+
+        if (definition.type === "actor-ref") {
+          const options = actorRefOptionsForDefinition(definition, actors, actorSelection);
+          return (
+            <ActorRefField
+              key={definition.key}
+              label={definition.label}
+              value={typeof current === "string" ? current : ""}
+              mixed={mixed}
+              options={options}
+              disabled={readOnly}
+              onChange={(next) => {
+                updateSelectedActorParams(definition.key, next);
+              }}
+            />
+          );
+        }
+
+        if (definition.type === "actor-ref-list") {
+          const options = actorRefOptionsForDefinition(definition, actors, actorSelection);
+          return (
+            <ActorRefListField
+              key={definition.key}
+              label={definition.label}
+              values={Array.isArray(current) ? current.filter((entry): entry is string => typeof entry === "string") : []}
+              mixed={mixed}
+              options={options}
               disabled={readOnly}
               onChange={(next) => {
                 updateSelectedActorParams(definition.key, next);
