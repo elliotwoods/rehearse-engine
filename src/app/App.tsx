@@ -83,7 +83,7 @@ export function App() {
   const [renderModalOpen, setRenderModalOpen] = useState(false);
   const [renderOverlayOpen, setRenderOverlayOpen] = useState(false);
   const [renderProgress, setRenderProgress] = useState<RenderProgress | null>(null);
-  const [renderHostEl, setRenderHostEl] = useState<HTMLDivElement | null>(null);
+  const renderHostElRef = useRef<HTMLDivElement | null>(null);
   const [mainViewportSuspended, setMainViewportSuspended] = useState(false);
   const renderCancelRequestedRef = useRef(false);
   const activeSessionName = useAppStore((store) => store.state.activeSessionName);
@@ -308,6 +308,10 @@ export function App() {
     [kernel, sampleActiveCameraTween, startCameraTween]
   );
 
+  const handleRenderHostReady = useCallback((el: HTMLDivElement | null) => {
+    renderHostElRef.current = el;
+  }, []);
+
   const runRender = useCallback(
     async (settings: RenderSettings) => {
       const stateBefore = kernel.store.getState().state;
@@ -322,19 +326,20 @@ export function App() {
       let exporter: { abort(): Promise<void> } | null = null;
       try {
         let waitCount = 0;
-        while (!renderHostEl && waitCount < 120) {
+        while (!renderHostElRef.current && waitCount < 120) {
           await new Promise((resolve) => setTimeout(resolve, 16));
           waitCount += 1;
         }
-        if (!renderHostEl) {
+        const hostEl = renderHostElRef.current;
+        if (!hostEl) {
           throw new Error("Render viewport host was not created.");
         }
-        renderHostEl.style.width = `${String(settings.width)}px`;
-        renderHostEl.style.height = `${String(settings.height)}px`;
+        hostEl.style.width = `${String(settings.width)}px`;
+        hostEl.style.height = `${String(settings.height)}px`;
         viewport =
           sceneRenderEngine === "webgl2"
-            ? new WebGlViewport(kernel, renderHostEl, { antialias: sceneAntialiasing })
-            : new WebGpuViewport(kernel, renderHostEl, { antialias: sceneAntialiasing });
+            ? new WebGlViewport(kernel, hostEl, { antialias: sceneAntialiasing })
+            : new WebGpuViewport(kernel, hostEl, { antialias: sceneAntialiasing });
         await viewport.start();
         const frameCount = computeFrameCount(settings.durationSeconds, settings.fps);
         const startTime = settings.startTimeMode === "zero" ? 0 : previousTime.elapsedSimSeconds;
@@ -364,7 +369,7 @@ export function App() {
           setRenderProgress({ frameIndex, frameCount, message: "Rendering frame..." });
           await nextAnimationFrame();
           await nextAnimationFrame();
-          const canvas = renderHostEl.querySelector("canvas");
+          const canvas = hostEl.querySelector("canvas");
           if (!(canvas instanceof HTMLCanvasElement)) {
             throw new Error("Render canvas is unavailable.");
           }
@@ -395,7 +400,7 @@ export function App() {
         setRenderProgress(null);
       }
     },
-    [kernel, renderHostEl, sceneAntialiasing, sceneRenderEngine]
+    [kernel, sceneAntialiasing, sceneRenderEngine]
   );
 
   useEffect(() => {
@@ -636,7 +641,7 @@ export function App() {
       <RenderOverlay
         open={renderOverlayOpen}
         progress={renderProgress}
-        onHostReady={setRenderHostEl}
+        onHostReady={handleRenderHostReady}
         onCancel={() => {
           renderCancelRequestedRef.current = true;
         }}
