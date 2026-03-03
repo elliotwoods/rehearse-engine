@@ -308,7 +308,7 @@ export class CurveEditController {
     this.hoverObject = null;
     this.hoveredPointActorId = null;
     this.hoveredPointIndex = null;
-    this.emitCurveVertexSelection(null, null);
+    this.emitCurveVertexSelection(null, null, "anchor");
     (this.orbitControls as any).enabled = true;
     this.domElement.style.cursor = "";
     this.dragHistoryPushed = false;
@@ -341,7 +341,11 @@ export class CurveEditController {
     this.transformControls.attach(picked);
     this.refreshControlSelectionVisuals();
     if (this.activeControlMeta) {
-      this.emitCurveVertexSelection(this.activeControlMeta.actorId, this.activeControlMeta.pointIndex);
+      this.emitCurveVertexSelection(
+        this.activeControlMeta.actorId,
+        this.activeControlMeta.pointIndex,
+        this.activeControlMeta.controlType
+      );
     }
     this.kernel.store.getState().actions.setStatus(
       "Curve control selected. Drag gizmo handles for X/Y/Z or XY/XZ/YZ movement."
@@ -512,7 +516,9 @@ export class CurveEditController {
       this.kernel.store.getState().actions.setStatus("Cannot delete vertex: curve requires at least two vertices.");
       return true;
     }
-    const nextPoints = curve.points.filter((_, index) => index !== this.activeControlMeta?.pointIndex);
+    const deletedPointIndex = this.activeControlMeta.pointIndex;
+    const nextPoints = curve.points.filter((_, index) => index !== deletedPointIndex);
+    const nextSelectedPointIndex = Math.max(0, Math.min(deletedPointIndex, nextPoints.length - 1));
     this.kernel.store.getState().actions.updateActorParams(actor.id, {
       curveData: {
         ...curve,
@@ -520,9 +526,13 @@ export class CurveEditController {
       }
     });
     this.transformControls.detach();
-    this.activeControlMeta = null;
     this.activeSignature = "";
-    this.emitCurveVertexSelection(null, null);
+    this.activeControlMeta = {
+      actorId: actor.id,
+      pointIndex: nextSelectedPointIndex,
+      controlType: "anchor"
+    };
+    this.emitCurveVertexSelection(actor.id, nextSelectedPointIndex, "anchor");
     this.kernel.store.getState().actions.setStatus("Curve vertex deleted.");
     return true;
   };
@@ -543,25 +553,32 @@ export class CurveEditController {
   };
 
   private onCurveVertexSelect = (event: Event): void => {
-    const custom = event as CustomEvent<{ actorId?: string | null; pointIndex?: number | null }>;
+    const custom = event as CustomEvent<{ actorId?: string | null; pointIndex?: number | null; controlType?: string }>;
     const actorId = custom.detail?.actorId ?? null;
     const pointIndex = custom.detail?.pointIndex;
+    const controlTypeRaw = custom.detail?.controlType;
+    const controlType: CurveControlType =
+      controlTypeRaw === "handleIn" || controlTypeRaw === "handleOut" || controlTypeRaw === "anchor"
+        ? controlTypeRaw
+        : "anchor";
     if (!actorId || pointIndex === null || pointIndex === undefined || pointIndex < 0) {
       return;
     }
     if (actorId !== this.activeActorId) {
       return;
     }
-    const anchor = this.findControlObject(actorId, pointIndex, "anchor");
-    if (!anchor) {
-      return;
-    }
     this.activeControlMeta = {
       actorId,
       pointIndex,
-      controlType: "anchor"
+      controlType
     };
-    this.transformControls.attach(anchor);
+    const selectedControl = this.findControlObject(actorId, pointIndex, controlType);
+    if (selectedControl) {
+      this.transformControls.attach(selectedControl);
+    } else {
+      this.transformControls.detach();
+      this.activeSignature = "";
+    }
     this.refreshControlSelectionVisuals();
   };
 
@@ -578,12 +595,17 @@ export class CurveEditController {
     return null;
   }
 
-  private emitCurveVertexSelection(actorId: string | null, pointIndex: number | null): void {
+  private emitCurveVertexSelection(
+    actorId: string | null,
+    pointIndex: number | null,
+    controlType: CurveControlType = "anchor"
+  ): void {
     window.dispatchEvent(
       new CustomEvent(CURVE_VERTEX_SELECT_EVENT, {
         detail: {
           actorId,
-          pointIndex
+          pointIndex,
+          controlType
         }
       })
     );
