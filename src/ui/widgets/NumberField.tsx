@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { InspectorFieldRow } from "@/ui/widgets/InspectorFieldRow";
+import { DigitScrubInput } from "@/ui/widgets/DigitScrubInput";
 
 interface NumberFieldProps {
   label: string;
@@ -166,8 +167,8 @@ export function NumberField(props: NumberFieldProps) {
       onReset={props.onReset}
       resetDisabled={props.disabled}
     >
-      <div className="widget-number">
-        {hasRange ? (
+      {hasRange ? (
+        <div className="widget-number">
           <input
             className="widget-number-slider"
             type="range"
@@ -186,56 +187,74 @@ export function NumberField(props: NumberFieldProps) {
               props.onChange(next);
             }}
           />
-        ) : null}
-        <div className="widget-number-input-wrap">
-          <input
-            className="widget-number-input"
-            value={props.mixed && !editing ? "" : draft}
-            placeholder={props.mixed ? "Mixed" : undefined}
-            disabled={props.disabled}
-            onPointerDown={handleDragStart}
-            onClick={(event) => {
-              if (suppressClickRef.current) {
-                event.preventDefault();
-                (event.target as HTMLInputElement).blur();
-              }
-            }}
-            onFocus={() => setEditing(true)}
-            onBlur={() => {
-              setEditing(false);
-              commitDraft();
-            }}
-            onChange={(event) => {
-              setDraft(event.target.value);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
+          <div className="widget-number-input-wrap">
+            <input
+              className="widget-number-input"
+              value={props.mixed && !editing ? "" : draft}
+              placeholder={props.mixed ? "Mixed" : undefined}
+              disabled={props.disabled}
+              onPointerDown={handleDragStart}
+              onClick={(event) => {
+                if (suppressClickRef.current) {
+                  event.preventDefault();
+                  (event.target as HTMLInputElement).blur();
+                }
+              }}
+              onFocus={() => setEditing(true)}
+              onBlur={() => {
+                setEditing(false);
                 commitDraft();
-                (event.target as HTMLInputElement).blur();
-              }
-              if (event.key === "Escape") {
-                event.preventDefault();
-                setDraft(formatValue(props.value, props.precision));
-                (event.target as HTMLInputElement).blur();
-              }
-              if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-                event.preventDefault();
-                const factor = event.shiftKey ? 10 : 1;
-                const stepValue = (props.step ?? sliderStep) * factor;
-                const direction = event.key === "ArrowUp" ? 1 : -1;
-                const next = normalizeValue(props.value + direction * stepValue, {
-                  min: props.min,
-                  max: props.max,
-                  step: props.step
-                });
-                props.onChange(next);
-              }
+              }}
+              onChange={(event) => {
+                setDraft(event.target.value);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  commitDraft();
+                  (event.target as HTMLInputElement).blur();
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setDraft(formatValue(props.value, props.precision));
+                  (event.target as HTMLInputElement).blur();
+                }
+                if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+                  event.preventDefault();
+                  const factor = event.shiftKey ? 10 : 1;
+                  const stepValue = (props.step ?? sliderStep) * factor;
+                  const direction = event.key === "ArrowUp" ? 1 : -1;
+                  const next = normalizeValue(props.value + direction * stepValue, {
+                    min: props.min,
+                    max: props.max,
+                    step: props.step
+                  });
+                  props.onChange(next);
+                }
+              }}
+            />
+            {props.unit ? <span className="widget-number-unit">{props.unit}</span> : null}
+          </div>
+        </div>
+      ) : (
+        <div className="widget-number-input-wrap">
+          <DigitScrubInput
+            value={props.value}
+            mixed={props.mixed}
+            precision={props.precision ?? (props.step && props.step < 1 ? 3 : 2)}
+            disabled={props.disabled}
+            onChange={(next) => {
+              const normalized = normalizeValue(next, {
+                min: props.min,
+                max: props.max,
+                step: props.step
+              });
+              props.onChange(normalized);
             }}
           />
           {props.unit ? <span className="widget-number-unit">{props.unit}</span> : null}
         </div>
-      </div>
+      )}
     </InspectorFieldRow>
   );
 }

@@ -2,6 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import { keyboardCommandRouter } from "@/app/keyboardCommandRouter";
+import {
+  buildCameraCycleTargets,
+  findCurrentCycleIndex,
+  interpolateCameraState,
+  type CameraCycleTarget
+} from "@/features/camera/cycleTween";
 import { registerCoreActorDescriptors, setupActorHotReload } from "@/features/actors/registerCoreActors";
 import { importFileAsActor, listCompatibleActorFileImportOptions, type ActorFileImportOption } from "@/features/imports/actorFileImport";
 import { FlexLayoutHost } from "@/ui/FlexLayoutHost";
@@ -10,6 +16,7 @@ import { TitleBarPanel } from "@/ui/panels/TitleBarPanel";
 import { FileImportModal } from "@/ui/components/FileImportModal";
 import { KeyboardMapModal } from "@/ui/components/KeyboardMapModal";
 import { TextInputModal } from "@/ui/components/TextInputModal";
+import type { CameraState } from "@/core/types";
 
 function dataTransferHasFiles(dataTransfer: DataTransfer | null): boolean {
   if (!dataTransfer) {
@@ -32,8 +39,17 @@ function isEditableTarget(target: EventTarget | null): boolean {
 }
 
 export function App() {
+  type ActiveCameraTween = {
+    from: CameraState;
+    to: CameraState;
+    startAtMs: number;
+    durationMs: number;
+    target: CameraCycleTarget;
+  };
   const kernel = useKernel();
   const dragDepthRef = useRef(0);
+  const cameraTweenRef = useRef<ActiveCameraTween | null>(null);
+  const cameraTweenRafRef = useRef<number | null>(null);
   const [keyboardMapOpen, setKeyboardMapOpen] = useState(false);
   const [dragImportState, setDragImportState] = useState<{
     fileName: string;
@@ -194,6 +210,86 @@ export function App() {
     []
   );
 
+  const sampleActiveCameraTween = useCallback((nowMs: number): CameraState | null => {
+    const active = cameraTweenRef.current;
+    if (!active) {
+      return null;
+    }
+    const elapsed = nowMs - active.startAtMs;
+    const t = Math.max(0, Math.min(1, elapsed / active.durationMs));
+    return interpolateCameraState(active.from, active.to, t);
+  }, []);
+
+  const stopCameraTween = useCallback(() => {
+    if (cameraTweenRafRef.current !== null) {
+      cancelAnimationFrame(cameraTweenRafRef.current);
+      cameraTweenRafRef.current = null;
+    }
+    cameraTweenRef.current = null;
+  }, []);
+
+  const tickCameraTween = useCallback(
+    (nowMs: number) => {
+      const active = cameraTweenRef.current;
+      if (!active) {
+        cameraTweenRafRef.current = null;
+        return;
+      }
+      const elapsed = nowMs - active.startAtMs;
+      const t = Math.max(0, Math.min(1, elapsed / active.durationMs));
+      const nextCamera = interpolateCameraState(active.from, active.to, t);
+      kernel.store.getState().actions.setCameraState(nextCamera, true);
+      if (t >= 1) {
+        kernel.store.getState().actions.setCameraState(active.to, true);
+        cameraTweenRef.current = null;
+        cameraTweenRafRef.current = null;
+        return;
+      }
+      cameraTweenRafRef.current = requestAnimationFrame(tickCameraTween);
+    },
+    [kernel]
+  );
+
+  const startCameraTween = useCallback(
+    (target: CameraCycleTarget) => {
+      const nowMs = performance.now();
+      const currentFrom = sampleActiveCameraTween(nowMs) ?? kernel.store.getState().state.camera;
+      cameraTweenRef.current = {
+        from: currentFrom,
+        to: structuredClone(target.camera),
+        startAtMs: nowMs,
+        durationMs: 1000,
+        target
+      };
+      kernel.store.getState().actions.setStatus(`Camera tween to ${target.label}`);
+      if (cameraTweenRafRef.current === null) {
+        cameraTweenRafRef.current = requestAnimationFrame(tickCameraTween);
+      }
+    },
+    [kernel, sampleActiveCameraTween, tickCameraTween]
+  );
+
+  const cycleCameraByTab = useCallback(
+    (direction: 1 | -1) => {
+      const state = kernel.store.getState().state;
+      const targets = buildCameraCycleTargets(state);
+      if (targets.length === 0) {
+        return;
+      }
+      const nowMs = performance.now();
+      const cameraNow = sampleActiveCameraTween(nowMs) ?? state.camera;
+      const currentIndex = findCurrentCycleIndex(cameraNow, targets);
+      const normalizedCurrent = currentIndex < 0 ? 0 : currentIndex;
+      const nextIndex = (normalizedCurrent + direction + targets.length) % targets.length;
+      const target = targets[nextIndex];
+      if (!target) {
+        return;
+      }
+      startCameraTween(target);
+    },
+    [kernel, sampleActiveCameraTween, startCameraTween]
+  );
+
   useEffect(() => {
     registerCoreActorDescriptors(kernel);
     setupActorHotReload(kernel);
@@ -244,6 +340,13 @@ export function App() {
     };
   }, [kernel]);
 
+  useEffect(
+    () => () => {
+      stopCameraTween();
+    },
+    [stopCameraTween]
+  );
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (isEditableTarget(event.target)) {
@@ -263,6 +366,14 @@ export function App() {
           return;
         }
         actions.deleteSelection();
+        return;
+      }
+      if (event.key === "Tab") {
+        event.preventDefault();
+        if (event.repeat) {
+          return;
+        }
+        cycleCameraByTab(event.shiftKey ? -1 : 1);
         return;
       }
       if (event.key === "?") {
@@ -302,7 +413,7 @@ export function App() {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [activeSessionName, kernel, requestTextInput]);
+  }, [activeSessionName, cycleCameraByTab, kernel, requestTextInput]);
 
   const topBar = useMemo(
     () => (

@@ -6,14 +6,10 @@ export interface EffectiveCurveHandles {
 }
 
 export function getEffectiveCurveHandles(point: CurvePoint): EffectiveCurveHandles {
-  if (point.mode === "hard") {
-    return {
-      handleIn: [0, 0, 0],
-      handleOut: [0, 0, 0]
-    };
-  }
+  const inMode = point.mode === "mirrored" ? "normal" : (point.handleInMode ?? "normal");
+  const outMode = point.mode === "mirrored" ? "normal" : (point.handleOutMode ?? "normal");
   return {
-    handleIn: [...point.handleIn],
-    handleOut: [...point.handleOut]
+    handleIn: inMode === "hard" ? [0, 0, 0] : [...point.handleIn],
+    handleOut: outMode === "hard" ? [0, 0, 0] : [...point.handleOut]
   };
 }

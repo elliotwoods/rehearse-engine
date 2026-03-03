@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faCube,
@@ -39,8 +40,37 @@ interface TopBarPanelProps {
 export function TopBarPanel(props: TopBarPanelProps) {
   const kernel = useKernel();
   const state = useAppStore((store) => store.state);
+  const [fpsHistory, setFpsHistory] = useState<number[]>([]);
 
   const isReadOnly = state.mode === "web-ro";
+  const fpsValue = Number.isFinite(state.stats.fps) ? state.stats.fps : 0;
+  const frameMsValue = Number.isFinite(state.stats.frameMs) ? state.stats.frameMs : 0;
+
+  useEffect(() => {
+    setFpsHistory((previous) => {
+      const next = [...previous, fpsValue];
+      if (next.length > 64) {
+        next.splice(0, next.length - 64);
+      }
+      return next;
+    });
+  }, [fpsValue]);
+
+  const fpsGraphPath = useMemo(() => {
+    if (fpsHistory.length === 0) {
+      return "";
+    }
+    const width = 92;
+    const height = 18;
+    const maxFps = Math.max(30, ...fpsHistory);
+    const points = fpsHistory.map((value, index) => {
+      const x = fpsHistory.length > 1 ? (index / (fpsHistory.length - 1)) * width : width;
+      const normalized = Math.max(0, Math.min(1, value / maxFps));
+      const y = height - normalized * height;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    });
+    return points.join(" ");
+  }, [fpsHistory]);
 
   return (
     <div className="top-toolbar">
@@ -173,6 +203,19 @@ export function TopBarPanel(props: TopBarPanelProps) {
         >
           <FontAwesomeIcon icon={faCube} />
         </button>
+      </div>
+
+      <div className="toolbar-group toolbar-fps-group" title="Viewport frame rate">
+        <label>FPS</label>
+        <div className="toolbar-fps-widget">
+          <div className="toolbar-fps-values">
+            <strong>{fpsValue.toFixed(1)}</strong>
+            <span>{frameMsValue.toFixed(2)} ms</span>
+          </div>
+          <svg className="toolbar-fps-graph" viewBox="0 0 92 18" preserveAspectRatio="none" aria-hidden>
+            {fpsGraphPath ? <polyline points={fpsGraphPath} /> : null}
+          </svg>
+        </div>
       </div>
     </div>
   );

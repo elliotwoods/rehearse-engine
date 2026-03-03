@@ -3,7 +3,16 @@ import type { AppMode, HdriTranscodeOptions, SessionAssetRef } from "@/types/ipc
 export const SESSION_SCHEMA_VERSION = 2;
 
 export type SceneNodeKind = "scene" | "actor" | "component";
-export type ActorType = "empty" | "environment" | "gaussian-splat" | "mesh" | "primitive" | "curve" | "plugin";
+export type RenderEngine = "webgl2" | "webgpu";
+export type ActorType =
+  | "empty"
+  | "environment"
+  | "gaussian-splat"
+  | "gaussian-splat-spark"
+  | "mesh"
+  | "primitive"
+  | "curve"
+  | "plugin";
 export type ActorVisibilityMode = "visible" | "hidden" | "selected";
 export type CameraPreset = "perspective" | "top" | "left" | "front" | "back" | "isometric";
 export type TimeSpeedPreset = 0.125 | 0.25 | 0.5 | 1 | 2 | 4;
@@ -28,6 +37,10 @@ export interface ParameterDefinitionBase {
   label: string;
   description?: string;
   defaultValue?: number | string | boolean | string[];
+  visibleWhen?: Array<{
+    key: string;
+    equals: string | number | boolean;
+  }>;
 }
 
 export interface NumberParameterDefinition extends ParameterDefinitionBase {
@@ -126,6 +139,8 @@ export interface SceneState extends SceneNodeBase {
   actorIds: string[];
   sceneComponentIds: string[];
   backgroundColor: string;
+  renderEngine: RenderEngine;
+  antialiasing: boolean;
 }
 
 export interface CameraState {
@@ -186,6 +201,9 @@ export interface SceneStats {
   actorCountEnabled: number;
   sessionFileBytes: number;
   sessionFileBytesSaved: number;
+  cameraDistance: number;
+  cameraControlsEnabled: boolean;
+  cameraZoomEnabled: boolean;
 }
 
 export type ActorStatusValue = string | number | boolean | [number, number, number];

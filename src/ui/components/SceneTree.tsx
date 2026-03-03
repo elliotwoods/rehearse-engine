@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBullseye, faChevronDown, faChevronRight, faEye, faEyeSlash } from "@fortawesome/free-solid-svg-icons";
+import {
+  faBullseye,
+  faChevronDown,
+  faChevronRight,
+  faEye,
+  faEyeSlash,
+  faTriangleExclamation
+} from "@fortawesome/free-solid-svg-icons";
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import type { ActorNode, ActorVisibilityMode } from "@/core/types";
@@ -11,22 +18,24 @@ function isSelected(selection: SelectionEntry[], actorId: string): boolean {
   return selection.some((entry) => entry.kind === "actor" && entry.id === actorId);
 }
 
-function visibilityTitle(mode: ActorVisibilityMode): string {
+function visibilityTitle(mode: ActorVisibilityMode, isSelectedNow: boolean): string {
   if (mode === "hidden") {
     return "Hidden (click to set visible when selected)";
   }
   if (mode === "selected") {
-    return "Visible when selected (click to set always visible)";
+    return isSelectedNow
+      ? "Visible when selected (click to set hidden)"
+      : "Visible when selected (click to set always visible)";
   }
   return "Visible (click to hide)";
 }
 
-function nextVisibilityMode(mode: ActorVisibilityMode): ActorVisibilityMode {
+function nextVisibilityMode(mode: ActorVisibilityMode, isSelectedNow: boolean): ActorVisibilityMode {
+  if (mode === "selected") {
+    return isSelectedNow ? "hidden" : "visible";
+  }
   if (mode === "visible") {
     return "hidden";
-  }
-  if (mode === "hidden") {
-    return "selected";
   }
   return "visible";
 }
@@ -55,6 +64,11 @@ function ActorItem(props: { actor: ActorNode; depth: number }) {
   const loadState = typeof runtimeStatus?.values?.loadState === "string" ? runtimeStatus.values.loadState : undefined;
   const isLoading = loadState === "loading";
   const hasError = Boolean(runtimeStatus?.error);
+  const hasConflict = runtimeStatus?.values?.renderIncompatible === true;
+  const incompatibilityReason =
+    typeof runtimeStatus?.values?.renderIncompatibleReason === "string"
+      ? runtimeStatus.values.renderIncompatibleReason
+      : "Incompatible with current render engine.";
   const readOnly = mode === "web-ro";
   const visibilityMode = props.actor.visibilityMode ?? "visible";
 
@@ -128,13 +142,15 @@ function ActorItem(props: { actor: ActorNode; depth: number }) {
           className={`scene-tree-visibility ${visibilityMode}`}
           type="button"
           disabled={readOnly}
-          title={visibilityTitle(visibilityMode)}
+          title={visibilityTitle(visibilityMode, isActive)}
           onClick={(event) => {
             event.stopPropagation();
             if (readOnly) {
               return;
             }
-            kernel.store.getState().actions.setActorVisibilityMode(props.actor.id, nextVisibilityMode(visibilityMode));
+            kernel.store
+              .getState()
+              .actions.setActorVisibilityMode(props.actor.id, nextVisibilityMode(visibilityMode, isActive));
           }}
         >
           <FontAwesomeIcon icon={visibilityIcon(visibilityMode)} />
@@ -180,6 +196,11 @@ function ActorItem(props: { actor: ActorNode; depth: number }) {
           </button>
         )}
         {isLoading ? <span className="scene-tree-load-state loading" title="Loading asset..." /> : null}
+        {hasConflict ? (
+          <span className="scene-tree-load-state conflict" title={incompatibilityReason}>
+            <FontAwesomeIcon icon={faTriangleExclamation} />
+          </span>
+        ) : null}
         {hasError ? <span className="scene-tree-load-state error" title={runtimeStatus?.error ?? "Load failed"} /> : null}
       </div>
       {expanded &&

@@ -15,7 +15,7 @@ interface InspectorFieldRowProps {
 
 export function InspectorFieldRow(props: InspectorFieldRowProps) {
   return (
-    <div className="widget-row">
+    <div className="widget-row widget-row-field">
       <div className="widget-row-header">
         <label className="widget-label">{props.label}</label>
         {props.description ? <span className="widget-description">{props.description}</span> : null}

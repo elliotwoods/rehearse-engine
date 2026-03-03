@@ -208,6 +208,53 @@ body {
   background: var(--panel-muted);
 }
 
+.toolbar-fps-group {
+  margin-left: auto;
+  min-width: 210px;
+  justify-content: flex-end;
+}
+
+.toolbar-fps-widget {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbar-fps-values {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.toolbar-fps-values strong {
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+.toolbar-fps-values span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.toolbar-fps-graph {
+  width: 92px;
+  height: 18px;
+  border: 1px solid var(--line);
+  background: #0a1524;
+}
+
+.toolbar-fps-graph polyline {
+  fill: none;
+  stroke: var(--accent-2);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .add-actor-menu {
   position: relative;
   display: inline-flex;
@@ -469,6 +516,29 @@ select {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+.titlebar-session-inline-rename {
+  min-width: 220px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 12px;
+  text-transform: none;
+}
+
+.titlebar-session-inline-input {
+  min-width: 140px;
+  max-width: 280px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--line-strong);
+  background: #0f1e31;
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font-mono);
 }
 
 .titlebar-session-trigger {
@@ -946,6 +1016,16 @@ select {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35) inset;
 }
 
+.scene-tree-load-state.conflict {
+  width: 14px;
+  height: 14px;
+  color: #ffb454;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+}
+
 @keyframes scene-tree-spin {
   from {
     transform: rotate(0deg);
@@ -967,6 +1047,12 @@ select {
   justify-content: space-between;
   font-family: var(--font-mono);
   font-size: 12px;
+  padding: 2px 6px;
+  border-radius: 3px;
+}
+
+.stats-list div:nth-child(even) {
+  background: rgba(132, 160, 191, 0.08);
 }
 
 .stats-list dt {
@@ -1162,6 +1248,26 @@ select {
   padding: 8px;
   display: grid;
   gap: 8px;
+}
+
+.widget-row-field {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  grid-template-columns: 78px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.widget-row-field .widget-row-header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.widget-row-field .widget-row-control-wrap {
+  min-width: 0;
 }
 
 .widget-row-header {
@@ -1506,7 +1612,22 @@ body.is-scrubbing-number * {
   background: #0f1b2d;
   padding: 6px;
   display: grid;
-  grid-template-columns: 34px auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 6px;
+}
+
+.curve-vertex-row.selected {
+  border-color: var(--accent-2);
+  background: #12314a;
+}
+
+.curve-vertex-row.disabled {
+  opacity: 0.72;
+}
+
+.curve-vertex-controls {
+  display: flex;
   align-items: center;
   gap: 8px;
 }
@@ -1525,6 +1646,48 @@ body.is-scrubbing-number * {
   gap: 6px;
 }
 
+.curve-vertex-mode-list {
+  display: flex;
+  gap: 6px;
+}
+
+.curve-vertex-weight-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.curve-vertex-weight-label {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.curve-vertex-actions {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.curve-vertex-values {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.curve-vertex-enabled {
+  width: 100%;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
 .curve-vertex-cell {
   min-width: 0;
   display: grid;
@@ -1534,6 +1697,16 @@ body.is-scrubbing-number * {
 }
 
 .curve-vertex-delete {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.curve-vertex-action {
   width: 28px;
   min-width: 28px;
   height: 28px;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getEffectiveCurveHandles } from "@/features/curves/handles";
-import { setCurveHandlePosition, setCurvePointMode } from "@/features/curves/editing";
+import { setCurveHandlePosition, setCurveHandleWeightMode, setCurvePointMode } from "@/features/curves/editing";
 import { sanitizeCurveData, type CurveData } from "@/features/curves/types";
 
 const curve: CurveData = {
@@ -10,13 +10,17 @@ const curve: CurveData = {
       position: [0, 0, 0],
       handleIn: [-1, 0, 0],
       handleOut: [1, 0, 0],
-      mode: "mirrored"
+      mode: "mirrored",
+      handleInMode: "normal",
+      handleOutMode: "normal"
     },
     {
       position: [2, 0, 0],
       handleIn: [-1, 0, 0],
       handleOut: [1, 0, 0],
-      mode: "mirrored"
+      mode: "mirrored",
+      handleInMode: "normal",
+      handleOutMode: "normal"
     }
   ]
 };
@@ -57,6 +61,9 @@ describe("curve handle modes", () => {
   it("hard mode keeps stored handles but exposes zero effective handles", () => {
     const hardCurve = setCurvePointMode(curve, 0, "hard");
     const point = hardCurve.points[0];
+    expect(point?.mode).toBe("normal");
+    expect(point?.handleInMode).toBe("hard");
+    expect(point?.handleOutMode).toBe("hard");
     expectVecClose(point?.handleIn, [-1, 0, 0]);
     expectVecClose(point?.handleOut, [1, 0, 0]);
     expectVecClose(point ? getEffectiveCurveHandles(point).handleIn : undefined, [0, 0, 0]);
@@ -69,5 +76,16 @@ describe("curve handle modes", () => {
     const mirrored = setCurvePointMode(withIndependent, 0, "mirrored");
     expectVecClose(mirrored.points[0]?.handleOut, [2.5, -0.5, 0]);
     expectVecClose(mirrored.points[0]?.handleIn, [-2.5, 0.5, 0]);
+  });
+
+  it("supports independent hard/normal handle modes", () => {
+    const normalCurve = setCurvePointMode(curve, 0, "normal");
+    const hardenedIn = setCurveHandleWeightMode(normalCurve, 0, "in", "hard");
+    const point = hardenedIn.points[0];
+    expect(point?.mode).toBe("normal");
+    expect(point?.handleInMode).toBe("hard");
+    expect(point?.handleOutMode).toBe("normal");
+    expectVecClose(point ? getEffectiveCurveHandles(point).handleIn : undefined, [0, 0, 0]);
+    expectVecClose(point ? getEffectiveCurveHandles(point).handleOut : undefined, [1, 0, 0]);
   });
 });

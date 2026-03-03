@@ -75,6 +75,14 @@ export class SessionService {
       return;
     }
 
+    const previousName = this.store.getState().state.activeSessionName;
+    if (previousName === sessionName) {
+      await this.saveSession();
+      return;
+    }
+    // Persist current state before cloning to ensure session.json and assets are coherent.
+    await this.saveSession();
+    await this.storage.cloneSession(previousName, sessionName);
     this.store.getState().actions.setSessionName(sessionName);
     await this.storage.saveDefaults({ defaultSessionName: sessionName });
     await this.saveSession();

@@ -2,24 +2,13 @@ import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import { SceneTree } from "@/ui/components/SceneTree";
 import { AddActorMenu } from "@/ui/components/AddActorMenu";
-import { StatsBlock } from "@/ui/components/StatsBlock";
 
 interface LeftPanelProps {
   pendingDropFileName?: string | null;
 }
 
-function formatMegabytes(value: number): string {
-  return `${value.toFixed(1)} MB`;
-}
-
-function formatInteger(value: number): string {
-  return Math.max(0, Math.floor(value)).toLocaleString();
-}
-
 export function LeftPanel(props: LeftPanelProps) {
   const kernel = useKernel();
-  const stats = useAppStore((store) => store.state.stats);
-  const selection = useAppStore((store) => store.state.selection);
   const mode = useAppStore((store) => store.state.mode);
   const actorIds = useAppStore((store) => store.state.scene.actorIds);
   const actors = useAppStore((store) => store.state.actors);
@@ -46,38 +35,6 @@ export function LeftPanel(props: LeftPanelProps) {
           </div>
         </header>
         <SceneTree pendingDropFileName={props.pendingDropFileName} />
-      </section>
-
-      <section className="panel-section">
-        <StatsBlock
-          title="Scene Stats"
-          className="stats-block-embedded"
-          titleLevel="h3"
-          rows={[
-            { label: "FPS", value: `${stats.fps.toFixed(1)} (${stats.frameMs.toFixed(1)} ms)` },
-            { label: "Draw Calls", value: formatInteger(stats.drawCalls) },
-            { label: "Triangles", value: formatInteger(stats.triangles) },
-            { label: "Splat Draw Calls", value: formatInteger(stats.splatDrawCalls) },
-            { label: "Splat Triangles", value: formatInteger(stats.splatTriangles) },
-            { label: "Splat Visible", value: formatInteger(stats.splatVisibleCount) },
-            { label: "Memory MB", value: formatMegabytes(stats.memoryMb) },
-            {
-              label: "Memory Split",
-              value: `heap ${stats.heapMb > 0 ? formatMegabytes(stats.heapMb) : "n/a"} / resource ${formatMegabytes(stats.resourceMb)}`
-            },
-            { label: "Actors", value: formatInteger(stats.actorCount) },
-            { label: "Enabled", value: `${formatInteger(stats.actorCountEnabled)} / ${formatInteger(stats.actorCount)}` },
-            { label: "Session Bytes", value: formatInteger(stats.sessionFileBytes) },
-            { label: "Saved Bytes", value: formatInteger(stats.sessionFileBytesSaved) },
-            { label: "Selection", value: String(selection.length) }
-          ]}
-          onCopySuccess={(label) => {
-            kernel.store.getState().actions.setStatus(`${label} copied to clipboard.`);
-          }}
-          onCopyError={(label, message) => {
-            kernel.store.getState().actions.setStatus(`Unable to copy ${label}: ${message}`);
-          }}
-        />
       </section>
 
       <section className="panel-section">

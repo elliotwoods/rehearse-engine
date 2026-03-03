@@ -29,7 +29,9 @@ export function createDefaultScene(): {
     kind: "scene",
     actorIds: [],
     sceneComponentIds: [],
-    backgroundColor: "#070b12"
+    backgroundColor: "#070b12",
+    renderEngine: "webgl2",
+    antialiasing: true
   };
   return {
     scene,
@@ -64,7 +66,10 @@ export function createInitialState(mode: AppState["mode"], sessionName = "demo")
       actorCount: 0,
       actorCountEnabled: 0,
       sessionFileBytes: 0,
-      sessionFileBytesSaved: 0
+      sessionFileBytesSaved: 0,
+      cameraDistance: 0,
+      cameraControlsEnabled: true,
+      cameraZoomEnabled: true
     },
     dirty: false,
     statusMessage: "Ready",

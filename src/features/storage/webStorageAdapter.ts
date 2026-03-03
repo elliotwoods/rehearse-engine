@@ -30,6 +30,9 @@ export function createWebStorageAdapter(): StorageAdapter {
     async saveSession() {
       throw new Error("Read-only mode: session cannot be saved.");
     },
+    async cloneSession() {
+      throw new Error("Read-only mode: sessions cannot be cloned.");
+    },
     async renameSession() {
       throw new Error("Read-only mode: sessions cannot be renamed.");
     },

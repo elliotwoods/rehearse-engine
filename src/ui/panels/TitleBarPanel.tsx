@@ -37,7 +37,10 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
   const state = useAppStore((store) => store.state);
   const [availableSessions, setAvailableSessions] = useState<string[]>([]);
   const [isSessionMenuOpen, setSessionMenuOpen] = useState(false);
+  const [isRenamingSession, setRenamingSession] = useState(false);
+  const [sessionNameDraft, setSessionNameDraft] = useState("");
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const sessionRenameInputRef = useRef<HTMLInputElement | null>(null);
   const isReadOnly = state.mode === "web-ro";
 
   const sessionOptions = useMemo(() => {
@@ -70,6 +73,57 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
     };
   }, [isSessionMenuOpen]);
 
+  useEffect(() => {
+    if (isRenamingSession) {
+      return;
+    }
+    setSessionNameDraft(state.activeSessionName);
+  }, [isRenamingSession, state.activeSessionName]);
+
+  useEffect(() => {
+    if (!isRenamingSession) {
+      return;
+    }
+    const input = sessionRenameInputRef.current;
+    if (!input) {
+      return;
+    }
+    input.focus();
+    input.setSelectionRange(0, input.value.length);
+  }, [isRenamingSession]);
+
+  const startInlineRename = (): void => {
+    if (isReadOnly) {
+      return;
+    }
+    setSessionMenuOpen(false);
+    setSessionNameDraft(state.activeSessionName);
+    setRenamingSession(true);
+  };
+
+  const cancelInlineRename = (): void => {
+    setSessionNameDraft(state.activeSessionName);
+    setRenamingSession(false);
+  };
+
+  const commitInlineRename = (): void => {
+    const nextName = sessionNameDraft.trim();
+    const previousName = state.activeSessionName;
+    if (!nextName || nextName === previousName) {
+      cancelInlineRename();
+      return;
+    }
+    setRenamingSession(false);
+    void kernel.sessionService.renameSession(previousName, nextName).then(() => {
+      setAvailableSessions((prev) =>
+        prev
+          .filter((entry) => entry !== previousName)
+          .concat(nextName)
+          .sort((a, b) => a.localeCompare(b))
+      );
+    });
+  };
+
   return (
     <div className="titlebar">
       <div className="titlebar-left titlebar-interactive">
@@ -83,17 +137,49 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
       </div>
 
       <div className="titlebar-center titlebar-interactive">
-        <div className="titlebar-session">
-          <div className="titlebar-session-row" ref={menuRef}>
-            <button
-              type="button"
-              className="titlebar-session-trigger"
-              title="Switch session"
-              onClick={() => setSessionMenuOpen((value) => !value)}
-            >
-              Session: <strong>{state.activeSessionName}</strong>
-              {state.dirty ? <em>*</em> : null}
-            </button>
+        <div className="titlebar-session" ref={menuRef}>
+          <div className="titlebar-session-row">
+            {isRenamingSession ? (
+              <div className="titlebar-session-inline-rename">
+                <span>Session:</span>
+                <input
+                  ref={sessionRenameInputRef}
+                  className="titlebar-session-inline-input"
+                  value={sessionNameDraft}
+                  onChange={(event) => {
+                    setSessionNameDraft(event.target.value);
+                  }}
+                  onBlur={() => {
+                    commitInlineRename();
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      commitInlineRename();
+                    } else if (event.key === "Escape") {
+                      event.preventDefault();
+                      cancelInlineRename();
+                    }
+                  }}
+                />
+                {state.dirty ? <em>*</em> : null}
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="titlebar-session-trigger"
+                title="Switch session"
+                onClick={() => setSessionMenuOpen((value) => !value)}
+                onDoubleClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  startInlineRename();
+                }}
+              >
+                Session: <strong>{state.activeSessionName}</strong>
+                {state.dirty ? <em>*</em> : null}
+              </button>
+            )}
             {state.dirty ? (
               <button
                 type="button"
@@ -146,31 +232,7 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
                   disabled={isReadOnly}
                   title="Rename session"
                   onClick={() => {
-                    void props
-                      .requestTextInput({
-                        title: "Rename Session",
-                        label: "Session name",
-                        initialValue: state.activeSessionName,
-                        confirmLabel: "Rename"
-                      })
-                      .then((nextName) => {
-                        if (!nextName) {
-                          return;
-                        }
-                        if (nextName === state.activeSessionName) {
-                          setSessionMenuOpen(false);
-                          return;
-                        }
-                        setSessionMenuOpen(false);
-                        void kernel.sessionService.renameSession(state.activeSessionName, nextName).then(() => {
-                          setAvailableSessions((prev) =>
-                            prev
-                              .filter((entry) => entry !== state.activeSessionName)
-                              .concat(nextName)
-                              .sort((a, b) => a.localeCompare(b))
-                          );
-                        });
-                      });
+                    startInlineRename();
                   }}
                 >
                   <FontAwesomeIcon icon={faPenToSquare} />

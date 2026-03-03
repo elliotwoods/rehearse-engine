@@ -1,5 +1,5 @@
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faCircleInfo, faFolderOpen, faTrashCan, faFile, faRotateRight } from "@fortawesome/free-solid-svg-icons";
+import { faCircleInfo, faFolderOpen, faFile, faRotateRight } from "@fortawesome/free-solid-svg-icons";
 import type { SessionAssetRef } from "@/types/ipc";
 import { InspectorFieldRow } from "@/ui/widgets/InspectorFieldRow";
 
@@ -14,7 +14,6 @@ interface FileFieldProps {
   onReset?: () => void;
   onBrowse: () => void;
   onReload: () => void;
-  onClear: () => void;
 }
 
 function formatBytes(bytes: number): string {
@@ -94,15 +93,6 @@ export function FileField(props: FileFieldProps) {
           >
             <FontAwesomeIcon icon={faRotateRight} />
             <span>Reload</span>
-          </button>
-          <button
-            type="button"
-            className="widget-file-btn"
-            disabled={props.disabled || !hasValue}
-            onClick={props.onClear}
-          >
-            <FontAwesomeIcon icon={faTrashCan} />
-            <span>Clear</span>
           </button>
         </div>
       </div>

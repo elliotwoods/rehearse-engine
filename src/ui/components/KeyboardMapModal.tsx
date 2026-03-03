@@ -5,6 +5,8 @@ interface KeyboardMapModalProps {
 
 const SHORTCUTS = [
   { key: "Space", action: "Play / Pause simulation" },
+  { key: "Tab", action: "Next camera (1s tween)" },
+  { key: "Shift + Tab", action: "Previous camera (1s tween)" },
   { key: "Delete", action: "Delete current selection" },
   { key: "Ctrl/Cmd + S", action: "Save session" },
   { key: "Ctrl/Cmd + Shift + S", action: "Save session as..." },

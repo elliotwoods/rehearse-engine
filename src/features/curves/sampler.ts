@@ -55,6 +55,13 @@ function normalize3(v: [number, number, number]): [number, number, number] {
   return [v[0] / mag, v[1] / mag, v[2] / mag];
 }
 
+function enabledCurve(curve: CurveData): CurveData {
+  return {
+    closed: curve.closed,
+    points: curve.points.filter((point) => point.enabled !== false)
+  };
+}
+
 function segmentCount(curve: CurveData): number {
   const pointCount = curve.points.length;
   if (pointCount < 2) {
@@ -106,6 +113,7 @@ function mapGlobalT(curve: CurveData, t: number): { segmentIndex: number; segmen
 }
 
 export function sampleCurvePosition(curve: CurveData, t: number): [number, number, number] {
+  curve = enabledCurve(curve);
   if (curve.points.length === 0) {
     return [0, 0, 0];
   }
@@ -119,6 +127,7 @@ export function sampleCurvePosition(curve: CurveData, t: number): [number, numbe
 }
 
 export function sampleCurveTangent(curve: CurveData, t: number): [number, number, number] {
+  curve = enabledCurve(curve);
   if (curve.points.length < 2) {
     return [1, 0, 0];
   }
@@ -138,6 +147,7 @@ export function sampleCurvePositionAndTangent(
 }
 
 export function estimateCurveLength(curve: CurveData, samplesPerSegment = 24): number {
+  curve = enabledCurve(curve);
   const segCount = segmentCount(curve);
   if (segCount <= 0) {
     return 0;

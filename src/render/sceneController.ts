@@ -23,11 +23,13 @@ const SPLAT_COORDINATE_CORRECTION_EULER = new THREE.Euler(-Math.PI / 2, 0, 0, "X
 const SPLAT_COORDINATE_CORRECTION_QUATERNION = new THREE.Quaternion().setFromEuler(SPLAT_COORDINATE_CORRECTION_EULER);
 const MATRIX_IDENTITY = new THREE.Matrix4().identity();
 const MAX_GAUSSIAN_BILLBOARD_INSTANCES = 1000000;
+const MAX_CPU_SORTED_SPLATS = 220000;
 
 interface GaussianFallbackFilterRegion {
   actorId: string;
   shape: "sphere" | "cube" | "cylinder";
-  size: number;
+  radius: number;
+  height: number;
   worldMatrixElements: number[];
   gaussianLocalToPrimitive: any;
 }
@@ -38,14 +40,24 @@ interface GaussianFallbackFilterSpec {
 }
 
 interface GaussianSortableBatch {
+  actorId: string;
   mesh: any;
   count: number;
+  trianglesPerInstance: number;
   centersBase: Float32Array;
   scalesBase: Float32Array;
   rotationsBase: Float32Array;
   colorsBase: Float32Array;
+  chunks: GaussianSortChunk[];
+  candidateIndices: number[];
   indices: number[];
   depths: Float32Array;
+}
+
+interface GaussianSortChunk {
+  indices: Uint32Array;
+  center: [number, number, number];
+  radius: number;
 }
 
 function formatLoadError(error: unknown): string {
@@ -102,10 +114,6 @@ function getAttribute(geometry: any, names: string[]): any {
   return null;
 }
 
-function sigmoid(value: number): number {
-  return 1 / (1 + Math.exp(-value));
-}
-
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value));
 }
@@ -150,6 +158,18 @@ function estimateAttributeSpread(attribute: any): number {
     return 0;
   }
   return Math.max(0, max - min);
+}
+
+function estimateAttributeMean(attribute: any): number {
+  if (!attribute || typeof attribute.count !== "number" || attribute.count <= 0) {
+    return 0;
+  }
+  const sampleCount = Math.min(4096, attribute.count);
+  let sum = 0;
+  for (let i = 0; i < sampleCount; i += 1) {
+    sum += attribute.getX(i) + attribute.getY(i) + attribute.getZ(i);
+  }
+  return sum / (sampleCount * 3);
 }
 
 function normalizeBackgroundColor(value: unknown): string {
@@ -271,6 +291,11 @@ export class SceneController {
   private gaussianSpriteTexture: any | null = null;
   private currentEnvironmentAssetId: string | null = null;
   private currentEnvironmentReloadToken = 0;
+  private gaussianSortFrameCounter = 0;
+  private hasGaussianCameraState = false;
+  private readonly gaussianLastCameraPosition = new THREE.Vector3();
+  private readonly gaussianLastCameraQuaternion = new THREE.Quaternion();
+  private gaussianSortDirty = true;
 
   public constructor(private readonly kernel: AppKernel) {
     const initialBackground = normalizeBackgroundColor(this.kernel.store.getState().state.scene.backgroundColor);
@@ -376,9 +401,30 @@ export class SceneController {
     if (!camera || !camera.matrixWorldInverse) {
       return;
     }
+    const cameraPosition = new THREE.Vector3();
+    const cameraQuaternion = new THREE.Quaternion();
+    camera.getWorldPosition(cameraPosition);
+    camera.getWorldQuaternion(cameraQuaternion);
+    const cameraMoved =
+      !this.hasGaussianCameraState ||
+      cameraPosition.distanceToSquared(this.gaussianLastCameraPosition) > 1e-6 ||
+      1 - Math.abs(cameraQuaternion.dot(this.gaussianLastCameraQuaternion)) > 1e-6;
+    if (cameraMoved) {
+      this.gaussianLastCameraPosition.copy(cameraPosition);
+      this.gaussianLastCameraQuaternion.copy(cameraQuaternion);
+      this.hasGaussianCameraState = true;
+      this.gaussianSortDirty = true;
+    }
+    this.gaussianSortFrameCounter += 1;
+    const shouldUpdate = this.gaussianSortDirty && (cameraMoved ? this.gaussianSortFrameCounter % 2 === 0 : true);
+    if (!shouldUpdate) {
+      return;
+    }
+    const projectionView = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    const frustum = new THREE.Frustum().setFromProjectionMatrix(projectionView);
+    const chunkSphere = new THREE.Sphere();
     const cameraView = camera.matrixWorldInverse as any;
-    const cameraWorldQuaternion = new THREE.Quaternion();
-    camera.getWorldQuaternion(cameraWorldQuaternion);
+    const cameraWorldQuaternion = cameraQuaternion;
     const inverseCameraWorldQuaternion = cameraWorldQuaternion.clone().invert();
     const parentWorldQuaternion = new THREE.Quaternion();
     const localBillboardQuaternion = new THREE.Quaternion();
@@ -395,6 +441,7 @@ export class SceneController {
     const splatAxisCamera = new THREE.Vector3(1, 0, 0);
     const zAxis = new THREE.Vector3(0, 0, 1);
     const tempColor = new THREE.Color(0xffffff);
+    const chunkCenterWorld = new THREE.Vector3();
 
     for (const batch of this.gaussianSortableBatchesByActorId.values()) {
       const mesh = batch.mesh;
@@ -404,27 +451,83 @@ export class SceneController {
       parentMatrixWorld.copy(mesh.parent.matrixWorld);
       mesh.parent.getWorldQuaternion(parentWorldQuaternion);
       localBillboardQuaternion.copy(parentWorldQuaternion).invert().multiply(cameraWorldQuaternion);
+      const parentScale = mesh.parent.getWorldScale(new THREE.Vector3());
+      const chunkRadiusScaleFactor = Math.max(
+        Math.abs(parentScale.x) || 1,
+        Math.abs(parentScale.y) || 1,
+        Math.abs(parentScale.z) || 1
+      );
       const count = Math.max(0, Math.min(batch.count, Math.floor(batch.centersBase.length / 3)));
-      if (count <= 1) {
+      if (count <= 0) {
+        mesh.count = 0;
+        this.gaussianVisibleCountByActorId.set(batch.actorId, 0);
+        this.gaussianTriangleCountByActorId.set(batch.actorId, 0);
         continue;
       }
 
-      for (let i = 0; i < count; i += 1) {
-        const i3 = i * 3;
+      const candidates = batch.candidateIndices;
+      candidates.length = 0;
+      if (batch.chunks.length <= 0) {
+        for (let i = 0; i < count; i += 1) {
+          candidates.push(i);
+        }
+      } else {
+        for (const chunk of batch.chunks) {
+          chunkCenterWorld.set(chunk.center[0], chunk.center[1], chunk.center[2]).applyMatrix4(parentMatrixWorld);
+          chunkSphere.center.copy(chunkCenterWorld);
+          chunkSphere.radius = Math.max(0.001, chunk.radius * chunkRadiusScaleFactor);
+          if (!frustum.intersectsSphere(chunkSphere)) {
+            continue;
+          }
+          for (let i = 0; i < chunk.indices.length; i += 1) {
+            const source = chunk.indices[i] ?? 0;
+            if (source >= 0 && source < count) {
+              candidates.push(source);
+            }
+          }
+        }
+      }
+
+      const candidateCount = candidates.length;
+      if (candidateCount <= 0) {
+        mesh.count = 0;
+        this.gaussianVisibleCountByActorId.set(batch.actorId, 0);
+        this.gaussianTriangleCountByActorId.set(batch.actorId, 0);
+        continue;
+      }
+
+      let workingCount = candidateCount;
+      if (workingCount > MAX_CPU_SORTED_SPLATS) {
+        const stride = Math.max(2, Math.ceil(workingCount / MAX_CPU_SORTED_SPLATS));
+        let write = 0;
+        for (let read = 0; read < workingCount; read += stride) {
+          batch.indices[write] = candidates[read] ?? 0;
+          write += 1;
+        }
+        workingCount = write;
+      } else {
+        for (let i = 0; i < workingCount; i += 1) {
+          batch.indices[i] = candidates[i] ?? 0;
+        }
+      }
+
+      for (let i = 0; i < workingCount; i += 1) {
+        const source = batch.indices[i] ?? 0;
+        const i3 = source * 3;
         centerWorld.set(batch.centersBase[i3] ?? 0, batch.centersBase[i3 + 1] ?? 0, batch.centersBase[i3 + 2] ?? 0);
         centerWorld.applyMatrix4(parentMatrixWorld);
         centerView.copy(centerWorld).applyMatrix4(cameraView);
-        batch.depths[i] = centerView.z;
-        batch.indices[i] = i;
+        batch.depths[source] = centerView.z;
       }
 
+      batch.indices.length = workingCount;
       batch.indices.sort((a, b) => {
         const da = batch.depths[a] ?? 0;
         const db = batch.depths[b] ?? 0;
         return da - db;
       });
 
-      for (let sorted = 0; sorted < count; sorted += 1) {
+      for (let sorted = 0; sorted < workingCount; sorted += 1) {
         const source = batch.indices[sorted] ?? sorted;
         const src3 = source * 3;
         localCenter.set(batch.centersBase[src3] ?? 0, batch.centersBase[src3 + 1] ?? 0, batch.centersBase[src3 + 2] ?? 0);
@@ -457,12 +560,15 @@ export class SceneController {
         mesh.setColorAt(sorted, tempColor);
       }
 
-      mesh.count = count;
+      mesh.count = workingCount;
+      this.gaussianVisibleCountByActorId.set(batch.actorId, workingCount);
+      this.gaussianTriangleCountByActorId.set(batch.actorId, workingCount * batch.trianglesPerInstance);
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) {
         mesh.instanceColor.needsUpdate = true;
       }
     }
+    this.gaussianSortDirty = false;
   }
 
   public queryVisibleSplats(args?: SplatQueryArgs): VisibleSplatSample[] {
@@ -608,34 +714,76 @@ export class SceneController {
     return new THREE.Group();
   }
 
-  private createPrimitiveGeometry(shape: string, size: number, segments: number): any {
-    const radius = Math.max(0.05, size * 0.5);
+  private getPrimitiveShape(actor: ActorNode): "cube" | "sphere" | "cylinder" {
+    const shape = typeof actor.params.shape === "string" ? actor.params.shape : "cube";
+    if (shape === "sphere" || shape === "cylinder" || shape === "cube") {
+      return shape;
+    }
+    return "cube";
+  }
+
+  private getPrimitiveDimensions(actor: ActorNode): {
+    shape: "cube" | "sphere" | "cylinder";
+    cubeSize: number;
+    sphereRadius: number;
+    cylinderRadius: number;
+    cylinderHeight: number;
+    segments: number;
+  } {
+    const shape = this.getPrimitiveShape(actor);
+    const cubeSizeRaw = Number(actor.params.cubeSize ?? 1);
+    const sphereRadiusRaw = Number(actor.params.sphereRadius ?? 0.5);
+    const cylinderRadiusRaw = Number(actor.params.cylinderRadius ?? 0.5);
+    const cylinderHeightRaw = Number(actor.params.cylinderHeight ?? 1);
+    const segmentsRaw = Number(actor.params.segments ?? 24);
+    return {
+      shape,
+      cubeSize: Number.isFinite(cubeSizeRaw) ? Math.max(0.05, cubeSizeRaw) : 1,
+      sphereRadius: Number.isFinite(sphereRadiusRaw) ? Math.max(0.05, sphereRadiusRaw) : 0.5,
+      cylinderRadius: Number.isFinite(cylinderRadiusRaw) ? Math.max(0.05, cylinderRadiusRaw) : 0.5,
+      cylinderHeight: Number.isFinite(cylinderHeightRaw) ? Math.max(0.05, cylinderHeightRaw) : 1,
+      segments: Number.isFinite(segmentsRaw) ? Math.max(3, Math.floor(segmentsRaw)) : 24
+    };
+  }
+
+  private createPrimitiveGeometry(
+    shape: "cube" | "sphere" | "cylinder",
+    cubeSize: number,
+    sphereRadius: number,
+    cylinderRadius: number,
+    cylinderHeight: number,
+    segments: number
+  ): any {
     const safeSegments = Math.max(3, Math.floor(segments));
     switch (shape) {
       case "sphere":
-        return new THREE.SphereGeometry(radius, safeSegments, safeSegments);
-      case "torus":
-        return new THREE.TorusGeometry(radius, Math.max(0.01, radius * 0.3), safeSegments, safeSegments * 2);
+        return new THREE.SphereGeometry(Math.max(0.05, sphereRadius), safeSegments, safeSegments);
       case "cylinder":
-        return new THREE.CylinderGeometry(radius, radius, Math.max(0.05, size), safeSegments);
-      case "cone":
-        return new THREE.ConeGeometry(radius, Math.max(0.05, size), safeSegments);
-      case "icosahedron":
-        return new THREE.IcosahedronGeometry(radius, 1);
+        return new THREE.CylinderGeometry(
+          Math.max(0.05, cylinderRadius),
+          Math.max(0.05, cylinderRadius),
+          Math.max(0.05, cylinderHeight),
+          safeSegments
+        );
       case "cube":
       default:
-        return new THREE.BoxGeometry(Math.max(0.05, size), Math.max(0.05, size), Math.max(0.05, size));
+        return new THREE.BoxGeometry(Math.max(0.05, cubeSize), Math.max(0.05, cubeSize), Math.max(0.05, cubeSize));
     }
   }
 
   private createPrimitiveMesh(actor: ActorNode): any {
-    const shape = typeof actor.params.shape === "string" ? actor.params.shape : "cube";
-    const size = Number(actor.params.size ?? 1);
-    const segments = Number(actor.params.segments ?? 24);
+    const dimensions = this.getPrimitiveDimensions(actor);
     const color = typeof actor.params.color === "string" ? actor.params.color : "#4fb3ff";
     const wireframe = Boolean(actor.params.wireframe);
     const mesh = new THREE.Mesh(
-      this.createPrimitiveGeometry(shape, size, segments),
+      this.createPrimitiveGeometry(
+        dimensions.shape,
+        dimensions.cubeSize,
+        dimensions.sphereRadius,
+        dimensions.cylinderRadius,
+        dimensions.cylinderHeight,
+        dimensions.segments
+      ),
       new THREE.MeshStandardMaterial({
         color,
         wireframe,
@@ -653,15 +801,11 @@ export class SceneController {
     if (!(object instanceof THREE.Mesh)) {
       return;
     }
-    const shape = typeof actor.params.shape === "string" ? actor.params.shape : "cube";
-    const size = Number(actor.params.size ?? 1);
-    const segments = Number(actor.params.segments ?? 24);
+    const dimensions = this.getPrimitiveDimensions(actor);
     const color = typeof actor.params.color === "string" ? actor.params.color : "#4fb3ff";
     const wireframe = Boolean(actor.params.wireframe);
     const signature = JSON.stringify({
-      shape,
-      size: Number.isFinite(size) ? size : 1,
-      segments: Number.isFinite(segments) ? segments : 24,
+      ...dimensions,
       color,
       wireframe
     });
@@ -672,7 +816,14 @@ export class SceneController {
     this.primitiveSignatureByActorId.set(actor.id, signature);
 
     // Avoid disposing geometry here: WebGPU renderer can still reference buffers during async pipeline updates.
-    object.geometry = this.createPrimitiveGeometry(shape, size, segments);
+    object.geometry = this.createPrimitiveGeometry(
+      dimensions.shape,
+      dimensions.cubeSize,
+      dimensions.sphereRadius,
+      dimensions.cylinderRadius,
+      dimensions.cylinderHeight,
+      dimensions.segments
+    );
     const material = object.material;
     if (material instanceof THREE.MeshStandardMaterial) {
       material.color.set(color);
@@ -692,8 +843,10 @@ export class SceneController {
     }
 
     const curveData = curveDataWithOverrides(actor);
+    const activePoints = curveData.points.filter((point) => point.enabled !== false);
     const samplesPerSegment = getCurveSamplesPerSegmentFromActor(actor);
-    const pointCount = curveData.points.length;
+    const pointCount = activePoints.length;
+    const skippedPointCount = Math.max(0, curveData.points.length - activePoints.length);
     const segmentCount = pointCount < 2 ? 0 : (curveData.closed ? pointCount : pointCount - 1);
     const signature = JSON.stringify({
       curveData,
@@ -707,8 +860,8 @@ export class SceneController {
     const sampled: any[] = [];
     if (segmentCount > 0) {
       for (let segmentIndex = 0; segmentIndex < segmentCount; segmentIndex += 1) {
-        const current = curveData.points[segmentIndex];
-        const next = curveData.points[(segmentIndex + 1) % pointCount];
+        const current = activePoints[segmentIndex];
+        const next = activePoints[(segmentIndex + 1) % pointCount];
         if (!current || !next) {
           continue;
         }
@@ -748,6 +901,7 @@ export class SceneController {
     this.kernel.store.getState().actions.setActorStatus(actor.id, {
       values: {
         pointCount,
+        skippedPointCount,
         segmentCount,
         closed: curveData.closed,
         samplesPerSegment,
@@ -1232,10 +1386,12 @@ export class SceneController {
     this.gaussianTriangleCountByActorId.set(actor.id, Number(renderMesh.userData?.triangleCount ?? 0));
     const sortableBatch = renderMesh.userData?.sortableBatch as GaussianSortableBatch | undefined;
     if (sortableBatch) {
+      sortableBatch.actorId = actor.id;
       this.gaussianSortableBatchesByActorId.set(actor.id, sortableBatch);
     } else {
       this.gaussianSortableBatchesByActorId.delete(actor.id);
     }
+    this.gaussianSortDirty = true;
   }
 
   private suggestGaussianPointSize(geometry: any): number {
@@ -1278,15 +1434,22 @@ export class SceneController {
       if (shape !== "sphere" && shape !== "cube" && shape !== "cylinder") {
         continue;
       }
-      const size = Number(regionActor.params.size ?? 1);
-      const safeSize = Number.isFinite(size) && size > 0 ? size : 1;
+      const cubeSizeRaw = Number(regionActor.params.cubeSize ?? 1);
+      const sphereRadiusRaw = Number(regionActor.params.sphereRadius ?? 0.5);
+      const cylinderRadiusRaw = Number(regionActor.params.cylinderRadius ?? 0.5);
+      const cylinderHeightRaw = Number(regionActor.params.cylinderHeight ?? 1);
+      const safeCubeSize = Number.isFinite(cubeSizeRaw) && cubeSizeRaw > 0 ? cubeSizeRaw : 1;
+      const safeSphereRadius = Number.isFinite(sphereRadiusRaw) && sphereRadiusRaw > 0 ? sphereRadiusRaw : 0.5;
+      const safeCylinderRadius = Number.isFinite(cylinderRadiusRaw) && cylinderRadiusRaw > 0 ? cylinderRadiusRaw : 0.5;
+      const safeCylinderHeight = Number.isFinite(cylinderHeightRaw) && cylinderHeightRaw > 0 ? cylinderHeightRaw : 1;
       const primitiveWorld = this.resolveActorWorldMatrix(regionActor.id, state.actors);
       const primitiveToGaussianLocal = worldToGaussianLocal.clone().multiply(primitiveWorld);
       const gaussianLocalToPrimitive = primitiveToGaussianLocal.clone().invert();
       regions.push({
         actorId: regionActor.id,
         shape,
-        size: safeSize,
+        radius: shape === "sphere" ? safeSphereRadius : shape === "cylinder" ? safeCylinderRadius : safeCubeSize * 0.5,
+        height: shape === "cylinder" ? safeCylinderHeight : safeCubeSize,
         worldMatrixElements: primitiveWorld.elements.map((value: number) => Number(value.toFixed(6))),
         gaussianLocalToPrimitive
       });
@@ -1320,11 +1483,11 @@ export class SceneController {
     target: any
   ): boolean {
     const local = target.copy(positionInGaussianLocal).applyMatrix4(region.gaussianLocalToPrimitive);
-    const halfSize = region.size * 0.5;
     if (region.shape === "sphere") {
-      return local.lengthSq() <= halfSize * halfSize;
+      return local.lengthSq() <= region.radius * region.radius;
     }
     if (region.shape === "cube") {
+      const halfSize = region.height * 0.5;
       return (
         Math.abs(local.x) <= halfSize &&
         Math.abs(local.y) <= halfSize &&
@@ -1332,7 +1495,7 @@ export class SceneController {
       );
     }
     const radiusSq = local.x * local.x + local.z * local.z;
-    return radiusSq <= halfSize * halfSize && Math.abs(local.y) <= halfSize;
+    return radiusSq <= region.radius * region.radius && Math.abs(local.y) <= region.height * 0.5;
   }
 
   private resolveActorWorldMatrix(actorId: string, actors: Record<string, ActorNode>): any {
@@ -1410,7 +1573,6 @@ export class SceneController {
     const fdc0 = getAttribute(geometry, ["f_dc_0", "dc_0", "f_dc0"]);
     const fdc1 = getAttribute(geometry, ["f_dc_1", "dc_1", "f_dc1"]);
     const fdc2 = getAttribute(geometry, ["f_dc_2", "dc_2", "f_dc2"]);
-    const opacityAttr = getAttribute(geometry, ["opacity", "alpha", "a"]);
     const scale0 = getAttribute(geometry, ["scale_0", "sx"]);
     const scale1 = getAttribute(geometry, ["scale_1", "sy"]);
     const scale2 = getAttribute(geometry, ["scale_2", "sz"]);
@@ -1424,12 +1586,13 @@ export class SceneController {
     const useLogScale =
       Boolean(scale0 && scale1 && scale2) &&
       (scale0Range.min < 0 || scale1Range.min < 0 || scale2Range.min < 0);
-    const opacityRange = readAttributeRange(opacityAttr);
-    const opacityIsLogit = opacityRange.min < 0 || opacityRange.max > 1;
     const colorDenominator = detectColorDenominator(color);
     const colorSpread = estimateAttributeSpread(color);
+    const colorMean = estimateAttributeMean(color);
     const hasShColor = Boolean(fdc0 && fdc1 && fdc2);
-    const preferShColor = Boolean(color) && hasShColor && colorSpread < 0.002;
+    const packedColorLooksFlat = Boolean(color) && colorSpread < 0.01;
+    const packedColorLooksWhite = Boolean(color) && colorDenominator === 1 && colorMean > 0.97;
+    const preferShColor = hasShColor && (!color || packedColorLooksFlat || packedColorLooksWhite);
     const usePackedColor = Boolean(color) && !preferShColor;
 
     const maxInstances = MAX_GAUSSIAN_BILLBOARD_INSTANCES;
@@ -1536,12 +1699,6 @@ export class SceneController {
         tempColor.setRGB(1, 1, 1);
       }
 
-      let alpha = 1;
-      if (opacityAttr) {
-        const rawOpacity = opacityAttr.getX(index);
-        alpha = opacityIsLogit ? sigmoid(rawOpacity) : clamp01(rawOpacity);
-      }
-      tempColor.multiplyScalar(Math.max(0.15, alpha));
       colorAccumR += tempColor.r;
       colorAccumG += tempColor.g;
       colorAccumB += tempColor.b;
@@ -1555,17 +1712,23 @@ export class SceneController {
     const usedScales = scales.slice(0, cursor * 2);
     const usedRotations = rotations.slice(0, cursor * 4);
     const usedColors = colors.slice(0, cursor * 3);
+    const trianglesPerInstance = Math.max(0, Number(baseGeometry.index?.count ?? 0) / 3);
+    const chunks = this.buildGaussianSortChunks(usedCenters, usedScales);
 
     mesh.count = cursor;
     mesh.userData.visibleCount = cursor;
-    mesh.userData.triangleCount = Math.max(0, cursor * (Number(baseGeometry.index?.count ?? 0) / 3));
+    mesh.userData.triangleCount = Math.max(0, cursor * trianglesPerInstance);
     mesh.userData.sortableBatch = {
+      actorId: "",
       mesh,
       count: cursor,
+      trianglesPerInstance,
       centersBase: usedCenters,
       scalesBase: usedScales,
       rotationsBase: usedRotations,
       colorsBase: usedColors,
+      chunks,
+      candidateIndices: [],
       indices: Array.from({ length: cursor }, (_, i) => i),
       depths: new Float32Array(cursor)
     } as GaussianSortableBatch;
@@ -1579,6 +1742,139 @@ export class SceneController {
           : [0, 0, 0]
     };
     return mesh;
+  }
+
+  private buildGaussianSortChunks(centersBase: Float32Array, scalesBase: Float32Array): GaussianSortChunk[] {
+    const count = Math.floor(centersBase.length / 3);
+    if (count <= 0) {
+      return [];
+    }
+    if (count <= 2048) {
+      const indices = new Uint32Array(count);
+      let minX = Number.POSITIVE_INFINITY;
+      let minY = Number.POSITIVE_INFINITY;
+      let minZ = Number.POSITIVE_INFINITY;
+      let maxX = Number.NEGATIVE_INFINITY;
+      let maxY = Number.NEGATIVE_INFINITY;
+      let maxZ = Number.NEGATIVE_INFINITY;
+      for (let i = 0; i < count; i += 1) {
+        indices[i] = i;
+        const i3 = i * 3;
+        const x = centersBase[i3] ?? 0;
+        const y = centersBase[i3 + 1] ?? 0;
+        const z = centersBase[i3 + 2] ?? 0;
+        if (x < minX) minX = x;
+        if (y < minY) minY = y;
+        if (z < minZ) minZ = z;
+        if (x > maxX) maxX = x;
+        if (y > maxY) maxY = y;
+        if (z > maxZ) maxZ = z;
+      }
+      const cx = (minX + maxX) * 0.5;
+      const cy = (minY + maxY) * 0.5;
+      const cz = (minZ + maxZ) * 0.5;
+      let radius = 0.001;
+      for (let i = 0; i < count; i += 1) {
+        const i3 = i * 3;
+        const dx = (centersBase[i3] ?? 0) - cx;
+        const dy = (centersBase[i3 + 1] ?? 0) - cy;
+        const dz = (centersBase[i3 + 2] ?? 0) - cz;
+        const i2 = i * 2;
+        const extent = Math.max(scalesBase[i2] ?? 0, scalesBase[i2 + 1] ?? 0, 0);
+        radius = Math.max(radius, Math.sqrt(dx * dx + dy * dy + dz * dz) + extent);
+      }
+      return [{ indices, center: [cx, cy, cz], radius }];
+    }
+
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let minZ = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    let maxZ = Number.NEGATIVE_INFINITY;
+    for (let i = 0; i < count; i += 1) {
+      const i3 = i * 3;
+      const x = centersBase[i3] ?? 0;
+      const y = centersBase[i3 + 1] ?? 0;
+      const z = centersBase[i3 + 2] ?? 0;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (z < minZ) minZ = z;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+      if (z > maxZ) maxZ = z;
+    }
+
+    const extentX = Math.max(0.001, maxX - minX);
+    const extentY = Math.max(0.001, maxY - minY);
+    const extentZ = Math.max(0.001, maxZ - minZ);
+    const targetChunkCount = Math.max(1, Math.ceil(count / 2048));
+    const grid = Math.max(1, Math.round(Math.cbrt(targetChunkCount)));
+    const cellX = extentX / grid;
+    const cellY = extentY / grid;
+    const cellZ = extentZ / grid;
+    const bucketMap = new Map<string, number[]>();
+
+    for (let i = 0; i < count; i += 1) {
+      const i3 = i * 3;
+      const x = centersBase[i3] ?? 0;
+      const y = centersBase[i3 + 1] ?? 0;
+      const z = centersBase[i3 + 2] ?? 0;
+      const gx = Math.max(0, Math.min(grid - 1, Math.floor((x - minX) / cellX)));
+      const gy = Math.max(0, Math.min(grid - 1, Math.floor((y - minY) / cellY)));
+      const gz = Math.max(0, Math.min(grid - 1, Math.floor((z - minZ) / cellZ)));
+      const key = `${gx}|${gy}|${gz}`;
+      const bucket = bucketMap.get(key);
+      if (bucket) {
+        bucket.push(i);
+      } else {
+        bucketMap.set(key, [i]);
+      }
+    }
+
+    const chunks: GaussianSortChunk[] = [];
+    for (const indices of bucketMap.values()) {
+      if (indices.length <= 0) {
+        continue;
+      }
+      let localMinX = Number.POSITIVE_INFINITY;
+      let localMinY = Number.POSITIVE_INFINITY;
+      let localMinZ = Number.POSITIVE_INFINITY;
+      let localMaxX = Number.NEGATIVE_INFINITY;
+      let localMaxY = Number.NEGATIVE_INFINITY;
+      let localMaxZ = Number.NEGATIVE_INFINITY;
+      for (const index of indices) {
+        const i3 = index * 3;
+        const x = centersBase[i3] ?? 0;
+        const y = centersBase[i3 + 1] ?? 0;
+        const z = centersBase[i3 + 2] ?? 0;
+        if (x < localMinX) localMinX = x;
+        if (y < localMinY) localMinY = y;
+        if (z < localMinZ) localMinZ = z;
+        if (x > localMaxX) localMaxX = x;
+        if (y > localMaxY) localMaxY = y;
+        if (z > localMaxZ) localMaxZ = z;
+      }
+      const cx = (localMinX + localMaxX) * 0.5;
+      const cy = (localMinY + localMaxY) * 0.5;
+      const cz = (localMinZ + localMaxZ) * 0.5;
+      let radius = 0.001;
+      for (const index of indices) {
+        const i3 = index * 3;
+        const dx = (centersBase[i3] ?? 0) - cx;
+        const dy = (centersBase[i3 + 1] ?? 0) - cy;
+        const dz = (centersBase[i3 + 2] ?? 0) - cz;
+        const i2 = index * 2;
+        const extent = Math.max(scalesBase[i2] ?? 0, scalesBase[i2 + 1] ?? 0, 0);
+        radius = Math.max(radius, Math.sqrt(dx * dx + dy * dy + dz * dz) + extent);
+      }
+      chunks.push({
+        indices: Uint32Array.from(indices),
+        center: [cx, cy, cz],
+        radius
+      });
+    }
+    return chunks;
   }
 
   private async updateEnvironmentTexture(): Promise<void> {

@@ -31,6 +31,7 @@ export interface ElectronApi {
   saveDefaults(pointer: DefaultSessionPointer): Promise<void>;
   loadSession(sessionName: string): Promise<string>;
   saveSession(sessionName: string, payload: string): Promise<void>;
+  cloneSession(args: { previousName: string; nextName: string }): Promise<void>;
   renameSession(args: { previousName: string; nextName: string }): Promise<void>;
   importAsset(args: {
     sessionName: string;

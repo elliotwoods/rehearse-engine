@@ -1,7 +1,8 @@
 import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { produce } from "immer";
 import { createId } from "@/core/ids";
-import { createInitialState, DEFAULT_CAMERA } from "@/core/defaults";
+import { createInitialState } from "@/core/defaults";
+import { cameraStateForPreset } from "@/features/camera/cycleTween";
 import type {
   ActorNode,
   ActorVisibilityMode,
@@ -12,6 +13,7 @@ import type {
   ComponentNode,
   LogLevel,
   ParameterValues,
+  RenderEngine,
   SceneStats,
   SelectionEntry,
   TimeSpeedPreset
@@ -37,6 +39,7 @@ export interface AppActions {
   redo(): void;
   setSessionName(name: string): void;
   setSceneBackgroundColor(color: string): void;
+  setSceneRenderSettings(settings: Partial<{ renderEngine: RenderEngine; antialiasing: boolean }>): void;
   createActor(input: {
     actorType: ActorNode["actorType"];
     name?: string;
@@ -153,38 +156,6 @@ function removeActorRecursive(state: AppState, actorId: string): void {
   delete state.actors[actorId];
   delete state.actorStatusByActorId[actorId];
   state.selection = state.selection.filter((entry) => entry.id !== actorId);
-}
-
-function cameraForPreset(preset: CameraPreset): AppState["camera"] {
-  if (preset === "perspective") {
-    return { ...DEFAULT_CAMERA, mode: "perspective" };
-  }
-
-  if (preset === "isometric") {
-    return {
-      ...DEFAULT_CAMERA,
-      mode: "orthographic",
-      position: [8, 8, 8]
-    };
-  }
-
-  const base = {
-    ...DEFAULT_CAMERA,
-    mode: "orthographic" as const
-  };
-
-  switch (preset) {
-    case "top":
-      return { ...base, position: [0, 15, 0.001] };
-    case "left":
-      return { ...base, position: [-15, 0, 0] };
-    case "front":
-      return { ...base, position: [0, 0, 15] };
-    case "back":
-      return { ...base, position: [0, 0, -15] };
-    default:
-      return base;
-  }
 }
 
 export function createAppStore(mode: AppMode): AppStoreApi {
@@ -323,6 +294,20 @@ export function createAppStore(mode: AppMode): AppStoreApi {
         set({
           state: produce(get().state, (draft) => {
             draft.scene.backgroundColor = color;
+            draft.dirty = true;
+          })
+        });
+      },
+      setSceneRenderSettings(settings) {
+        withHistory(get, set, "Set scene render settings");
+        set({
+          state: produce(get().state, (draft) => {
+            if (settings.renderEngine) {
+              draft.scene.renderEngine = settings.renderEngine;
+            }
+            if (typeof settings.antialiasing === "boolean") {
+              draft.scene.antialiasing = settings.antialiasing;
+            }
             draft.dirty = true;
           })
         });
@@ -601,7 +586,7 @@ export function createAppStore(mode: AppMode): AppStoreApi {
       applyCameraPreset(preset) {
         set({
           state: produce(get().state, (draft) => {
-            draft.camera = cameraForPreset(preset);
+            draft.camera = cameraStateForPreset(preset);
             draft.dirty = true;
           })
         });

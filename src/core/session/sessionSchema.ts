@@ -12,7 +12,16 @@ const actorSchema = z.object({
   name: z.string(),
   enabled: z.boolean(),
   kind: z.literal("actor"),
-  actorType: z.enum(["empty", "environment", "gaussian-splat", "mesh", "primitive", "curve", "plugin"]),
+  actorType: z.enum([
+    "empty",
+    "environment",
+    "gaussian-splat",
+    "gaussian-splat-spark",
+    "mesh",
+    "primitive",
+    "curve",
+    "plugin"
+  ]),
   visibilityMode: z.enum(["visible", "hidden", "selected"]).default("visible"),
   pluginType: z.string().optional(),
   parentActorId: z.string().nullable(),
@@ -50,7 +59,9 @@ const sessionSchema = z.object({
     kind: z.literal("scene"),
     actorIds: z.array(z.string()),
     sceneComponentIds: z.array(z.string()),
-    backgroundColor: z.string().default("#070b12")
+    backgroundColor: z.string().default("#070b12"),
+    renderEngine: z.enum(["webgl2", "webgpu"]).default("webgl2"),
+    antialiasing: z.boolean().default(true)
   }),
   actors: z.record(actorSchema),
   components: z.record(componentSchema),

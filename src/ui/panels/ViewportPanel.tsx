@@ -1,11 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { useKernel } from "@/app/useKernel";
+import { useAppStore } from "@/app/useAppStore";
 import { WebGpuViewport } from "@/render/webgpuRenderer";
+import { WebGlViewport } from "@/render/webglRenderer";
+
+interface ViewportRuntime {
+  start(): Promise<void>;
+  stop(): void;
+}
 
 export function ViewportPanel() {
   const kernel = useKernel();
+  const backend = useAppStore((store) => store.state.scene.renderEngine);
+  const antialiasing = useAppStore((store) => store.state.scene.antialiasing);
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const viewportRef = useRef<WebGpuViewport | null>(null);
+  const viewportRef = useRef<ViewportRuntime | null>(null);
   const hideOverlayTimeoutRef = useRef<number | null>(null);
   const resizeObservedElementsRef = useRef<HTMLElement[]>([]);
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
@@ -15,14 +24,20 @@ export function ViewportPanel() {
     if (!hostRef.current) {
       return;
     }
-    const viewport = new WebGpuViewport(kernel, hostRef.current);
+    const viewport: ViewportRuntime =
+      backend === "webgl2"
+        ? new WebGlViewport(kernel, hostRef.current, { antialias: antialiasing })
+        : new WebGpuViewport(kernel, hostRef.current, { antialias: antialiasing });
     viewportRef.current = viewport;
     let cancelled = false;
     void viewport.start().catch((error) => {
       if (cancelled) {
         return;
       }
-      const message = error instanceof Error ? error.message : "Unknown WebGPU startup error.";
+      const message =
+        error instanceof Error
+          ? error.message
+          : `Unknown ${backend === "webgl2" ? "WebGL2" : "WebGPU"} startup error.`;
       kernel.store.getState().actions.setStatus(`Viewport startup failed: ${message}`);
     });
     return () => {
@@ -30,7 +45,7 @@ export function ViewportPanel() {
       viewport.stop();
       viewportRef.current = null;
     };
-  }, [kernel]);
+  }, [antialiasing, backend, kernel]);
 
   useEffect(() => {
     if (!hostRef.current) {
@@ -106,10 +121,10 @@ export function ViewportPanel() {
   }, []);
 
   return (
-    <div className="viewport-panel">
+      <div className="viewport-panel">
       <div className="viewport-canvas-host" ref={hostRef} />
       <div className={`viewport-resolution-overlay${showResolutionOverlay ? " is-visible" : ""}`}>
-        {viewportSize.width} x {viewportSize.height}
+        {viewportSize.width} x {viewportSize.height} ({backend === "webgl2" ? "WEBGL2" : "WEBGPU"})
       </div>
     </div>
   );

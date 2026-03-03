@@ -61,6 +61,12 @@ export function createActorFromDescriptor(kernel: AppKernel, descriptorId: strin
       filterRegionActorIds: []
     });
   }
+  if (descriptorId === "actor.gaussianSplatSpark") {
+    kernel.store.getState().actions.updateActorParams(actorId, {
+      scaleFactor: 1,
+      opacity: 1
+    });
+  }
   if (descriptorId === "actor.mesh") {
     kernel.store.getState().actions.updateActorParams(actorId, {
       scaleFactor: 1
@@ -74,7 +80,10 @@ export function createActorFromDescriptor(kernel: AppKernel, descriptorId: strin
   if (descriptorId === "actor.primitive") {
     kernel.store.getState().actions.updateActorParams(actorId, {
       shape: "cube",
-      size: 1,
+      cubeSize: 1,
+      sphereRadius: 0.5,
+      cylinderRadius: 0.5,
+      cylinderHeight: 1,
       segments: 24,
       color: "#4fb3ff",
       wireframe: false

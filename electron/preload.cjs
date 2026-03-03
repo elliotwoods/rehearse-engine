@@ -41,6 +41,7 @@ const api = {
   saveDefaults: (pointer) => ipcRenderer.invoke("defaults:save", pointer),
   loadSession: (sessionName) => ipcRenderer.invoke("session:load", sessionName),
   saveSession: (sessionName, payload) => ipcRenderer.invoke("session:save", sessionName, payload),
+  cloneSession: (args) => ipcRenderer.invoke("session:clone", args),
   renameSession: (args) => ipcRenderer.invoke("session:rename", args),
   importAsset: (args) => ipcRenderer.invoke("asset:import", args),
   importGaussianSplat: (args) => ipcRenderer.invoke("asset:import-gaussian", args),

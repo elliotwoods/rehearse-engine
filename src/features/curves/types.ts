@@ -1,10 +1,14 @@
 export type CurveHandleMode = "normal" | "mirrored" | "hard";
+export type CurveHandleWeightMode = "normal" | "hard";
 
 export interface CurvePoint {
   position: [number, number, number];
   handleIn: [number, number, number];
   handleOut: [number, number, number];
   mode: CurveHandleMode;
+  handleInMode?: CurveHandleWeightMode;
+  handleOutMode?: CurveHandleWeightMode;
+  enabled?: boolean;
 }
 
 export interface CurveData {
@@ -38,6 +42,10 @@ function sanitizeHandleMode(value: unknown): CurveHandleMode {
   return "normal";
 }
 
+function sanitizeHandleWeightMode(value: unknown): CurveHandleWeightMode {
+  return value === "hard" ? "hard" : "normal";
+}
+
 function sanitizePoint(value: unknown, fallback: CurvePoint): CurvePoint {
   if (!value || typeof value !== "object") {
     return {
@@ -53,13 +61,28 @@ function sanitizePoint(value: unknown, fallback: CurvePoint): CurvePoint {
     handleIn?: unknown;
     handleOut?: unknown;
     mode?: unknown;
+    handleInMode?: unknown;
+    handleOutMode?: unknown;
+    enabled?: unknown;
   };
+  const mode = sanitizeHandleMode(source.mode);
+  const inferredInMode =
+    mode === "hard"
+      ? "hard"
+      : sanitizeHandleWeightMode(source.handleInMode ?? fallback.handleInMode ?? "normal");
+  const inferredOutMode =
+    mode === "hard"
+      ? "hard"
+      : sanitizeHandleWeightMode(source.handleOutMode ?? fallback.handleOutMode ?? "normal");
 
   return {
     position: sanitizeVector3(source.position, fallback.position),
     handleIn: sanitizeVector3(source.handleIn, fallback.handleIn),
     handleOut: sanitizeVector3(source.handleOut, fallback.handleOut),
-    mode: sanitizeHandleMode(source.mode)
+    mode: mode === "hard" ? "normal" : mode,
+    handleInMode: inferredInMode,
+    handleOutMode: inferredOutMode,
+    enabled: source.enabled === false ? false : true
   };
 }
 
@@ -71,13 +94,19 @@ export function createDefaultCurveData(): CurveData {
         position: [-0.75, 0, 0],
         handleIn: [-0.35, 0, 0],
         handleOut: [0.35, 0, 0],
-        mode: "mirrored"
+        mode: "mirrored",
+        handleInMode: "normal",
+        handleOutMode: "normal",
+        enabled: true
       },
       {
         position: [0.75, 0, 0],
         handleIn: [-0.35, 0, 0],
         handleOut: [0.35, 0, 0],
-        mode: "mirrored"
+        mode: "mirrored",
+        handleInMode: "normal",
+        handleOutMode: "normal",
+        enabled: true
       }
     ]
   };

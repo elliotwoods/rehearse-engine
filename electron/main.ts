@@ -537,6 +537,37 @@ function registerIpcHandlers(): void {
     await fs.writeFile(getSessionFile(sessionName), payload, "utf8");
   });
   ipcMain.handle(
+    "session:clone",
+    async (
+      _event,
+      args: {
+        previousName: string;
+        nextName: string;
+      }
+    ) => {
+      if (args.previousName === args.nextName) {
+        return;
+      }
+      const fromDir = getSessionDirectory(args.previousName);
+      const toDir = getSessionDirectory(args.nextName);
+      await ensureSessionDirectory(args.previousName);
+      try {
+        await fs.access(toDir);
+        throw new Error(`Session "${args.nextName}" already exists.`);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code && code !== "ENOENT") {
+          throw error;
+        }
+      }
+      await fs.cp(fromDir, toDir, {
+        recursive: true,
+        errorOnExist: true,
+        force: false
+      });
+    }
+  );
+  ipcMain.handle(
     "session:rename",
     async (
       _event,

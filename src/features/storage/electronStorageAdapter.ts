@@ -13,6 +13,7 @@ export function createElectronStorageAdapter(): StorageAdapter {
     saveDefaults: (pointer) => window.electronAPI!.saveDefaults(pointer),
     loadSession: (sessionName) => window.electronAPI!.loadSession(sessionName),
     saveSession: (sessionName, payload) => window.electronAPI!.saveSession(sessionName, payload),
+    cloneSession: (previousName, nextName) => window.electronAPI!.cloneSession({ previousName, nextName }),
     renameSession: (previousName, nextName) => window.electronAPI!.renameSession({ previousName, nextName }),
     importAsset: (args) => window.electronAPI!.importAsset(args),
     importGaussianSplat: (args) => window.electronAPI!.importGaussianSplat(args),

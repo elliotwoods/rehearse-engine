@@ -1,6 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faArrowsLeftRight, faCircle, faMinus, faRotateLeft, faTrashCan } from "@fortawesome/free-solid-svg-icons";
+import {
+  faArrowsLeftRight,
+  faCircle,
+  faCircleDot,
+  faClone,
+  faRotateLeft,
+  faToggleOff,
+  faToggleOn,
+  faTrashCan,
+  faXmark
+} from "@fortawesome/free-solid-svg-icons";
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import type {
@@ -9,10 +19,19 @@ import type {
   FileParameterDefinition,
   ParameterDefinition,
   ParameterValue,
-  ParameterValues
+  ParameterValues,
+  RenderEngine
 } from "@/core/types";
 import type { ActorStatusEntry, ReloadableDescriptor } from "@/core/hotReload/types";
-import { appendCurvePoint, removeCurvePoint, setCurveAnchorPosition, setCurvePointMode } from "@/features/curves/editing";
+import {
+  appendCurvePoint,
+  duplicateCurvePoint,
+  removeCurvePoint,
+  setCurveAnchorPosition,
+  setCurvePointEnabled,
+  setCurveHandleWeightMode,
+  setCurvePointMode
+} from "@/features/curves/editing";
 import { curveDataWithOverrides } from "@/features/curves/model";
 import { importFileForActorParam } from "@/features/imports/fileParameterImport";
 import { StatsBlock } from "@/ui/components/StatsBlock";
@@ -23,6 +42,7 @@ const RAD_TO_DEG = 180 / Math.PI;
 const DEG_TO_RAD = Math.PI / 180;
 const VISIBILITY_OPTIONS: ActorVisibilityMode[] = ["visible", "hidden", "selected"];
 const DEFAULT_SCENE_BACKGROUND = "#070b12";
+const CURVE_VERTEX_SELECT_EVENT = "simularca:curve-vertex-select";
 const CURVE_HANDLE_MODE_OPTIONS = [
   {
     value: "mirrored",
@@ -31,18 +51,30 @@ const CURVE_HANDLE_MODE_OPTIONS = [
     icon: <FontAwesomeIcon icon={faArrowsLeftRight} />
   },
   {
-    value: "hard",
-    label: "Hard Vertex",
-    title: "Hard vertex (no handles)",
-    icon: <FontAwesomeIcon icon={faMinus} />
-  },
-  {
     value: "normal",
-    label: "Normal Handles",
-    title: "Normal handles (independent)",
+    label: "Independent",
+    title: "Independent in/out handle weights",
     icon: <FontAwesomeIcon icon={faCircle} />
   }
 ] as const;
+const CURVE_WEIGHT_MODE_OPTIONS = [
+  {
+    value: "normal",
+    label: "On",
+    title: "Weighted handle enabled",
+    icon: <FontAwesomeIcon icon={faCircleDot} />
+  },
+  {
+    value: "hard",
+    label: "Off",
+    title: "Weighted handle disabled",
+    icon: <FontAwesomeIcon icon={faXmark} />
+  }
+] as const;
+const SCENE_ENGINE_OPTIONS: Array<{ value: RenderEngine; label: string }> = [
+  { value: "webgl2", label: "WebGL2" },
+  { value: "webgpu", label: "WebGPU" }
+];
 
 function resolveActorDescriptor(
   actor: ActorNode,
@@ -138,6 +170,18 @@ function bindingValueFor(definition: ParameterDefinition, actor: ActorNode): Bin
   return defaultValueForDefinition(definition);
 }
 
+function isDefinitionVisibleForActor(definition: ParameterDefinition, actor: ActorNode): boolean {
+  const rules = definition.visibleWhen;
+  if (!rules || rules.length === 0) {
+    return true;
+  }
+  return rules.every((rule) => {
+    const value = actor.params[rule.key];
+    const effectiveValue = value === undefined && rule.key === "shape" ? "cube" : value;
+    return effectiveValue === rule.equals;
+  });
+}
+
 function commonDefinitionsForGroup(
   actorSelection: ActorNode[],
   descriptors: ReloadableDescriptor[]
@@ -146,9 +190,15 @@ function commonDefinitionsForGroup(
   if (!firstActor) {
     return [];
   }
-  const firstDefinitions = getParameterDefinitions(firstActor, descriptors);
+  const firstDefinitions = getParameterDefinitions(firstActor, descriptors).filter((definition) =>
+    isDefinitionVisibleForActor(definition, firstActor)
+  );
   const otherDefinitionsByActor = actorSelection.slice(1).map((actor) => {
-    return new Map(getParameterDefinitions(actor, descriptors).map((definition) => [definition.key, definition]));
+    return new Map(
+      getParameterDefinitions(actor, descriptors)
+        .filter((definition) => isDefinitionVisibleForActor(definition, actor))
+        .map((definition) => [definition.key, definition])
+    );
   });
 
   return firstDefinitions.filter((definition) =>
@@ -282,7 +332,9 @@ export function InspectorPane() {
       return [];
     }
     if (actorSelection.length === 1) {
-      return getParameterDefinitions(first, actorDescriptors);
+      return getParameterDefinitions(first, actorDescriptors).filter((definition) =>
+        isDefinitionVisibleForActor(definition, first)
+      );
     }
     return commonDefinitionsForGroup(actorSelection, actorDescriptors);
   }, [actorSelection, actorDescriptors]);
@@ -300,6 +352,7 @@ export function InspectorPane() {
 
   const readOnly = mode === "web-ro";
   const [sceneBackgroundInput, setSceneBackgroundInput] = useState(appState.scene.backgroundColor);
+  const [selectedCurveVertex, setSelectedCurveVertex] = useState<{ actorId: string; pointIndex: number } | null>(null);
 
   useEffect(() => {
     setSceneBackgroundInput(appState.scene.backgroundColor);
@@ -334,6 +387,45 @@ export function InspectorPane() {
       })
     );
   };
+
+  const publishCurveVertexSelect = (actorId: string | null, pointIndex: number | null): void => {
+    window.dispatchEvent(
+      new CustomEvent(CURVE_VERTEX_SELECT_EVENT, {
+        detail: {
+          actorId,
+          pointIndex
+        }
+      })
+    );
+  };
+
+  useEffect(() => {
+    const onCurveVertexSelect = (event: Event) => {
+      const custom = event as CustomEvent<{ actorId?: string | null; pointIndex?: number | null }>;
+      const actorId = custom.detail?.actorId ?? null;
+      const pointIndex = custom.detail?.pointIndex;
+      if (!actorId || pointIndex === null || pointIndex === undefined || pointIndex < 0) {
+        setSelectedCurveVertex(null);
+        return;
+      }
+      setSelectedCurveVertex({ actorId, pointIndex });
+    };
+    window.addEventListener(CURVE_VERTEX_SELECT_EVENT, onCurveVertexSelect as EventListener);
+    return () => {
+      window.removeEventListener(CURVE_VERTEX_SELECT_EVENT, onCurveVertexSelect as EventListener);
+    };
+  }, []);
+
+  const singleSelection = actorSelection.length === 1 ? actorSelection[0] : null;
+  useEffect(() => {
+    if (!singleSelection || singleSelection.actorType !== "curve") {
+      setSelectedCurveVertex(null);
+      return;
+    }
+    if (selectedCurveVertex?.actorId !== singleSelection.id) {
+      setSelectedCurveVertex(null);
+    }
+  }, [selectedCurveVertex?.actorId, singleSelection]);
 
   const updateSelectedActorParams = (key: string, nextValue: BindingValue): void => {
     for (const actor of actorSelection) {
@@ -410,6 +502,46 @@ export function InspectorPane() {
   if (actorSelection.length === 0 && componentSelection.length === 0) {
     const environmentActor = Object.values(appState.actors).find((actor) => actor.actorType === "environment");
     const hasEnvironmentBackground = typeof environmentActor?.params.assetId === "string" && environmentActor.params.assetId.length > 0;
+    const canResetBackground = appState.scene.backgroundColor.toLowerCase() !== DEFAULT_SCENE_BACKGROUND;
+    const canResetEngine = appState.scene.renderEngine !== "webgl2";
+    const canResetAntialiasing = appState.scene.antialiasing !== true;
+    const sceneStatsRows = [
+      { label: "FPS", value: Number.isFinite(appState.stats.fps) ? appState.stats.fps.toFixed(1) : "0.0" },
+      { label: "Frame (ms)", value: Number.isFinite(appState.stats.frameMs) ? appState.stats.frameMs.toFixed(2) : "0.00" },
+      { label: "Camera Mode", value: appState.camera.mode === "orthographic" ? "Orthographic" : "Perspective" },
+      {
+        label: "Camera Position",
+        value: `${appState.camera.position[0].toFixed(3)}, ${appState.camera.position[1].toFixed(3)}, ${appState.camera.position[2].toFixed(3)}`
+      },
+      {
+        label: "Camera Target",
+        value: `${appState.camera.target[0].toFixed(3)}, ${appState.camera.target[1].toFixed(3)}, ${appState.camera.target[2].toFixed(3)}`
+      },
+      {
+        label: appState.camera.mode === "orthographic" ? "Camera Zoom" : "Camera FOV",
+        value:
+          appState.camera.mode === "orthographic"
+            ? appState.camera.zoom.toFixed(3)
+            : `${appState.camera.fov.toFixed(2)} deg`
+      },
+      {
+        label: "Camera Distance",
+        value: Number.isFinite(appState.stats.cameraDistance) ? appState.stats.cameraDistance.toFixed(3) : "0.000"
+      },
+      { label: "Controls Enabled", value: appState.stats.cameraControlsEnabled ? "Yes" : "No" },
+      { label: "Zoom Enabled", value: appState.stats.cameraZoomEnabled ? "Yes" : "No" },
+      { label: "Draw Calls", value: Math.max(0, Math.floor(appState.stats.drawCalls)).toLocaleString() },
+      { label: "Triangles", value: Math.max(0, Math.floor(appState.stats.triangles)).toLocaleString() },
+      { label: "Splat Draw Calls", value: Math.max(0, Math.floor(appState.stats.splatDrawCalls)).toLocaleString() },
+      { label: "Splat Triangles", value: Math.max(0, Math.floor(appState.stats.splatTriangles)).toLocaleString() },
+      { label: "Visible Splats", value: Math.max(0, Math.floor(appState.stats.splatVisibleCount)).toLocaleString() },
+      { label: "Resource (MB)", value: Number.isFinite(appState.stats.resourceMb) ? appState.stats.resourceMb.toFixed(1) : "0.0" },
+      { label: "Heap (MB)", value: Number.isFinite(appState.stats.heapMb) ? appState.stats.heapMb.toFixed(1) : "0.0" },
+      { label: "Actor Count", value: Math.max(0, Math.floor(appState.stats.actorCount)).toLocaleString() },
+      { label: "Enabled Actors", value: Math.max(0, Math.floor(appState.stats.actorCountEnabled)).toLocaleString() },
+      { label: "Session Size", value: `${Math.max(0, Math.floor(appState.stats.sessionFileBytes)).toLocaleString()} B` },
+      { label: "Saved Size", value: `${Math.max(0, Math.floor(appState.stats.sessionFileBytesSaved)).toLocaleString()} B` }
+    ];
     return (
       <div className="inspector-pane-root custom-inspector">
         <section className="inspector-common-card">
@@ -452,13 +584,9 @@ export function InspectorPane() {
                 </div>
                 <button
                   type="button"
-                  className={`widget-reset-button${
-                    appState.scene.backgroundColor.toLowerCase() !== DEFAULT_SCENE_BACKGROUND ? "" : " is-hidden"
-                  }`}
+                  className={`widget-reset-button${canResetBackground ? "" : " is-hidden"}`}
                   title="Reset Background"
-                  disabled={
-                    readOnly || hasEnvironmentBackground || appState.scene.backgroundColor.toLowerCase() === DEFAULT_SCENE_BACKGROUND
-                  }
+                  disabled={readOnly || hasEnvironmentBackground || !canResetBackground}
                   onClick={() => {
                     setSceneBackgroundInput(DEFAULT_SCENE_BACKGROUND);
                     kernel.store.getState().actions.setSceneBackgroundColor(DEFAULT_SCENE_BACKGROUND);
@@ -473,6 +601,86 @@ export function InspectorPane() {
             <p className="panel-empty">Background color is overridden while an Environment texture is active.</p>
           ) : null}
         </section>
+        <section className="inspector-common-card">
+          <header>
+            <h4>Renderer</h4>
+          </header>
+          <div className="inspector-common-grid">
+            <div className="inspector-common-row">
+              <span className="inspector-common-label">Engine</span>
+              <div className="inspector-common-control-wrap">
+                <select
+                  className="widget-select"
+                  value={appState.scene.renderEngine}
+                  disabled={readOnly}
+                  onChange={(event) => {
+                    const value = event.target.value === "webgpu" ? "webgpu" : "webgl2";
+                    kernel.store.getState().actions.setSceneRenderSettings({ renderEngine: value });
+                  }}
+                >
+                  {SCENE_ENGINE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className={`widget-reset-button${canResetEngine ? "" : " is-hidden"}`}
+                  title="Reset Engine"
+                  disabled={readOnly || !canResetEngine}
+                  onClick={() => {
+                    kernel.store.getState().actions.setSceneRenderSettings({ renderEngine: "webgl2" });
+                  }}
+                >
+                  <FontAwesomeIcon icon={faRotateLeft} />
+                </button>
+              </div>
+            </div>
+            <div className="inspector-common-row">
+              <span className="inspector-common-label">Anti-Aliasing</span>
+              <div className="inspector-common-control-wrap">
+                <ToggleField
+                  label=""
+                  checked={appState.scene.antialiasing}
+                  disabled={readOnly}
+                  embedded
+                  onChange={(next) => {
+                    kernel.store.getState().actions.setSceneRenderSettings({
+                      antialiasing: next
+                    });
+                  }}
+                />
+                <button
+                  type="button"
+                  className={`widget-reset-button${canResetAntialiasing ? "" : " is-hidden"}`}
+                  title="Reset Anti-Aliasing"
+                  disabled={readOnly || !canResetAntialiasing}
+                  onClick={() => {
+                    kernel.store.getState().actions.setSceneRenderSettings({
+                      antialiasing: true
+                    });
+                  }}
+                >
+                  <FontAwesomeIcon icon={faRotateLeft} />
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+        <StatsBlock
+          title="Status"
+          className="inspector-debug-card"
+          titleLevel="h4"
+          emptyText="No status available."
+          rows={sceneStatsRows}
+          onCopySuccess={(label) => {
+            kernel.store.getState().actions.setStatus(`${label} copied to clipboard.`);
+          }}
+          onCopyError={(label, message) => {
+            kernel.store.getState().actions.setStatus(`Unable to copy ${label}: ${message}`);
+          }}
+        />
       </div>
     );
   }
@@ -587,7 +795,6 @@ export function InspectorPane() {
     );
   }
 
-  const singleSelection = actorSelection.length === 1 ? actorSelection[0] : null;
   const descriptorForSingleSelection = singleSelection ? resolveActorDescriptor(singleSelection, actorDescriptors) : undefined;
   const runtimeStatus = singleSelection ? actorStatusByActorId[singleSelection.id] : undefined;
   const statusEntries = singleSelection
@@ -801,62 +1008,142 @@ export function InspectorPane() {
             {curveDataWithOverrides(singleSelection).points.map((point, pointIndex, allPoints) => (
               <div
                 key={`curve-point-${pointIndex}`}
-                className="curve-vertex-row"
+                className={`curve-vertex-row${
+                  selectedCurveVertex?.actorId === singleSelection.id && selectedCurveVertex.pointIndex === pointIndex
+                    ? " selected"
+                    : ""
+                }${point.enabled === false ? " disabled" : ""}`}
+                onClick={() => {
+                  publishCurveVertexSelect(singleSelection.id, pointIndex);
+                }}
                 onMouseEnter={() => {
                   publishCurveVertexHover(singleSelection.id, pointIndex);
                 }}
               >
-                <span className="curve-vertex-label">V{pointIndex + 1}</span>
-                <SegmentedControl
-                  compact
-                  value={point.mode}
-                  options={[...CURVE_HANDLE_MODE_OPTIONS]}
-                  disabled={readOnly}
-                  onChange={(nextMode) => {
-                    if (nextMode !== "mirrored" && nextMode !== "hard" && nextMode !== "normal") {
-                      return;
-                    }
-                    updateSingleCurve((actor) => {
-                      const current = curveDataWithOverrides(actor);
-                      return setCurvePointMode(current, pointIndex, nextMode);
-                    });
-                  }}
-                />
-                <div className="curve-vertex-inputs">
-                  {([0, 1, 2] as const).map((axisIndex) => (
-                    <div key={`curve-point-${pointIndex}-axis-${axisIndex}`} className="curve-vertex-cell">
-                      <span className="inspector-axis-label">{axisIndex === 0 ? "X" : axisIndex === 1 ? "Y" : "Z"}</span>
-                      <DigitScrubInput
-                        value={point.position[axisIndex]}
-                        precision={3}
-                        disabled={readOnly}
-                        onChange={(next) => {
+                <div className="curve-vertex-controls">
+                  <span className="curve-vertex-label">V{pointIndex + 1}</span>
+                  <SegmentedControl
+                    compact
+                    value={point.mode}
+                    options={[...CURVE_HANDLE_MODE_OPTIONS]}
+                    disabled={readOnly}
+                    onChange={(nextMode) => {
+                      if (nextMode !== "mirrored" && nextMode !== "normal") {
+                        return;
+                      }
+                      updateSingleCurve((actor) => {
+                        const current = curveDataWithOverrides(actor);
+                        return setCurvePointMode(current, pointIndex, nextMode);
+                      });
+                    }}
+                  />
+                  <div className="curve-vertex-mode-list">
+                    <div className="curve-vertex-weight-control">
+                      <span className="curve-vertex-weight-label">In</span>
+                      <SegmentedControl
+                        compact
+                        value={point.handleInMode ?? "normal"}
+                        options={[...CURVE_WEIGHT_MODE_OPTIONS]}
+                        disabled={readOnly || point.mode === "mirrored"}
+                        onChange={(nextMode) => {
+                          if (nextMode !== "normal" && nextMode !== "hard") {
+                            return;
+                          }
                           updateSingleCurve((actor) => {
                             const current = curveDataWithOverrides(actor);
-                            const p = current.points[pointIndex];
-                            if (!p) {
-                              return current;
-                            }
-                            const target: [number, number, number] = [...p.position];
-                            target[axisIndex] = next;
-                            return setCurveAnchorPosition(current, pointIndex, target);
+                            return setCurveHandleWeightMode(current, pointIndex, "in", nextMode);
                           });
                         }}
                       />
                     </div>
-                  ))}
+                    <div className="curve-vertex-weight-control">
+                      <span className="curve-vertex-weight-label">Out</span>
+                      <SegmentedControl
+                        compact
+                        value={point.handleOutMode ?? "normal"}
+                        options={[...CURVE_WEIGHT_MODE_OPTIONS]}
+                        disabled={readOnly || point.mode === "mirrored"}
+                        onChange={(nextMode) => {
+                          if (nextMode !== "normal" && nextMode !== "hard") {
+                            return;
+                          }
+                          updateSingleCurve((actor) => {
+                            const current = curveDataWithOverrides(actor);
+                            return setCurveHandleWeightMode(current, pointIndex, "out", nextMode);
+                          });
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div className="curve-vertex-actions">
+                    <button
+                      type="button"
+                      className="curve-vertex-action"
+                      disabled={readOnly}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        updateSingleCurve((actor) => duplicateCurvePoint(curveDataWithOverrides(actor), pointIndex));
+                      }}
+                      title="Duplicate vertex below"
+                    >
+                      <FontAwesomeIcon icon={faClone} />
+                    </button>
+                    <button
+                      type="button"
+                      className="curve-vertex-delete"
+                      disabled={readOnly || allPoints.length <= 2}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        updateSingleCurve((actor) => removeCurvePoint(curveDataWithOverrides(actor), pointIndex));
+                      }}
+                      title={allPoints.length <= 2 ? "A curve needs at least two vertices." : "Delete vertex"}
+                    >
+                      <FontAwesomeIcon icon={faTrashCan} />
+                    </button>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  className="curve-vertex-delete"
-                  disabled={readOnly || allPoints.length <= 2}
-                  onClick={() => {
-                    updateSingleCurve((actor) => removeCurvePoint(curveDataWithOverrides(actor), pointIndex));
-                  }}
-                  title={allPoints.length <= 2 ? "A curve needs at least two vertices." : "Delete vertex"}
-                >
-                  <FontAwesomeIcon icon={faTrashCan} />
-                </button>
+                <div className="curve-vertex-values">
+                  <button
+                    type="button"
+                    className="curve-vertex-enabled"
+                    disabled={readOnly}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      const nextEnabled = point.enabled === false;
+                      updateSingleCurve((actor) =>
+                        setCurvePointEnabled(curveDataWithOverrides(actor), pointIndex, nextEnabled)
+                      );
+                    }}
+                    title={point.enabled === false ? "Enable vertex" : "Disable vertex (skip)"}
+                  >
+                    <FontAwesomeIcon icon={point.enabled === false ? faToggleOff : faToggleOn} />
+                    <span>{point.enabled === false ? "Disabled" : "Enabled"}</span>
+                  </button>
+                  <div className="curve-vertex-inputs">
+                    {([0, 1, 2] as const).map((axisIndex) => (
+                      <div key={`curve-point-${pointIndex}-axis-${axisIndex}`} className="curve-vertex-cell">
+                        <span className="inspector-axis-label">{axisIndex === 0 ? "X" : axisIndex === 1 ? "Y" : "Z"}</span>
+                        <DigitScrubInput
+                          value={point.position[axisIndex]}
+                          precision={3}
+                          disabled={readOnly}
+                          onChange={(next) => {
+                            updateSingleCurve((actor) => {
+                              const current = curveDataWithOverrides(actor);
+                              const p = current.points[pointIndex];
+                              if (!p) {
+                                return current;
+                              }
+                              const target: [number, number, number] = [...p.position];
+                              target[axisIndex] = next;
+                              return setCurveAnchorPosition(current, pointIndex, target);
+                            });
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
             ))}
           </div>
@@ -1025,10 +1312,6 @@ export function InspectorPane() {
               }}
               onReload={() => {
                 reloadSelectedActorFileParam(definition.key);
-              }}
-              onClear={() => {
-                updateSelectedActorParams(definition.key, "");
-                kernel.store.getState().actions.setStatus(`${definition.label} cleared.`);
               }}
             />
           );

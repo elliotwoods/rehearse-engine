@@ -1,25 +1,25 @@
 import * as THREE from "three";
-import { WebGPURenderer } from "three/webgpu";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { AppKernel } from "@/app/kernel";
 import { estimateSessionPayloadBytes } from "@/core/session/sessionSize";
-import { SceneController } from "./sceneController";
-import { incompatibilityReason } from "./engineCompatibility";
-import { clearSplatQueryProvider, registerSplatQueryProvider } from "./splatQueryRegistry";
-import { countActorStats, summarizeMemory, type RenderStatsSample } from "./stats";
-import { CurveEditController } from "./curveEditController";
+import { CurveEditController } from "@/render/curveEditController";
+import { incompatibilityReason } from "@/render/engineCompatibility";
+import { SceneController } from "@/render/sceneController";
+import { SparkSplatController } from "@/render/sparkSplatController";
+import { countActorStats, summarizeMemory, type RenderStatsSample } from "@/render/stats";
 
 const FAST_STATS_INTERVAL_MS = 500;
 const SLOW_STATS_INTERVAL_MS = 2000;
 
-export class WebGpuViewport {
-  private readonly renderer: WebGPURenderer;
+export class WebGlViewport {
+  private readonly renderer: any;
   private readonly perspectiveCamera: any;
   private readonly orthographicCamera: any;
   private activeCamera: any;
   private readonly controls: OrbitControls;
   private readonly sceneController: SceneController;
   private readonly curveEditController: CurveEditController;
+  private readonly sparkSplatController: SparkSplatController;
   private frameHandle = 0;
   private frameCount = 0;
   private frameTimeAccumulatorMs = 0;
@@ -29,32 +29,23 @@ export class WebGpuViewport {
   private lastAppliedCameraSignature = "";
   private readonly geometryByteCache = new WeakMap<object, number>();
   private readonly textureByteCache = new WeakMap<object, number>();
-  private readonly queryVisibleSplats = (args?: Parameters<SceneController["queryVisibleSplats"]>[0]) =>
-    this.sceneController.queryVisibleSplats(args);
   private started = false;
   private disposed = false;
-  private initialized = false;
   private renderInFlight = false;
   private resizeObserver: ResizeObserver | null = null;
   private resizeObservedElements: HTMLElement[] = [];
   private readonly maxRenderDimension = 4096;
   private previousMainRenderSample: RenderStatsSample | null = null;
-  private lastGaussianSortAt = 0;
-  private lastGaussianSortCameraQuaternion = new THREE.Quaternion();
-  private lastGaussianSortCameraPosition = new THREE.Vector3();
-  private hasGaussianSortCameraState = false;
   private readonly wheelZoomSpeed = 0.12;
+
   public constructor(
     private readonly kernel: AppKernel,
     private readonly mountEl: HTMLElement,
     options: { antialias: boolean }
   ) {
-    if (!("gpu" in navigator)) {
-      throw new Error("WebGPU is required by this application.");
-    }
-
     this.sceneController = new SceneController(kernel);
-    this.renderer = new WebGPURenderer({ antialias: options.antialias, alpha: false });
+    this.sparkSplatController = new SparkSplatController(kernel, this.sceneController);
+    this.renderer = new THREE.WebGLRenderer({ antialias: options.antialias, alpha: false });
     this.applyRenderScale(this.mountEl.clientWidth, this.mountEl.clientHeight);
     this.renderer.setSize(this.mountEl.clientWidth, this.mountEl.clientHeight);
     this.mountEl.appendChild(this.renderer.domElement);
@@ -88,6 +79,8 @@ export class WebGpuViewport {
     (this.controls as any).maxDistance = 10000;
     (this.controls as any).minZoom = 0.05;
     (this.controls as any).maxZoom = 200;
+    this.renderer.domElement.style.touchAction = "none";
+    this.renderer.domElement.addEventListener("wheel", this.onCanvasWheel, { passive: false });
     this.curveEditController = new CurveEditController(
       kernel,
       this.sceneController,
@@ -95,8 +88,6 @@ export class WebGpuViewport {
       this.renderer.domElement,
       this.activeCamera
     );
-    this.renderer.domElement.addEventListener("wheel", this.onCanvasWheel, { passive: false });
-    registerSplatQueryProvider(this.queryVisibleSplats);
   }
 
   public async start(): Promise<void> {
@@ -105,10 +96,6 @@ export class WebGpuViewport {
     }
     this.started = true;
     this.disposed = false;
-    if (typeof (this.renderer as any).init === "function") {
-      await (this.renderer as any).init();
-    }
-    this.initialized = true;
     this.onResize();
     window.addEventListener("resize", this.onResize);
     this.resizeObserver = new ResizeObserver(() => {
@@ -137,15 +124,9 @@ export class WebGpuViewport {
     this.controls.dispose();
     this.renderer.domElement.removeEventListener("wheel", this.onCanvasWheel);
     this.curveEditController.dispose();
-    clearSplatQueryProvider(this.queryVisibleSplats);
-    this.clearCompatibilityStatus();
-    if (this.initialized) {
-      try {
-        this.renderer.dispose();
-      } catch {
-        // Renderer may already be torn down.
-      }
-    }
+    this.sparkSplatController.dispose();
+    this.clearNativeGaussianConflictStatus();
+    this.renderer.dispose();
     if (this.mountEl.contains(this.renderer.domElement)) {
       this.mountEl.removeChild(this.renderer.domElement);
     }
@@ -156,54 +137,30 @@ export class WebGpuViewport {
       return;
     }
     this.frameHandle = requestAnimationFrame(this.animate);
-    if (!this.initialized || this.renderInFlight) {
+    if (this.renderInFlight) {
       return;
     }
     this.kernel.clock.tick(performance.now(), this.kernel.store);
-    void this.sceneController.syncFromState();
+    this.renderInFlight = true;
+    void this.renderFrame().finally(() => {
+      this.renderInFlight = false;
+    });
+  };
+
+  private async renderFrame(): Promise<void> {
+    await this.sceneController.syncFromState();
+    await this.sparkSplatController.syncFromState();
+    this.enforceActorCompatibility("webgl2");
     this.syncCameraState();
     this.curveEditController.setCamera(this.activeCamera);
     this.curveEditController.update();
     this.controls.update();
-    this.enforceActorCompatibility("webgpu");
-    this.updateGaussianDepthSortingIfNeeded();
     this.syncCameraToState();
-    this.renderInFlight = true;
-    const renderPromise =
-      typeof (this.renderer as any).renderAsync === "function"
-        ? (this.renderer as any).renderAsync(this.sceneController.scene, this.activeCamera)
-        : Promise.resolve((this.renderer as any).render(this.sceneController.scene, this.activeCamera));
-    void Promise.resolve(renderPromise).finally(() => {
-      this.renderInFlight = false;
-    });
+    this.renderer.render(this.sceneController.scene, this.activeCamera);
     this.updateStats();
-  };
-
-  private syncCameraState(): void {
-    const cameraState = this.kernel.store.getState().state.camera;
-    const signature = JSON.stringify(cameraState);
-    this.activeCamera = cameraState.mode === "orthographic" ? this.orthographicCamera : this.perspectiveCamera;
-    this.controls.object = this.activeCamera;
-    if (signature !== this.lastAppliedCameraSignature) {
-      if (this.activeCamera instanceof THREE.PerspectiveCamera) {
-        this.activeCamera.fov = cameraState.fov;
-        this.activeCamera.near = cameraState.near;
-        this.activeCamera.far = cameraState.far;
-        this.activeCamera.position.set(...cameraState.position);
-        this.activeCamera.updateProjectionMatrix();
-      } else {
-        this.activeCamera.near = cameraState.near;
-        this.activeCamera.far = cameraState.far;
-        this.activeCamera.zoom = cameraState.zoom;
-        this.activeCamera.position.set(...cameraState.position);
-        this.activeCamera.updateProjectionMatrix();
-      }
-      this.controls.target.set(...cameraState.target);
-      this.lastAppliedCameraSignature = signature;
-    }
   }
 
-  private enforceActorCompatibility(engine: "webgpu"): void {
+  private enforceActorCompatibility(engine: "webgl2"): void {
     const state = this.kernel.store.getState().state;
     for (const actor of Object.values(state.actors)) {
       const reason = incompatibilityReason(actor, engine);
@@ -245,7 +202,7 @@ export class WebGpuViewport {
     }
   }
 
-  private clearCompatibilityStatus(): void {
+  private clearNativeGaussianConflictStatus(): void {
     const state = this.kernel.store.getState().state;
     for (const actor of Object.values(state.actors)) {
       const current = state.actorStatusByActorId[actor.id];
@@ -263,6 +220,101 @@ export class WebGpuViewport {
       });
     }
   }
+
+  private syncCameraState(): void {
+    const cameraState = this.kernel.store.getState().state.camera;
+    const signature = JSON.stringify(cameraState);
+    this.activeCamera = cameraState.mode === "orthographic" ? this.orthographicCamera : this.perspectiveCamera;
+    this.controls.object = this.activeCamera;
+    if (signature !== this.lastAppliedCameraSignature) {
+      if (this.activeCamera instanceof THREE.PerspectiveCamera) {
+        this.activeCamera.fov = cameraState.fov;
+        this.activeCamera.near = cameraState.near;
+        this.activeCamera.far = cameraState.far;
+        this.activeCamera.position.set(...cameraState.position);
+        this.activeCamera.updateProjectionMatrix();
+      } else {
+        this.activeCamera.near = cameraState.near;
+        this.activeCamera.far = cameraState.far;
+        this.activeCamera.zoom = cameraState.zoom;
+        this.activeCamera.position.set(...cameraState.position);
+        this.activeCamera.updateProjectionMatrix();
+      }
+      this.controls.target.set(...cameraState.target);
+      this.lastAppliedCameraSignature = signature;
+    }
+  }
+
+  private syncCameraToState(): void {
+    const nextCameraState = {
+      mode: (this.activeCamera === this.orthographicCamera ? "orthographic" : "perspective") as
+        | "orthographic"
+        | "perspective",
+      position: [this.activeCamera.position.x, this.activeCamera.position.y, this.activeCamera.position.z] as [
+        number,
+        number,
+        number
+      ],
+      target: [this.controls.target.x, this.controls.target.y, this.controls.target.z] as [number, number, number],
+      fov:
+        this.activeCamera instanceof THREE.PerspectiveCamera
+          ? this.activeCamera.fov
+          : this.kernel.store.getState().state.camera.fov,
+      zoom:
+        this.activeCamera instanceof THREE.OrthographicCamera
+          ? this.activeCamera.zoom
+          : this.kernel.store.getState().state.camera.zoom,
+      near: this.activeCamera.near,
+      far: this.activeCamera.far
+    };
+
+    this.kernel.store.getState().actions.setCameraState(nextCameraState, false);
+  }
+
+  private onCanvasWheel = (event: WheelEvent): void => {
+    if (!(this.controls as any).enabled) {
+      return;
+    }
+    if (event.defaultPrevented) {
+      return;
+    }
+    const current = this.activeCamera;
+    if (!current) {
+      return;
+    }
+    const delta = Number.isFinite(event.deltaY) ? event.deltaY : 0;
+    if (delta === 0) {
+      return;
+    }
+    const direction = delta > 0 ? 1 : -1;
+    const scalar = 1 + this.wheelZoomSpeed * Math.min(4, Math.abs(delta) / 100);
+
+    if (current instanceof THREE.OrthographicCamera) {
+      const minZoom = Number((this.controls as any).minZoom ?? 0.05);
+      const maxZoom = Number((this.controls as any).maxZoom ?? 200);
+      const nextZoom = direction > 0 ? current.zoom / scalar : current.zoom * scalar;
+      current.zoom = Math.max(minZoom, Math.min(maxZoom, nextZoom));
+      current.updateProjectionMatrix();
+      event.preventDefault();
+      return;
+    }
+
+    if (current instanceof THREE.PerspectiveCamera) {
+      const target = this.controls.target;
+      const offset = new THREE.Vector3().copy(current.position).sub(target);
+      const distance = offset.length();
+      if (!Number.isFinite(distance) || distance <= 0) {
+        return;
+      }
+      const minDistance = Number((this.controls as any).minDistance ?? 0.01);
+      const maxDistance = Number((this.controls as any).maxDistance ?? 10000);
+      const nextDistance = direction > 0 ? distance * scalar : distance / scalar;
+      const clampedDistance = Math.max(minDistance, Math.min(maxDistance, nextDistance));
+      offset.setLength(clampedDistance);
+      current.position.copy(target).add(offset);
+      event.preventDefault();
+    }
+  };
 
   private onResize = (): void => {
     const { width, height } = this.getEffectiveViewportSize();
@@ -353,7 +405,7 @@ export class WebGpuViewport {
         framesInWindow
       );
       this.previousMainRenderSample = mainRenderStatsCumulative;
-      const splatStats = this.sceneController.getGaussianRenderStats();
+      const splatStats = this.sparkSplatController.getRenderStats();
       const actorCounts = countActorStats(this.kernel.store.getState().state.actors);
       const currentStats = this.kernel.store.getState().state.stats;
 
@@ -363,16 +415,17 @@ export class WebGpuViewport {
         drawCalls: Math.max(0, Math.floor(mainRenderStats.drawCalls)),
         triangles: Math.max(0, Math.floor(mainRenderStats.triangles)),
         splatDrawCalls: splatStats.drawCalls,
-        splatTriangles: splatStats.triangles,
+        splatTriangles: 0,
         splatVisibleCount: splatStats.visibleCount,
         actorCount: actorCounts.actorCount,
         actorCountEnabled: actorCounts.actorCountEnabled,
         cameraDistance: this.activeCamera.position.distanceTo(this.controls.target),
         cameraControlsEnabled: Boolean((this.controls as any).enabled),
         cameraZoomEnabled: Boolean((this.controls as any).enableZoom),
-        sessionFileBytes: currentStats.sessionFileBytesSaved > 0 && !this.kernel.store.getState().state.dirty
-          ? currentStats.sessionFileBytesSaved
-          : currentStats.sessionFileBytes
+        sessionFileBytes:
+          currentStats.sessionFileBytesSaved > 0 && !this.kernel.store.getState().state.dirty
+            ? currentStats.sessionFileBytesSaved
+            : currentStats.sessionFileBytes
       });
     }
 
@@ -412,7 +465,6 @@ export class WebGpuViewport {
       if (prev === null) {
         return next;
       }
-      // Some render backends reset counters; treat negative jumps as reset events.
       return next >= prev ? next - prev : next;
     };
     return {
@@ -422,40 +474,42 @@ export class WebGpuViewport {
   }
 
   private getHeapBytes(): number | null {
-    const perf = performance as Performance & {
-      memory?: {
-        usedJSHeapSize?: number;
-      };
-    };
+    const perf = performance as Performance & { memory?: { usedJSHeapSize?: number } };
     const used = perf.memory?.usedJSHeapSize;
-    if (typeof used !== "number" || !Number.isFinite(used) || used <= 0) {
+    if (typeof used !== "number") {
       return null;
     }
     return used;
   }
 
   private estimateResourceBytes(): number {
-    const scene = this.sceneController.scene as any;
-    let total = 0;
-    scene.traverse((node: any) => {
-      const mesh = node as any;
-      const geometry = mesh.geometry as any;
-      if (geometry) {
-        total += this.estimateGeometryBytes(geometry);
+    let geometryBytes = 0;
+    let textureBytes = 0;
+    const seenGeometries = new Set<any>();
+    const seenTextures = new Set<any>();
+    this.sceneController.scene.traverse((object: any) => {
+      const geometry = object.geometry;
+      if (geometry && !seenGeometries.has(geometry)) {
+        seenGeometries.add(geometry);
+        geometryBytes += this.estimateGeometryBytes(geometry);
       }
-      const material = mesh.material as any;
-      if (!material) {
-        return;
-      }
-      if (Array.isArray(material)) {
-        for (const entry of material) {
-          total += this.estimateMaterialTextureBytes(entry);
+
+      const material = object.material;
+      const materials = Array.isArray(material) ? material : material ? [material] : [];
+      for (const entry of materials) {
+        if (!entry) {
+          continue;
         }
-        return;
+        for (const value of Object.values(entry)) {
+          if (value instanceof THREE.Texture && !seenTextures.has(value)) {
+            seenTextures.add(value);
+            textureBytes += this.estimateTextureBytes(value);
+          }
+        }
       }
-      total += this.estimateMaterialTextureBytes(material);
     });
-    return total;
+
+    return geometryBytes + textureBytes;
   }
 
   private estimateGeometryBytes(geometry: any): number {
@@ -463,32 +517,22 @@ export class WebGpuViewport {
     if (cached !== undefined) {
       return cached;
     }
-    let total = 0;
+    let bytes = 0;
     const attributes = geometry.attributes as Record<string, any>;
-    for (const attribute of Object.values(attributes)) {
-      const array = attribute.array as ArrayLike<number> & { BYTES_PER_ELEMENT?: number; length?: number };
-      const length = typeof array.length === "number" ? array.length : 0;
-      const bytesPerElement = typeof array.BYTES_PER_ELEMENT === "number" ? array.BYTES_PER_ELEMENT : 4;
-      total += length * bytesPerElement;
-    }
-    const indexArray = geometry.index?.array as ArrayLike<number> & { BYTES_PER_ELEMENT?: number; length?: number } | undefined;
-    if (indexArray) {
-      const length = typeof indexArray.length === "number" ? indexArray.length : 0;
-      const bytesPerElement = typeof indexArray.BYTES_PER_ELEMENT === "number" ? indexArray.BYTES_PER_ELEMENT : 4;
-      total += length * bytesPerElement;
-    }
-    this.geometryByteCache.set(geometry, total);
-    return total;
-  }
-
-  private estimateMaterialTextureBytes(material: any): number {
-    let total = 0;
-    for (const value of Object.values(material as Record<string, unknown>)) {
-      if (value && typeof value === "object" && "isTexture" in value) {
-        total += this.estimateTextureBytes(value as any);
+    if (attributes) {
+      for (const attribute of Object.values(attributes)) {
+        const array = attribute?.array as ArrayBufferView | undefined;
+        if (array) {
+          bytes += array.byteLength;
+        }
       }
     }
-    return total;
+    const indexArray = geometry.index?.array as ArrayBufferView | undefined;
+    if (indexArray) {
+      bytes += indexArray.byteLength;
+    }
+    this.geometryByteCache.set(geometry, bytes);
+    return bytes;
   }
 
   private estimateTextureBytes(texture: any): number {
@@ -496,132 +540,24 @@ export class WebGpuViewport {
     if (cached !== undefined) {
       return cached;
     }
-    const image = texture.image as { width?: number; height?: number } | Array<{ width?: number; height?: number }> | undefined;
-    let width = 0;
-    let height = 0;
-    if (Array.isArray(image)) {
-      width = Math.max(...image.map((entry) => Number(entry.width ?? 0)), 0);
-      height = Math.max(...image.map((entry) => Number(entry.height ?? 0)), 0);
-    } else if (image) {
-      width = Number(image.width ?? 0);
-      height = Number(image.height ?? 0);
+    let bytes = 0;
+    const image = texture.image as
+      | { width?: number; height?: number; data?: ArrayBufferView }
+      | Array<{ width?: number; height?: number; data?: ArrayBufferView }>
+      | undefined;
+    const images = Array.isArray(image) ? image : image ? [image] : [];
+    for (const entry of images) {
+      if (entry.data) {
+        bytes += entry.data.byteLength;
+        continue;
+      }
+      const width = Number(entry.width ?? 0);
+      const height = Number(entry.height ?? 0);
+      if (width > 0 && height > 0) {
+        bytes += width * height * 4;
+      }
     }
-    const safeWidth = Number.isFinite(width) ? Math.max(0, Math.floor(width)) : 0;
-    const safeHeight = Number.isFinite(height) ? Math.max(0, Math.floor(height)) : 0;
-    // Approximate RGBA8 footprint, includes basic mip overhead factor.
-    const bytes = safeWidth > 0 && safeHeight > 0 ? Math.floor(safeWidth * safeHeight * 4 * 1.33) : 0;
     this.textureByteCache.set(texture, bytes);
     return bytes;
   }
-
-  private syncCameraToState(): void {
-    const camera = this.activeCamera;
-    const target = this.controls.target;
-    const cameraUpdate = {
-      position: [camera.position.x, camera.position.y, camera.position.z] as [number, number, number],
-      target: [target.x, target.y, target.z] as [number, number, number],
-      zoom: camera instanceof THREE.OrthographicCamera ? camera.zoom : 1,
-      fov: camera instanceof THREE.PerspectiveCamera ? camera.fov : this.kernel.store.getState().state.camera.fov
-    };
-    const currentCamera = this.kernel.store.getState().state.camera;
-    const moved =
-      distanceSq3(cameraUpdate.position, currentCamera.position) > 1e-8 ||
-      distanceSq3(cameraUpdate.target, currentCamera.target) > 1e-8 ||
-      Math.abs(cameraUpdate.zoom - currentCamera.zoom) > 1e-6 ||
-      Math.abs(cameraUpdate.fov - currentCamera.fov) > 1e-6;
-    if (!moved) {
-      return;
-    }
-
-    // Camera navigation should mark the session as stale so Save captures the current viewpoint.
-    this.kernel.store.getState().actions.setCameraState(cameraUpdate, true);
-    this.lastAppliedCameraSignature = JSON.stringify({
-      ...currentCamera,
-      ...cameraUpdate
-    });
-  }
-
-  private updateGaussianDepthSortingIfNeeded(): void {
-    const now = performance.now();
-    const minSortIntervalMs = 80;
-    if (now - this.lastGaussianSortAt < minSortIntervalMs) {
-      return;
-    }
-
-    const currentQuaternion = new THREE.Quaternion();
-    this.activeCamera.getWorldQuaternion(currentQuaternion);
-    const currentPosition = new THREE.Vector3(
-      this.activeCamera.position.x,
-      this.activeCamera.position.y,
-      this.activeCamera.position.z
-    );
-
-    if (this.hasGaussianSortCameraState) {
-      const rotationDot = Math.abs(currentQuaternion.dot(this.lastGaussianSortCameraQuaternion));
-      const rotationChangedEnough = 1 - rotationDot > 0.00006;
-      const positionChangedEnough = currentPosition.distanceToSquared(this.lastGaussianSortCameraPosition) > 1e-6;
-      if (!rotationChangedEnough && !positionChangedEnough) {
-        return;
-      }
-    }
-
-    this.sceneController.updateGaussianDepthSorting(this.activeCamera);
-    this.lastGaussianSortAt = now;
-    this.lastGaussianSortCameraQuaternion.copy(currentQuaternion);
-    this.lastGaussianSortCameraPosition.copy(currentPosition);
-    this.hasGaussianSortCameraState = true;
-  }
-
-  private onCanvasWheel = (event: WheelEvent): void => {
-    if (!(this.controls as any).enabled) {
-      return;
-    }
-    if (event.defaultPrevented) {
-      return;
-    }
-    const current = this.activeCamera;
-    if (!current) {
-      return;
-    }
-    const delta = Number.isFinite(event.deltaY) ? event.deltaY : 0;
-    if (delta === 0) {
-      return;
-    }
-    const direction = delta > 0 ? 1 : -1;
-    const scalar = 1 + this.wheelZoomSpeed * Math.min(4, Math.abs(delta) / 100);
-
-    if (current instanceof THREE.OrthographicCamera) {
-      const minZoom = Number((this.controls as any).minZoom ?? 0.05);
-      const maxZoom = Number((this.controls as any).maxZoom ?? 200);
-      const nextZoom = direction > 0 ? current.zoom / scalar : current.zoom * scalar;
-      current.zoom = Math.max(minZoom, Math.min(maxZoom, nextZoom));
-      current.updateProjectionMatrix();
-      event.preventDefault();
-      return;
-    }
-
-    if (current instanceof THREE.PerspectiveCamera) {
-      const target = this.controls.target;
-      const offset = new THREE.Vector3().copy(current.position).sub(target);
-      const distance = offset.length();
-      if (!Number.isFinite(distance) || distance <= 0) {
-        return;
-      }
-      const minDistance = Number((this.controls as any).minDistance ?? 0.01);
-      const maxDistance = Number((this.controls as any).maxDistance ?? 10000);
-      const nextDistance = direction > 0 ? distance * scalar : distance / scalar;
-      const clampedDistance = Math.max(minDistance, Math.min(maxDistance, nextDistance));
-      offset.setLength(clampedDistance);
-      current.position.copy(target).add(offset);
-      event.preventDefault();
-    }
-  };
-
-}
-
-function distanceSq3(a: [number, number, number], b: [number, number, number]): number {
-  const dx = a[0] - b[0];
-  const dy = a[1] - b[1];
-  const dz = a[2] - b[2];
-  return dx * dx + dy * dy + dz * dz;
 }
