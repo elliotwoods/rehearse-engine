@@ -1,5 +1,6 @@
 export { ActorRefField } from "@/ui/widgets/ActorRefField";
 export { ActorRefListField } from "@/ui/widgets/ActorRefListField";
+export { ColorField } from "@/ui/widgets/ColorField";
 export { DigitScrubInput } from "@/ui/widgets/DigitScrubInput";
 export { FileField } from "@/ui/widgets/FileField";
 export { InspectorFieldRow } from "@/ui/widgets/InspectorFieldRow";

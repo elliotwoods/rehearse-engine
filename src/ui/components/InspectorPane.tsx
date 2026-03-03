@@ -35,7 +35,18 @@ import {
 import { curveDataWithOverrides } from "@/features/curves/model";
 import { importFileForActorParam } from "@/features/imports/fileParameterImport";
 import { StatsBlock } from "@/ui/components/StatsBlock";
-import { ActorRefField, ActorRefListField, DigitScrubInput, FileField, NumberField, SegmentedControl, SelectField, TextField, ToggleField } from "@/ui/widgets";
+import {
+  ActorRefField,
+  ActorRefListField,
+  ColorField,
+  DigitScrubInput,
+  FileField,
+  NumberField,
+  SegmentedControl,
+  SelectField,
+  TextField,
+  ToggleField
+} from "@/ui/widgets";
 
 type BindingValue = ParameterValue;
 const RAD_TO_DEG = 180 / Math.PI;
@@ -153,6 +164,9 @@ function defaultValueForDefinition(definition: ParameterDefinition): BindingValu
   }
   if (definition.type === "boolean") {
     return false;
+  }
+  if (definition.type === "color") {
+    return "#000000";
   }
   if (definition.type === "select") {
     return definition.options[0] ?? "";
@@ -578,6 +592,25 @@ export function InspectorPane() {
       },
       { label: "Controls Enabled", value: appState.stats.cameraControlsEnabled ? "Yes" : "No" },
       { label: "Zoom Enabled", value: appState.stats.cameraZoomEnabled ? "Yes" : "No" },
+      {
+        label: "Wheel Events",
+        value: Math.max(0, Math.floor(appState.stats.cameraWheelEventsDetected)).toLocaleString()
+      },
+      {
+        label: "Wheel Zoom Applied",
+        value: Math.max(0, Math.floor(appState.stats.cameraWheelZoomApplied)).toLocaleString()
+      },
+      {
+        label: "Wheel Last Delta",
+        value: Number.isFinite(appState.stats.cameraWheelLastDelta) ? appState.stats.cameraWheelLastDelta.toFixed(1) : "0.0"
+      },
+      {
+        label: "Wheel Last (ms ago)",
+        value:
+          appState.stats.cameraWheelLastMsAgo >= 0 && Number.isFinite(appState.stats.cameraWheelLastMsAgo)
+            ? appState.stats.cameraWheelLastMsAgo.toFixed(0)
+            : "n/a"
+      },
       { label: "Draw Calls", value: Math.max(0, Math.floor(appState.stats.drawCalls)).toLocaleString() },
       { label: "Triangles", value: Math.max(0, Math.floor(appState.stats.triangles)).toLocaleString() },
       { label: "Splat Draw Calls", value: Math.max(0, Math.floor(appState.stats.splatDrawCalls)).toLocaleString() },
@@ -794,6 +827,25 @@ export function InspectorPane() {
                 showReset={canReset}
                 onReset={() => {
                   updateSelectedComponentParams(definition.key, Boolean(defaultValue));
+                }}
+                onChange={(next) => {
+                  updateSelectedComponentParams(definition.key, next);
+                }}
+              />
+            );
+          }
+
+          if (definition.type === "color") {
+            return (
+              <ColorField
+                key={definition.key}
+                label={definition.label}
+                value={typeof current === "string" ? current : "#000000"}
+                mixed={mixed}
+                disabled={readOnly}
+                showReset={canReset}
+                onReset={() => {
+                  updateSelectedComponentParams(definition.key, String(defaultValue));
                 }}
                 onChange={(next) => {
                   updateSelectedComponentParams(definition.key, next);
@@ -1281,6 +1333,25 @@ export function InspectorPane() {
               showReset={canReset}
               onReset={() => {
                 updateSelectedActorParams(definition.key, Boolean(defaultValue));
+              }}
+              onChange={(next) => {
+                updateSelectedActorParams(definition.key, next);
+              }}
+            />
+          );
+        }
+
+        if (definition.type === "color") {
+          return (
+            <ColorField
+              key={definition.key}
+              label={definition.label}
+              value={typeof current === "string" ? current : "#000000"}
+              mixed={mixed}
+              disabled={readOnly}
+              showReset={canReset}
+              onReset={() => {
+                updateSelectedActorParams(definition.key, String(defaultValue));
               }}
               onChange={(next) => {
                 updateSelectedActorParams(definition.key, next);

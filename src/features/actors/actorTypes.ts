@@ -183,11 +183,12 @@ export const PRIMITIVE_ACTOR_SCHEMA: ParameterSchema = {
       key: "segments",
       label: "Segments",
       type: "number",
-      min: 3,
+      min: 1,
       max: 64,
       step: 1,
       defaultValue: 24,
       visibleWhen: [
+        { key: "shape", equals: "cube" },
         { key: "shape", equals: "sphere" },
         { key: "shape", equals: "cylinder" }
       ]
@@ -195,7 +196,8 @@ export const PRIMITIVE_ACTOR_SCHEMA: ParameterSchema = {
     {
       key: "color",
       label: "Color",
-      type: "string"
+      type: "color",
+      defaultValue: "#4fb3ff"
     },
     {
       key: "wireframe",

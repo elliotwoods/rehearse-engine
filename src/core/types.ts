@@ -63,6 +63,10 @@ export interface StringParameterDefinition extends ParameterDefinitionBase {
   type: "string";
 }
 
+export interface ColorParameterDefinition extends ParameterDefinitionBase {
+  type: "color";
+}
+
 export interface SelectParameterDefinition extends ParameterDefinitionBase {
   type: "select";
   options: string[];
@@ -101,6 +105,7 @@ export type ParameterDefinition =
   | NumberParameterDefinition
   | BooleanParameterDefinition
   | StringParameterDefinition
+  | ColorParameterDefinition
   | SelectParameterDefinition
   | ActorRefParameterDefinition
   | ActorRefListParameterDefinition
@@ -207,6 +212,10 @@ export interface SceneStats {
   cameraDistance: number;
   cameraControlsEnabled: boolean;
   cameraZoomEnabled: boolean;
+  cameraWheelEventsDetected: number;
+  cameraWheelZoomApplied: number;
+  cameraWheelLastDelta: number;
+  cameraWheelLastMsAgo: number;
 }
 
 export type ActorStatusValue = string | number | boolean | [number, number, number];

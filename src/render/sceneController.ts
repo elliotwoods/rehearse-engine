@@ -742,7 +742,7 @@ export class SceneController {
       sphereRadius: Number.isFinite(sphereRadiusRaw) ? Math.max(0.05, sphereRadiusRaw) : 0.5,
       cylinderRadius: Number.isFinite(cylinderRadiusRaw) ? Math.max(0.05, cylinderRadiusRaw) : 0.5,
       cylinderHeight: Number.isFinite(cylinderHeightRaw) ? Math.max(0.05, cylinderHeightRaw) : 1,
-      segments: Number.isFinite(segmentsRaw) ? Math.max(3, Math.floor(segmentsRaw)) : 24
+      segments: Number.isFinite(segmentsRaw) ? Math.max(1, Math.floor(segmentsRaw)) : 24
     };
   }
 
@@ -754,20 +754,28 @@ export class SceneController {
     cylinderHeight: number,
     segments: number
   ): any {
-    const safeSegments = Math.max(3, Math.floor(segments));
+    const safeSegments = Math.max(1, Math.floor(segments));
+    const safeRoundSegments = Math.max(3, safeSegments);
     switch (shape) {
       case "sphere":
-        return new THREE.SphereGeometry(Math.max(0.05, sphereRadius), safeSegments, safeSegments);
+        return new THREE.SphereGeometry(Math.max(0.05, sphereRadius), safeRoundSegments, safeRoundSegments);
       case "cylinder":
         return new THREE.CylinderGeometry(
           Math.max(0.05, cylinderRadius),
           Math.max(0.05, cylinderRadius),
           Math.max(0.05, cylinderHeight),
-          safeSegments
+          safeRoundSegments
         );
       case "cube":
       default:
-        return new THREE.BoxGeometry(Math.max(0.05, cubeSize), Math.max(0.05, cubeSize), Math.max(0.05, cubeSize));
+        return new THREE.BoxGeometry(
+          Math.max(0.05, cubeSize),
+          Math.max(0.05, cubeSize),
+          Math.max(0.05, cubeSize),
+          safeSegments,
+          safeSegments,
+          safeSegments
+        );
     }
   }
 

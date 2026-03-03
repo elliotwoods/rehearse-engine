@@ -72,7 +72,10 @@ export const primitiveActorDescriptor: ReloadableDescriptor<PrimitiveRuntime> = 
           { label: "Segments", value: typeof actor.params.segments === "number" ? actor.params.segments : 24 }
         );
       } else {
-        rows.push({ label: "Cube Size (m)", value: typeof actor.params.cubeSize === "number" ? actor.params.cubeSize : 1 });
+        rows.push(
+          { label: "Cube Size (m)", value: typeof actor.params.cubeSize === "number" ? actor.params.cubeSize : 1 },
+          { label: "Segments", value: typeof actor.params.segments === "number" ? actor.params.segments : 24 }
+        );
       }
       return [
         ...rows,

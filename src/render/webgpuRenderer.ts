@@ -44,6 +44,10 @@ export class WebGpuViewport {
   private lastGaussianSortCameraPosition = new THREE.Vector3();
   private hasGaussianSortCameraState = false;
   private readonly wheelZoomSpeed = 0.12;
+  private wheelEventsDetected = 0;
+  private wheelZoomApplied = 0;
+  private wheelLastDelta = 0;
+  private wheelLastAtMs = -1;
   public constructor(
     private readonly kernel: AppKernel,
     private readonly mountEl: HTMLElement,
@@ -370,6 +374,10 @@ export class WebGpuViewport {
         cameraDistance: this.activeCamera.position.distanceTo(this.controls.target),
         cameraControlsEnabled: Boolean((this.controls as any).enabled),
         cameraZoomEnabled: this.isWheelZoomEnabled(),
+        cameraWheelEventsDetected: this.wheelEventsDetected,
+        cameraWheelZoomApplied: this.wheelZoomApplied,
+        cameraWheelLastDelta: this.wheelLastDelta,
+        cameraWheelLastMsAgo: this.wheelLastAtMs >= 0 ? Math.max(0, now - this.wheelLastAtMs) : -1,
         sessionFileBytes: currentStats.sessionFileBytesSaved > 0 && !this.kernel.store.getState().state.dirty
           ? currentStats.sessionFileBytesSaved
           : currentStats.sessionFileBytes
@@ -576,9 +584,9 @@ export class WebGpuViewport {
     if (!this.isWheelEventInsideViewport(event)) {
       return;
     }
-    if (!(this.controls as any).enabled) {
-      return;
-    }
+    this.wheelEventsDetected += 1;
+    this.wheelLastDelta = Number.isFinite(event.deltaY) ? event.deltaY : 0;
+    this.wheelLastAtMs = performance.now();
     const current = this.activeCamera;
     if (!current) {
       return;
@@ -593,8 +601,12 @@ export class WebGpuViewport {
     if (current instanceof THREE.OrthographicCamera) {
       const minZoom = Number((this.controls as any).minZoom ?? 0.05);
       const maxZoom = Number((this.controls as any).maxZoom ?? 200);
+      const previousZoom = current.zoom;
       const nextZoom = direction > 0 ? current.zoom / scalar : current.zoom * scalar;
       current.zoom = Math.max(minZoom, Math.min(maxZoom, nextZoom));
+      if (Math.abs(current.zoom - previousZoom) > 1e-10) {
+        this.wheelZoomApplied += 1;
+      }
       current.updateProjectionMatrix();
       event.preventDefault();
       return;
@@ -609,10 +621,14 @@ export class WebGpuViewport {
       }
       const minDistance = Number((this.controls as any).minDistance ?? 0.01);
       const maxDistance = Number((this.controls as any).maxDistance ?? 10000);
+      const previousDistance = distance;
       const nextDistance = direction > 0 ? distance * scalar : distance / scalar;
       const clampedDistance = Math.max(minDistance, Math.min(maxDistance, nextDistance));
       offset.setLength(clampedDistance);
       current.position.copy(target).add(offset);
+      if (Math.abs(clampedDistance - previousDistance) > 1e-10) {
+        this.wheelZoomApplied += 1;
+      }
       event.preventDefault();
     }
   };
@@ -632,7 +648,7 @@ export class WebGpuViewport {
   }
 
   private isWheelZoomEnabled(): boolean {
-    return Boolean((this.controls as any).enabled);
+    return Boolean(this.activeCamera);
   }
 
 }

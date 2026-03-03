@@ -69,7 +69,11 @@ export function createInitialState(mode: AppState["mode"], sessionName = "demo")
       sessionFileBytesSaved: 0,
       cameraDistance: 0,
       cameraControlsEnabled: true,
-      cameraZoomEnabled: true
+      cameraZoomEnabled: true,
+      cameraWheelEventsDetected: 0,
+      cameraWheelZoomApplied: 0,
+      cameraWheelLastDelta: 0,
+      cameraWheelLastMsAgo: -1
     },
     dirty: false,
     statusMessage: "Ready",
