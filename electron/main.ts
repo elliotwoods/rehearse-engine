@@ -821,13 +821,19 @@ function registerIpcHandlers(): void {
         fps: number;
         bitrateMbps: number;
         outputFileName?: string;
+        frameFolderName?: string;
       }
     ) => {
       const encoder = await detectH265Encoder();
       const safeFolder = path.resolve(args.folderPath);
       await fs.mkdir(safeFolder, { recursive: true });
       const jobId = randomUUID();
-      const frameFolderPath = path.join(safeFolder, `frames-${jobId}`);
+      const rawFrameFolderName =
+        typeof args.frameFolderName === "string" && args.frameFolderName.trim().length > 0
+          ? args.frameFolderName
+          : `frames-${jobId}`;
+      const safeFrameFolderName = rawFrameFolderName.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/[. ]+$/g, "");
+      const frameFolderPath = path.join(safeFolder, safeFrameFolderName || `frames-${jobId}`);
       await fs.mkdir(frameFolderPath, { recursive: true });
       const outputPath = path.join(safeFolder, args.outputFileName && args.outputFileName.trim() ? args.outputFileName : "render.mp4");
       const framePatternPath = path.join(frameFolderPath, "frame_%06d.png");

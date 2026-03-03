@@ -343,7 +343,9 @@ export function App() {
         await viewport.start();
         const frameCount = computeFrameCount(settings.durationSeconds, settings.fps);
         const startTime = settings.startTimeMode === "zero" ? 0 : previousTime.elapsedSimSeconds;
-        const writeExporter = await createRenderExporter(settings);
+        const writeExporter = await createRenderExporter(settings, {
+          sessionName: activeSessionName
+        });
         exporter = writeExporter;
         const pathArcTableCache = new Map<string, ArcLengthSample[]>();
 
@@ -400,7 +402,7 @@ export function App() {
         setRenderProgress(null);
       }
     },
-    [kernel, sceneAntialiasing, sceneRenderEngine]
+    [activeSessionName, kernel, sceneAntialiasing, sceneRenderEngine]
   );
 
   useEffect(() => {

@@ -15,6 +15,7 @@ import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import type {
   ActorNode,
+  ActorRuntimeStatus,
   ActorVisibilityMode,
   FileParameterDefinition,
   ParameterDefinition,
@@ -133,12 +134,42 @@ function getParameterDefinitions(actor: ActorNode, descriptors: ReloadableDescri
   return getFallbackDefinitionsFromParams(actor.params);
 }
 
-function getDefaultStatusEntries(actor: ActorNode): ActorStatusEntry[] {
-  return [
+function formatStatusKeyLabel(key: string): string {
+  if (!key) {
+    return key;
+  }
+  const withSpaces = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_\-]+/g, " ")
+    .trim();
+  if (!withSpaces) {
+    return key;
+  }
+  return withSpaces.charAt(0).toUpperCase() + withSpaces.slice(1);
+}
+
+function getDefaultStatusEntries(actor: ActorNode, runtimeStatus?: ActorRuntimeStatus): ActorStatusEntry[] {
+  const baseEntries: ActorStatusEntry[] = [
     { label: "Type", value: actor.actorType },
     { label: "Enabled", value: actor.enabled },
     { label: "Children", value: actor.childActorIds.length },
     { label: "Components", value: actor.componentIds.length }
+  ];
+
+  if (!runtimeStatus) {
+    return baseEntries;
+  }
+
+  const runtimeEntries: ActorStatusEntry[] = Object.entries(runtimeStatus.values).map(([key, value]) => ({
+    label: formatStatusKeyLabel(key),
+    value: value as ActorStatusEntry["value"]
+  }));
+
+  return [
+    ...baseEntries,
+    ...runtimeEntries,
+    { label: "Updated", value: runtimeStatus.updatedAtIso ? new Date(runtimeStatus.updatedAtIso).toLocaleString() : null },
+    { label: "Error", value: runtimeStatus.error ?? null, tone: "error" }
   ];
 }
 
@@ -982,7 +1013,7 @@ export function InspectorPane() {
         actor: singleSelection,
         state: appState,
         runtimeStatus
-      }) ?? getDefaultStatusEntries(singleSelection))
+      }) ?? getDefaultStatusEntries(singleSelection, runtimeStatus))
     : [];
   const visibleStatusEntries = statusEntries.filter(
     (entry) => entry.value !== null && entry.value !== undefined && entry.value !== ""

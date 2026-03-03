@@ -84,6 +84,7 @@ export interface ElectronApi {
     fps: number;
     bitrateMbps: number;
     outputFileName?: string;
+    frameFolderName?: string;
   }): Promise<{ jobId: string; frameFolderPath: string; outputPath: string; encoder: string }>;
   renderTempWriteFrame(args: { jobId: string; frameIndex: number; framePngBytes: Uint8Array }): Promise<void>;
   renderTempFinalize(args: { jobId: string }): Promise<{ summary: string }>;

@@ -10,6 +10,10 @@ export interface RenderExporter {
   abort(): Promise<void>;
 }
 
+interface RenderExportContext {
+  sessionName?: string;
+}
+
 function padFrame(frameIndex: number): string {
   return String(frameIndex).padStart(6, "0");
 }
@@ -20,6 +24,30 @@ function bytesToBase64(bytes: Uint8Array): string {
     binary += String.fromCharCode(bytes[index] ?? 0);
   }
   return btoa(binary);
+}
+
+function sanitizeFolderNameSegment(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "Session";
+  }
+  const sanitized = trimmed.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/\s+/g, " ").trim();
+  const withoutTrailingDots = sanitized.replace(/[. ]+$/g, "");
+  return withoutTrailingDots || "Session";
+}
+
+function formatTimestampForFolderName(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const seconds = String(date.getSeconds()).padStart(2, "0");
+  return `${String(year)}-${month}-${day} ${hours}.${minutes}.${seconds}`;
+}
+
+function buildRenderFolderName(sessionName?: string): string {
+  return `${sanitizeFolderNameSegment(sessionName ?? "Session")} - ${formatTimestampForFolderName(new Date())}`;
 }
 
 function buildScript(encoder: string, fps: number, bitrateMbps: number, outputName: string): { sh: string; bat: string } {
@@ -76,7 +104,7 @@ async function createElectronPipeExporter(settings: RenderSettings): Promise<Ren
   };
 }
 
-async function createElectronTempExporter(settings: RenderSettings): Promise<RenderExporter> {
+async function createElectronTempExporter(settings: RenderSettings, context?: RenderExportContext): Promise<RenderExporter> {
   if (!window.electronAPI) {
     throw new Error("Temp-folder export is unavailable.");
   }
@@ -90,7 +118,8 @@ async function createElectronTempExporter(settings: RenderSettings): Promise<Ren
     folderPath,
     fps: settings.fps,
     bitrateMbps: settings.bitrateMbps,
-    outputFileName: "render.mp4"
+    outputFileName: "render.mp4",
+    frameFolderName: buildRenderFolderName(context?.sessionName)
   });
   let closed = false;
   return {
@@ -122,13 +151,13 @@ async function createElectronTempExporter(settings: RenderSettings): Promise<Ren
   };
 }
 
-async function createWebTempExporter(settings: RenderSettings): Promise<RenderExporter> {
+async function createWebTempExporter(settings: RenderSettings, context?: RenderExportContext): Promise<RenderExporter> {
   const picker = (window as Window & { showDirectoryPicker?: () => Promise<any> }).showDirectoryPicker;
   if (!picker) {
     throw new Error("This browser does not support direct folder writing for temp renders.");
   }
   const rootDir = await picker();
-  const folderName = `simularca-render-${Date.now()}`;
+  const folderName = buildRenderFolderName(context?.sessionName);
   const renderDir = await rootDir.getDirectoryHandle(folderName, { create: true });
   let closed = false;
   let frameCount = 0;
@@ -170,14 +199,14 @@ async function createWebTempExporter(settings: RenderSettings): Promise<RenderEx
   };
 }
 
-export async function createRenderExporter(settings: RenderSettings): Promise<RenderExporter> {
+export async function createRenderExporter(settings: RenderSettings, context?: RenderExportContext): Promise<RenderExporter> {
   if (settings.strategy === "pipe") {
     return await createElectronPipeExporter(settings);
   }
   if (window.electronAPI) {
-    return await createElectronTempExporter(settings);
+    return await createElectronTempExporter(settings, context);
   }
-  return await createWebTempExporter(settings);
+  return await createWebTempExporter(settings, context);
 }
 
 export async function canvasToPngBytes(canvas: HTMLCanvasElement): Promise<Uint8Array> {
@@ -201,4 +230,3 @@ export function pngBytesToDataUrl(bytes: Uint8Array): string {
 export function strategyLabel(strategy: RenderCaptureStrategy): string {
   return strategy === "pipe" ? "Pipe" : "Temp folder";
 }
-

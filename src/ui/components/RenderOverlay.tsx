@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RenderProgress } from "@/features/render/types";
 
 interface RenderOverlayProps {
@@ -8,8 +8,24 @@ interface RenderOverlayProps {
   onCancel: () => void;
 }
 
+function formatDuration(valueMs: number | null): string {
+  if (valueMs === null || !Number.isFinite(valueMs)) {
+    return "Estimating...";
+  }
+  const totalSeconds = Math.max(0, Math.round(valueMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}h ${String(minutes).padStart(2, "0")}m ${String(seconds).padStart(2, "0")}s`;
+  }
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
 export function RenderOverlay(props: RenderOverlayProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const startedAtMsRef = useRef<number | null>(null);
+  const [nowMs, setNowMs] = useState(() => performance.now());
 
   useEffect(() => {
     props.onHostReady(props.open ? hostRef.current : null);
@@ -18,9 +34,39 @@ export function RenderOverlay(props: RenderOverlayProps) {
     };
   }, [props.onHostReady, props.open]);
 
+  useEffect(() => {
+    if (!props.open) {
+      startedAtMsRef.current = null;
+      return;
+    }
+    if (props.progress && startedAtMsRef.current === null) {
+      startedAtMsRef.current = performance.now();
+    }
+  }, [props.open, props.progress]);
+
+  useEffect(() => {
+    if (!props.open) {
+      return;
+    }
+    const handle = window.setInterval(() => {
+      setNowMs(performance.now());
+    }, 250);
+    return () => {
+      window.clearInterval(handle);
+    };
+  }, [props.open]);
+
   if (!props.open) {
     return null;
   }
+
+  const frameIndex = props.progress ? Math.min(props.progress.frameIndex + 1, props.progress.frameCount) : 0;
+  const frameCount = props.progress?.frameCount ?? 0;
+  const ratio = frameCount > 0 ? Math.max(0, Math.min(1, frameIndex / frameCount)) : 0;
+  const startedAtMs = startedAtMsRef.current;
+  const elapsedMs = startedAtMs === null ? 0 : Math.max(0, nowMs - startedAtMs);
+  const estimatedTotalMs = ratio > 0 ? elapsedMs / ratio : null;
+  const estimatedRemainingMs = estimatedTotalMs === null ? null : Math.max(0, estimatedTotalMs - elapsedMs);
 
   return (
     <div className="render-overlay-backdrop">
@@ -33,14 +79,14 @@ export function RenderOverlay(props: RenderOverlayProps) {
         </header>
         <div className="render-overlay-canvas-host" ref={hostRef} />
         <footer>
-          {props.progress ? (
-            <p>
-              Frame {Math.min(props.progress.frameIndex + 1, props.progress.frameCount)} / {props.progress.frameCount} -{" "}
-              {props.progress.message}
-            </p>
-          ) : (
-            <p>Starting render...</p>
-          )}
+          <div className="render-overlay-progress-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={ratio * 100}>
+            <span style={{ width: `${ratio * 100}%` }} />
+          </div>
+          {props.progress ? <p>Frame {frameIndex} / {frameCount}</p> : <p>Starting render...</p>}
+          <p>Status: {props.progress?.message ?? "Preparing..."}</p>
+          <p>Time Spent: {formatDuration(elapsedMs)}</p>
+          <p>Time Remaining (est): {formatDuration(estimatedRemainingMs)}</p>
+          <p>Time Total (est): {formatDuration(estimatedTotalMs)}</p>
         </footer>
       </div>
     </div>
