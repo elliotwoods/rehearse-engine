@@ -755,10 +755,10 @@ export class SceneController {
     const segmentsRaw = Number(actor.params.segments ?? 24);
     return {
       shape,
-      cubeSize: Number.isFinite(cubeSizeRaw) ? Math.max(0.05, cubeSizeRaw) : 1,
-      sphereRadius: Number.isFinite(sphereRadiusRaw) ? Math.max(0.05, sphereRadiusRaw) : 0.5,
-      cylinderRadius: Number.isFinite(cylinderRadiusRaw) ? Math.max(0.05, cylinderRadiusRaw) : 0.5,
-      cylinderHeight: Number.isFinite(cylinderHeightRaw) ? Math.max(0.05, cylinderHeightRaw) : 1,
+      cubeSize: Number.isFinite(cubeSizeRaw) ? Math.max(0, cubeSizeRaw) : 1,
+      sphereRadius: Number.isFinite(sphereRadiusRaw) ? Math.max(0, sphereRadiusRaw) : 0.5,
+      cylinderRadius: Number.isFinite(cylinderRadiusRaw) ? Math.max(0, cylinderRadiusRaw) : 0.5,
+      cylinderHeight: Number.isFinite(cylinderHeightRaw) ? Math.max(0, cylinderHeightRaw) : 1,
       segments: Number.isFinite(segmentsRaw) ? Math.max(1, Math.floor(segmentsRaw)) : 24
     };
   }
@@ -775,20 +775,20 @@ export class SceneController {
     const safeRoundSegments = Math.max(3, safeSegments);
     switch (shape) {
       case "sphere":
-        return new THREE.SphereGeometry(Math.max(0.05, sphereRadius), safeRoundSegments, safeRoundSegments);
+        return new THREE.SphereGeometry(Math.max(0, sphereRadius), safeRoundSegments, safeRoundSegments);
       case "cylinder":
         return new THREE.CylinderGeometry(
-          Math.max(0.05, cylinderRadius),
-          Math.max(0.05, cylinderRadius),
-          Math.max(0.05, cylinderHeight),
+          Math.max(0, cylinderRadius),
+          Math.max(0, cylinderRadius),
+          Math.max(0, cylinderHeight),
           safeRoundSegments
         );
       case "cube":
       default:
         return new THREE.BoxGeometry(
-          Math.max(0.05, cubeSize),
-          Math.max(0.05, cubeSize),
-          Math.max(0.05, cubeSize),
+          Math.max(0, cubeSize),
+          Math.max(0, cubeSize),
+          Math.max(0, cubeSize),
           safeSegments,
           safeSegments,
           safeSegments
@@ -1463,10 +1463,10 @@ export class SceneController {
       const sphereRadiusRaw = Number(regionActor.params.sphereRadius ?? 0.5);
       const cylinderRadiusRaw = Number(regionActor.params.cylinderRadius ?? 0.5);
       const cylinderHeightRaw = Number(regionActor.params.cylinderHeight ?? 1);
-      const safeCubeSize = Number.isFinite(cubeSizeRaw) && cubeSizeRaw > 0 ? cubeSizeRaw : 1;
-      const safeSphereRadius = Number.isFinite(sphereRadiusRaw) && sphereRadiusRaw > 0 ? sphereRadiusRaw : 0.5;
-      const safeCylinderRadius = Number.isFinite(cylinderRadiusRaw) && cylinderRadiusRaw > 0 ? cylinderRadiusRaw : 0.5;
-      const safeCylinderHeight = Number.isFinite(cylinderHeightRaw) && cylinderHeightRaw > 0 ? cylinderHeightRaw : 1;
+      const safeCubeSize = Number.isFinite(cubeSizeRaw) && cubeSizeRaw >= 0 ? cubeSizeRaw : 1;
+      const safeSphereRadius = Number.isFinite(sphereRadiusRaw) && sphereRadiusRaw >= 0 ? sphereRadiusRaw : 0.5;
+      const safeCylinderRadius = Number.isFinite(cylinderRadiusRaw) && cylinderRadiusRaw >= 0 ? cylinderRadiusRaw : 0.5;
+      const safeCylinderHeight = Number.isFinite(cylinderHeightRaw) && cylinderHeightRaw >= 0 ? cylinderHeightRaw : 1;
       const primitiveWorld = this.resolveActorWorldMatrix(regionActor.id, state.actors);
       const primitiveToGaussianLocal = worldToGaussianLocal.clone().multiply(primitiveWorld);
       const gaussianLocalToPrimitive = primitiveToGaussianLocal.clone().invert();

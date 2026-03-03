@@ -17,6 +17,7 @@ import type { CameraPreset, TimeSpeedPreset } from "@/core/types";
 import { discoverAndLoadLocalPlugins, formatPluginDiscoverySummary } from "@/features/plugins/discovery";
 import { AddActorMenu } from "@/ui/components/AddActorMenu";
 import { PluginsModal } from "@/ui/components/PluginsModal";
+import { DigitScrubInput } from "@/ui/widgets";
 
 const SPEEDS: TimeSpeedPreset[] = [0.125, 0.25, 0.5, 1, 2, 4];
 const CAMERA_PRESETS: CameraPreset[] = ["perspective", "isometric", "top", "left", "front", "back"];
@@ -26,6 +27,27 @@ function formatSpeed(speed: TimeSpeedPreset): string {
     return `${speed}x`;
   }
   return `1/${Math.round(1 / speed)}x`;
+}
+
+function formatTimecode(totalFrames: number, fps: number): string {
+  const safeFps = Math.max(1, Math.floor(fps));
+  const safeFrames = Math.max(0, Math.floor(totalFrames));
+  const frame = safeFrames % safeFps;
+  const totalSeconds = Math.floor(safeFrames / safeFps);
+  const seconds = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const minutes = totalMinutes % 60;
+  const hours = Math.floor(totalMinutes / 60);
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}:${String(
+    frame
+  ).padStart(2, "0")}`;
+}
+
+function clampInteger(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+  return Math.max(min, Math.min(max, Math.round(value)));
 }
 
 interface TopBarPanelProps {
@@ -52,6 +74,27 @@ export function TopBarPanel(props: TopBarPanelProps) {
   const isReadOnly = state.mode === "web-ro";
   const fpsValue = Number.isFinite(state.stats.fps) ? state.stats.fps : 0;
   const frameMsValue = Number.isFinite(state.stats.frameMs) ? state.stats.frameMs : 0;
+  const simTimeSeconds = Number.isFinite(state.time.elapsedSimSeconds) ? state.time.elapsedSimSeconds : 0;
+  const fixedStepMs = Number.isFinite(state.time.fixedStepSeconds) ? state.time.fixedStepSeconds * 1000 : 0;
+  const fixedStepSeconds = Number.isFinite(state.time.fixedStepSeconds) ? state.time.fixedStepSeconds : 0;
+  const timecodeFps = Math.max(1, Math.round(1 / Math.max(1e-6, fixedStepSeconds)));
+  const simFrame = Math.max(0, Math.round(simTimeSeconds * timecodeFps));
+  const simTimecode = formatTimecode(simFrame, timecodeFps);
+  const tcFrames = simFrame % timecodeFps;
+  const tcTotalSeconds = Math.floor(simFrame / timecodeFps);
+  const tcSeconds = tcTotalSeconds % 60;
+  const tcTotalMinutes = Math.floor(tcTotalSeconds / 60);
+  const tcMinutes = tcTotalMinutes % 60;
+  const tcHours = Math.floor(tcTotalMinutes / 60);
+
+  const setTimecodeParts = (next: { hours?: number; minutes?: number; seconds?: number; frames?: number }) => {
+    const hours = clampInteger(next.hours ?? tcHours, 0, 9999);
+    const minutes = clampInteger(next.minutes ?? tcMinutes, 0, 59);
+    const seconds = clampInteger(next.seconds ?? tcSeconds, 0, 59);
+    const frames = clampInteger(next.frames ?? tcFrames, 0, Math.max(0, timecodeFps - 1));
+    const composedFrames = ((((hours * 60 + minutes) * 60 + seconds) * timecodeFps) + frames);
+    kernel.store.getState().actions.setElapsedSimSeconds(composedFrames / timecodeFps);
+  };
 
   useEffect(() => {
     setFpsHistory((previous) => {
@@ -183,6 +226,42 @@ export function TopBarPanel(props: TopBarPanelProps) {
             </option>
           ))}
         </select>
+        <div className="toolbar-time-readout" title="Simulation time diagnostics">
+          <div className="toolbar-timecode-editor">
+            <DigitScrubInput
+              className="widget-digit-input-rangeless toolbar-timecode-segment"
+              value={tcHours}
+              precision={0}
+              onChange={(nextHours) => setTimecodeParts({ hours: nextHours })}
+            />
+            <span>:</span>
+            <DigitScrubInput
+              className="widget-digit-input-rangeless toolbar-timecode-segment"
+              value={tcMinutes}
+              precision={0}
+              onChange={(nextMinutes) => setTimecodeParts({ minutes: nextMinutes })}
+            />
+            <span>:</span>
+            <DigitScrubInput
+              className="widget-digit-input-rangeless toolbar-timecode-segment"
+              value={tcSeconds}
+              precision={0}
+              onChange={(nextSeconds) => setTimecodeParts({ seconds: nextSeconds })}
+            />
+            <span>:</span>
+            <DigitScrubInput
+              className="widget-digit-input-rangeless toolbar-timecode-segment"
+              value={tcFrames}
+              precision={0}
+              onChange={(nextFrames) => setTimecodeParts({ frames: nextFrames })}
+            />
+          </div>
+          <strong>{simTimecode}</strong>
+          <span>{state.time.running ? "Running" : "Paused"}</span>
+          <span>{simTimeSeconds.toFixed(2)}s</span>
+          <span>{timecodeFps}fps</span>
+          <span>{fixedStepMs.toFixed(2)}ms step</span>
+        </div>
       </div>
 
       <div className="toolbar-group">

@@ -46,6 +46,13 @@ function normalizeValue(value: number, options: { min?: number; max?: number; st
   return clamp(applyStep(value, options.step, options.min), options.min, options.max);
 }
 
+function normalizeValueUnsnapped(value: number, options: { min?: number; max?: number }): number {
+  if (Number.isNaN(value)) {
+    return 0;
+  }
+  return clamp(value, options.min, options.max);
+}
+
 function formatValue(value: number, precision?: number): string {
   if (precision !== undefined && precision >= 0) {
     return value.toFixed(precision);
@@ -109,10 +116,9 @@ export function NumberField(props: NumberFieldProps) {
       setDraft(formatValue(props.value, props.precision));
       return;
     }
-    const next = normalizeValue(parsed, {
+    const next = normalizeValueUnsnapped(parsed, {
       min: props.min,
-      max: props.max,
-      step: props.step
+      max: props.max
     });
     props.onChange(next);
     setDraft(formatValue(next, displayPrecision));
@@ -148,10 +154,9 @@ export function NumberField(props: NumberFieldProps) {
             ? Math.max(Math.abs((props.max as number) - (props.min as number)) / 400, 0.0001)
             : Math.max(Math.abs(startValue) / 200, 0.01));
         const speed = props.dragSpeed ?? autoSpeed;
-        const next = normalizeValue(startValue + delta * speed, {
+        const next = normalizeValueUnsnapped(startValue + delta * speed, {
           min: props.min,
-          max: props.max,
-          step: props.step
+          max: props.max
         });
         props.onChange(next);
       };
@@ -270,10 +275,9 @@ export function NumberField(props: NumberFieldProps) {
             precision={props.precision ?? (props.step && props.step < 1 ? 3 : 2)}
             disabled={props.disabled}
             onChange={(next) => {
-              const normalized = normalizeValue(next, {
+              const normalized = normalizeValueUnsnapped(next, {
                 min: props.min,
-                max: props.max,
-                step: props.step
+                max: props.max
               });
               props.onChange(normalized);
             }}

@@ -139,6 +139,7 @@ export const PRIMITIVE_ACTOR_SCHEMA: ParameterSchema = {
       label: "Cube Size",
       type: "number",
       unit: "m",
+      min: 0,
       step: 0.05,
       defaultValue: 1,
       visibleWhen: [{ key: "shape", equals: "cube" }]
@@ -148,6 +149,7 @@ export const PRIMITIVE_ACTOR_SCHEMA: ParameterSchema = {
       label: "Sphere Radius",
       type: "number",
       unit: "m",
+      min: 0,
       step: 0.05,
       defaultValue: 0.5,
       visibleWhen: [{ key: "shape", equals: "sphere" }]
@@ -157,6 +159,7 @@ export const PRIMITIVE_ACTOR_SCHEMA: ParameterSchema = {
       label: "Cylinder Radius",
       type: "number",
       unit: "m",
+      min: 0,
       step: 0.05,
       defaultValue: 0.5,
       visibleWhen: [{ key: "shape", equals: "cylinder" }]
@@ -166,6 +169,7 @@ export const PRIMITIVE_ACTOR_SCHEMA: ParameterSchema = {
       label: "Cylinder Height",
       type: "number",
       unit: "m",
+      min: 0,
       step: 0.05,
       defaultValue: 1,
       visibleWhen: [{ key: "shape", equals: "cylinder" }]
