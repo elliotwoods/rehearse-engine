@@ -895,7 +895,7 @@ export class SceneController {
     return `simularcaasset://${encodeURIComponent(sessionName)}/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
   }
 
-  private loadCachedTexture(url: string, colorSpace = THREE.LinearSRGBColorSpace): THREE.Texture {
+  private loadCachedTexture(url: string, colorSpace: THREE.ColorSpace = THREE.LinearSRGBColorSpace): THREE.Texture {
     if (!this.textureByUrl.has(url)) {
       const tex = this.textureLoader.load(url);
       tex.colorSpace = colorSpace;
@@ -915,18 +915,19 @@ export class SceneController {
       return new THREE.MeshStandardMaterial({ color: 0x808080 });
     }
 
-    let material = this.materialByMaterialId.get(materialData.id);
+    const mat = materialData as import("@/core/types").Material;
+    let material = this.materialByMaterialId.get(mat.id);
     if (!material) {
       material = new THREE.MeshStandardMaterial();
-      this.materialByMaterialId.set(materialData.id, material);
+      this.materialByMaterialId.set(mat.id, material);
     }
 
     // Albedo channel
-    if (materialData.albedo.mode === "color") {
-      material.color.set(materialData.albedo.color);
+    if (mat.albedo.mode === "color") {
+      material.color.set(mat.albedo.color);
       material.map = null;
-    } else {
-      const asset = state.assets.find((a) => a.id === materialData.albedo.assetId && a.kind === "image");
+    } else if (mat.albedo.mode === "image") {
+      const asset = state.assets.find((a) => a.id === (mat.albedo as any).assetId && a.kind === "image");
       if (asset) {
         material.map = this.loadCachedTexture(this.buildAssetUrl(state.activeSessionName, asset.relativePath), THREE.SRGBColorSpace);
         material.color.set(0xffffff);
@@ -934,11 +935,11 @@ export class SceneController {
     }
 
     // Roughness channel
-    if (materialData.roughness.mode === "scalar") {
-      material.roughness = materialData.roughness.value;
+    if (mat.roughness.mode === "scalar") {
+      material.roughness = mat.roughness.value;
       material.roughnessMap = null;
-    } else {
-      const asset = state.assets.find((a) => a.id === materialData.roughness.assetId && a.kind === "image");
+    } else if (mat.roughness.mode === "image") {
+      const asset = state.assets.find((a) => a.id === (mat.roughness as any).assetId && a.kind === "image");
       if (asset) {
         material.roughnessMap = this.loadCachedTexture(this.buildAssetUrl(state.activeSessionName, asset.relativePath));
         material.roughness = 1;
@@ -946,11 +947,11 @@ export class SceneController {
     }
 
     // Metalness channel
-    if (materialData.metalness.mode === "scalar") {
-      material.metalness = materialData.metalness.value;
+    if (mat.metalness.mode === "scalar") {
+      material.metalness = mat.metalness.value;
       material.metalnessMap = null;
-    } else {
-      const asset = state.assets.find((a) => a.id === materialData.metalness.assetId && a.kind === "image");
+    } else if (mat.metalness.mode === "image") {
+      const asset = state.assets.find((a) => a.id === (mat.metalness as any).assetId && a.kind === "image");       
       if (asset) {
         material.metalnessMap = this.loadCachedTexture(this.buildAssetUrl(state.activeSessionName, asset.relativePath));
         material.metalness = 1;
@@ -958,8 +959,8 @@ export class SceneController {
     }
 
     // Normal map
-    if (materialData.normalMap) {
-      const asset = state.assets.find((a) => a.id === materialData.normalMap!.assetId && a.kind === "image");
+    if (mat.normalMap) {
+      const asset = state.assets.find((a) => a.id === (mat.normalMap as any).assetId && a.kind === "image");      
       if (asset) {
         material.normalMap = this.loadCachedTexture(this.buildAssetUrl(state.activeSessionName, asset.relativePath));
         material.normalMapType = THREE.TangentSpaceNormalMap;
@@ -969,24 +970,23 @@ export class SceneController {
     }
 
     // Emissive channel
-    if (materialData.emissive.mode === "color") {
-      material.emissive.set(materialData.emissive.color);
+    if (mat.emissive.mode === "color") {
+      material.emissive.set(mat.emissive.color);
       material.emissiveMap = null;
-    } else {
-      const asset = state.assets.find((a) => a.id === materialData.emissive.assetId && a.kind === "image");
+    } else if (mat.emissive.mode === "image") {
+      const asset = state.assets.find((a) => a.id === (mat.emissive as any).assetId && a.kind === "image");        
       if (asset) {
         material.emissiveMap = this.loadCachedTexture(this.buildAssetUrl(state.activeSessionName, asset.relativePath), THREE.SRGBColorSpace);
       }
     }
-
-    material.emissiveIntensity = materialData.emissiveIntensity;
-    material.opacity = materialData.opacity;
-    material.transparent = materialData.transparent;
-    material.wireframe = materialData.wireframe;
+    material.emissiveIntensity = mat.emissiveIntensity;
+    material.opacity = mat.opacity;
+    material.transparent = mat.transparent;
+    material.wireframe = mat.wireframe;
     material.side =
-      materialData.side === "double"
+      mat.side === "double"
         ? THREE.DoubleSide
-        : materialData.side === "back"
+        : mat.side === "back"
           ? THREE.BackSide
           : THREE.FrontSide;
 

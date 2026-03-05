@@ -194,7 +194,14 @@ function formatStatusValue(value: ActorStatusEntry["value"]): string {
   if (value === null || value === undefined || value === "") {
     return "n/a";
   }
-  return value;
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return "[object]";
+    }
+  }
+  return String(value);
 }
 
 function groupStatusLabel(label: string): string {
@@ -1700,7 +1707,7 @@ export function InspectorPane() {
               label={definition.label}
               value={typeof current === "string" ? current : ""}
               onChange={(next) => {
-                updateSelectedActorParams(definition.key, next);
+                updateSelectedActorParams(definition.key, next ?? null);
               }}
             />
           );

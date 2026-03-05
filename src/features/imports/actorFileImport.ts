@@ -107,7 +107,7 @@ export async function importFileAsActor(
   });
 
   kernel.store.getState().actions.updateActorParams(actorId, {
-    [option.fileDefinition.key]: importedAsset.id
+    [option.fileDefinition.key]: importedAsset.asset.id
   });
   kernel.store.getState().actions.setStatus(
     `${option.label} imported ${args.fileName} (${option.fileExtensions.join(", ")})`

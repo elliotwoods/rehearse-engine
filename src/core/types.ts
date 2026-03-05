@@ -253,7 +253,7 @@ export interface SceneStats {
   cameraZoomEnabled: boolean;
 }
 
-export type ActorStatusValue = string | number | boolean | [number, number, number] | string[];
+export type ActorStatusValue = string | number | boolean | [number, number, number] | string[] | object | null;
 
 export interface ActorRuntimeStatus {
   values: Record<string, ActorStatusValue | undefined>;

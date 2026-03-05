@@ -1,8 +1,3 @@
-declare module "three" {
-  const THREE: any;
-  export = THREE;
-}
-
 declare module "three/examples/jsm/controls/OrbitControls.js" {
   export class OrbitControls {
     public object: any;
@@ -162,4 +157,3 @@ declare module "@mkkellogg/gaussian-splats-3d/build/gaussian-splats-3d.module.js
   const mod: any;
   export default mod;
 }
-

@@ -40,6 +40,9 @@ function createStorageMocks(overrides: Partial<StorageAdapter> = {}): StorageAda
     importAsset: vi.fn(async () => {
       throw new Error("not implemented");
     }),
+    importDae: vi.fn(async () => {
+      throw new Error("not implemented");
+    }),
     importGaussianSplat: vi.fn(async () => {
       throw new Error("not implemented");
     }),
