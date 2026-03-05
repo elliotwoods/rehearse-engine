@@ -43,6 +43,7 @@ import {
   ActorRefListField,
   ColorField,
   DigitScrubInput,
+  DrillInRow,
   FileField,
   NumberField,
   SegmentedControl,
@@ -482,6 +483,12 @@ export function InspectorPane() {
   const [selectedCurveVertex, setSelectedCurveVertex] = useState<{ actorId: string; pointIndex: number } | null>(null);
   const [selectedCurveControl, setSelectedCurveControl] = useState<CurveControlType>("anchor");
 
+  type InspectorView =
+    | { kind: "actor-root" }
+    | { kind: "component"; componentId: string; componentLabel: string }
+    | { kind: "param-group"; paramKey: string; paramLabel: string; fromComponentId: string | null };
+  const [inspectorView, setInspectorView] = useState<InspectorView>({ kind: "actor-root" });
+
   useEffect(() => {
     setSceneBackgroundInput(appState.scene.backgroundColor);
   }, [appState.scene.backgroundColor]);
@@ -587,6 +594,9 @@ export function InspectorPane() {
       publishCurveVertexSelect(singleSelection.id, clampedPointIndex, "anchor");
     }
   }, [publishCurveVertexSelect, selectedCurveVertex, singleSelection]);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setInspectorView({ kind: "actor-root" }); }, [selection.map((s) => s.id).join(",")]);
 
   const updateSelectedActorParams = (key: string, nextValue: BindingValue): void => {
     for (const actor of actorSelection) {
@@ -1145,6 +1155,15 @@ export function InspectorPane() {
     scheduleAutosave();
   };
 
+  function handleBack() {
+    if (inspectorView.kind === "param-group" && inspectorView.fromComponentId !== null) {
+      const comp = components[inspectorView.fromComponentId];
+      setInspectorView({ kind: "component", componentId: inspectorView.fromComponentId, componentLabel: comp?.name ?? "" });
+    } else {
+      setInspectorView({ kind: "actor-root" });
+    }
+  }
+
   return (
     <div className="inspector-pane-root custom-inspector">
       <section className="inspector-common-card">
@@ -1469,8 +1488,99 @@ export function InspectorPane() {
           </div>
         </section>
       ) : null}
-      {definitions.length === 0 ? <div className="inspector-empty">No common editable params in current selection</div> : null}
+      {inspectorView.kind !== "actor-root" && (
+        <div className="inspector-nav-header">
+          <button className="inspector-nav-back" onClick={handleBack}>‹</button>
+          <nav className="inspector-breadcrumb">
+            <button
+              className="inspector-breadcrumb-segment"
+              onClick={() => setInspectorView({ kind: "actor-root" })}
+            >
+              {singleSelection?.name ?? ""}
+            </button>
+            {inspectorView.kind === "param-group" && inspectorView.fromComponentId !== null && (
+              <>
+                <span className="inspector-breadcrumb-sep">›</span>
+                <button
+                  className="inspector-breadcrumb-segment"
+                  onClick={() => {
+                    if (inspectorView.kind !== "param-group" || inspectorView.fromComponentId === null) return;
+                    const comp = components[inspectorView.fromComponentId];
+                    setInspectorView({ kind: "component", componentId: inspectorView.fromComponentId, componentLabel: comp?.name ?? "" });
+                  }}
+                >
+                  {components[inspectorView.fromComponentId]?.name ?? ""}
+                </button>
+              </>
+            )}
+            <span className="inspector-breadcrumb-sep">›</span>
+            <span className="inspector-breadcrumb-current">
+              {inspectorView.kind === "component" ? inspectorView.componentLabel : inspectorView.paramLabel}
+            </span>
+          </nav>
+        </div>
+      )}
+      {inspectorView.kind === "component" && (() => {
+        const comp = components[inspectorView.componentId];
+        if (!comp) return null;
+        const compDefs = getFallbackDefinitionsFromParams(comp.params);
+        if (compDefs.length === 0) {
+          return <div className="inspector-empty">No editable params</div>;
+        }
+        return compDefs.map((definition) => {
+          const current = comp.params[definition.key] ?? defaultValueForDefinition(definition);
+          const updateCompParam = (key: string, value: ParameterValue) => {
+            kernel.store.getState().actions.updateComponentParams(inspectorView.componentId, { [key]: value });
+            scheduleAutosave();
+          };
+          if (definition.type === "number") {
+            return (
+              <NumberField
+                key={definition.key}
+                label={definition.label}
+                value={typeof current === "number" ? current : 0}
+                disabled={readOnly}
+                onChange={(next) => updateCompParam(definition.key, next)}
+              />
+            );
+          }
+          if (definition.type === "boolean") {
+            return (
+              <ToggleField
+                key={definition.key}
+                label={definition.label}
+                checked={Boolean(current)}
+                disabled={readOnly}
+                onChange={(next) => updateCompParam(definition.key, next)}
+              />
+            );
+          }
+          if (definition.type === "material-slots") {
+            const slotCount = Object.keys(typeof current === "object" && current !== null && !Array.isArray(current) ? (current as object) : {}).length;
+            return (
+              <DrillInRow
+                key={definition.key}
+                label={definition.label}
+                summary={`${slotCount} slots`}
+                onClick={() => setInspectorView({ kind: "param-group", paramKey: definition.key, paramLabel: definition.label, fromComponentId: inspectorView.componentId })}
+              />
+            );
+          }
+          return (
+            <TextField
+              key={definition.key}
+              label={definition.label}
+              value={typeof current === "string" ? current : ""}
+              disabled={readOnly}
+              onChange={(next) => updateCompParam(definition.key, next)}
+            />
+          );
+        });
+      })()}
+      {inspectorView.kind === "actor-root" && definitions.length === 0 ? <div className="inspector-empty">No common editable params in current selection</div> : null}
       {definitions.map((definition) => {
+        if (inspectorView.kind === "component") return null;
+        if (inspectorView.kind === "param-group" && definition.key !== inspectorView.paramKey) return null;
         const values = actorSelection.map((actor) => bindingValueFor(definition, actor));
         const mixed = isMixedValue(values);
         const current = values[0] ?? defaultValueForDefinition(definition);
@@ -1624,6 +1734,17 @@ export function InspectorPane() {
           const currentSlots = (typeof current === "object" && current !== null && !Array.isArray(current)
             ? current
             : {}) as Record<string, string>;
+          if (inspectorView.kind === "actor-root") {
+            return (
+              <DrillInRow
+                key={definition.key}
+                label={definition.label}
+                summary={`${Object.keys(currentSlots).length} slots`}
+                onClick={() => setInspectorView({ kind: "param-group", paramKey: definition.key, paramLabel: definition.label, fromComponentId: null })}
+              />
+            );
+          }
+          // In param-group view — show full material slots editor
           // Prefer runtime-detected names; fall back to import-time keys from materialSlots param.
           // Must check .length because the runtime may set an empty array (not null/undefined).
           const runtimeSlotNames = runtimeStatus?.values.materialSlotNames as string[] | undefined;
@@ -1738,6 +1859,22 @@ export function InspectorPane() {
           />
         );
       })}
+      {inspectorView.kind === "actor-root" && singleSelection && singleSelection.componentIds.length > 0 && (
+        <div className="inspector-component-list">
+          <div className="inspector-section-label">Components</div>
+          {singleSelection.componentIds.map((cid) => {
+            const comp = components[cid];
+            if (!comp) return null;
+            return (
+              <DrillInRow
+                key={cid}
+                label={comp.name}
+                onClick={() => setInspectorView({ kind: "component", componentId: cid, componentLabel: comp.name })}
+              />
+            );
+          })}
+        </div>
+      )}
       {singleSelection ? (
         <StatsBlock
           title="Status"

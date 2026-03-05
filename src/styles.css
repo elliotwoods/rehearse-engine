@@ -2573,3 +2573,99 @@ body.is-scrubbing-number * {
   display: grid;
   gap: 6px;
 }
+
+.inspector-nav-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel-muted);
+}
+.inspector-nav-back {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 2px 0 0;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.inspector-nav-back:hover { color: var(--text); }
+.inspector-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  min-width: 0;
+}
+.inspector-breadcrumb-segment {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-family: var(--font-ui);
+  cursor: pointer;
+  padding: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inspector-breadcrumb-segment:hover { color: var(--text); text-decoration: underline; }
+.inspector-breadcrumb-sep {
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+.inspector-breadcrumb-current {
+  color: var(--text);
+  font-size: 12px;
+  font-family: var(--font-ui);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inspector-drill-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  gap: 10px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--line);
+  cursor: pointer;
+  text-align: left;
+}
+.inspector-drill-row:hover { background: var(--fill); }
+.inspector-drill-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+.inspector-drill-summary {
+  font-size: 12px;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+.inspector-drill-chevron {
+  font-size: 20px;
+  color: var(--text);
+  line-height: 1;
+  opacity: 0.7;
+}
+.inspector-drill-row:hover .inspector-drill-chevron { opacity: 1; }
+.inspector-drill-row:hover .inspector-drill-label { color: var(--text); opacity: 1; }
+.inspector-component-list { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 4px; }
+.inspector-section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  padding: 4px 10px 2px;
+}
