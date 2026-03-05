@@ -1668,6 +1668,11 @@ export function InspectorPane() {
               showReset={canReset}
               onReset={() => {
                 updateSelectedActorParams(definition.key, typeof defaultValue === "string" ? defaultValue : "");
+                if (definition.clearsParams) {
+                  for (const key of definition.clearsParams) {
+                    updateSelectedActorParams(key, null);
+                  }
+                }
               }}
               onBrowse={() => {
                 void (async () => {
@@ -1688,6 +1693,12 @@ export function InspectorPane() {
                       definition
                     });
 
+                    // Clear any params derived from the previous file before applying the new ones
+                    if (definition.clearsParams) {
+                      for (const key of definition.clearsParams) {
+                        updateSelectedActorParams(key, null);
+                      }
+                    }
                     updateSelectedActorParams(definition.key, imported.asset.id);
                     if (imported.extraParams) {
                       for (const [key, value] of Object.entries(imported.extraParams)) {

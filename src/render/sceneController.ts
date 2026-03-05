@@ -1075,6 +1075,7 @@ export class SceneController {
     if (!(renderRoot instanceof THREE.Group) || renderRoot.children.length === 0) return;
 
     // Build a signature from material-relevant params and referenced material data
+    const _tsm0 = performance.now();
     const materialSlots = actor.params.materialSlots;
     const materialId = actor.params.materialId;
     const referencedMaterialIds = new Set<string>();
@@ -1090,10 +1091,15 @@ export class SceneController {
       .map((id) => JSON.stringify(localMaterials?.[id] ?? state.materials[id]))
       .join("|");
     const sig = JSON.stringify({ slots: materialSlots, override: materialId, mats: materialHash });
+    const _tsm1 = performance.now();
+    if (_tsm1 - _tsm0 > 10) console.warn("[simularca] syncMeshMaterials sig slow:", (_tsm1 - _tsm0).toFixed(0), "ms | slots:", Object.keys(materialSlots as object ?? {}).length);
 
     if (sig === this.meshMaterialSigByActorId.get(actor.id)) return;
     this.meshMaterialSigByActorId.set(actor.id, sig);
+    const _tsm2 = performance.now();
     this.reapplyMeshMaterials(actor);
+    const _tsm3 = performance.now();
+    if (_tsm3 - _tsm2 > 5) console.warn("[simularca] reapplyMeshMaterials slow:", (_tsm3 - _tsm2).toFixed(0), "ms");
   }
 
   private createPrimitiveMesh(actor: ActorNode): any {

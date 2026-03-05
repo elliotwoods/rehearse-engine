@@ -17,6 +17,20 @@ export function ViewportPanel(props: ViewportPanelProps) {
   const kernel = useKernel();
   const backend = useAppStore((store) => store.state.scene.renderEngine);
   const antialiasing = useAppStore((store) => store.state.scene.antialiasing);
+  // Returns a stable string so Zustand's reference equality check avoids spurious re-renders.
+  const loadingBannerText = useAppStore((store) => {
+    const statuses = store.state.actorStatusByActorId;
+    const actors = store.state.actors;
+    const names: string[] = [];
+    for (const [actorId, s] of Object.entries(statuses)) {
+      if (s.values.loadState !== "loading") continue;
+      const fileName = s.values.assetFileName;
+      names.push(typeof fileName === "string" ? fileName : (actors[actorId]?.name ?? "asset"));
+    }
+    if (names.length === 0) return "";
+    if (names.length === 1) return names[0]!;
+    return `${names.length} assets`;
+  });
   const hostRef = useRef<HTMLDivElement | null>(null);
   const viewportRef = useRef<ViewportRuntime | null>(null);
   const hideOverlayTimeoutRef = useRef<number | null>(null);
@@ -131,6 +145,12 @@ export function ViewportPanel(props: ViewportPanelProps) {
       <div className="viewport-panel">
       <div className="viewport-canvas-host" ref={hostRef} />
       {props.suspended ? <div className="viewport-suspended-overlay">Viewport suspended during render</div> : null}
+      {loadingBannerText && !props.suspended ? (
+        <div className="viewport-loading-banner">
+          <span className="viewport-loading-spinner" />
+          Loading {loadingBannerText}&ensp;&mdash;&ensp;window may be unresponsive
+        </div>
+      ) : null}
       <div className={`viewport-resolution-overlay${showResolutionOverlay ? " is-visible" : ""}`}>
         {viewportSize.width} x {viewportSize.height} ({backend === "webgl2" ? "WEBGL2" : "WEBGPU"})
       </div>

@@ -1226,6 +1226,42 @@ select {
   font-size: 12px;
 }
 
+.viewport-loading-banner {
+  position: absolute;
+  bottom: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border: 1px solid rgba(126, 163, 203, 0.35);
+  border-radius: 4px;
+  background: rgba(7, 17, 30, 0.88);
+  color: #d6e7ff;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+@keyframes viewport-spinner-rotate {
+  to { transform: rotate(360deg); }
+}
+
+.viewport-loading-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid rgba(126, 163, 203, 0.35);
+  border-top-color: #7ea3cb;
+  border-radius: 50%;
+  animation: viewport-spinner-rotate 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
 .panel-empty {
   margin: 0;
   color: var(--text-muted);

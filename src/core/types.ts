@@ -131,6 +131,8 @@ export interface FileParameterDefinition extends ParameterDefinitionBase {
   accept: string[];
   dialogTitle?: string;
   import: FileParameterImportAsset | FileParameterTranscodeHdri;
+  /** Param keys to null-out when this file is cleared or replaced with a different file. */
+  clearsParams?: string[];
 }
 
 export type ParameterDefinition =

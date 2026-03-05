@@ -111,7 +111,8 @@ export const MESH_ACTOR_SCHEMA: ParameterSchema = {
       import: {
         mode: "import-asset",
         kind: "generic"
-      }
+      },
+      clearsParams: ["materialSlots", "localMaterials"]
     },
     {
       key: "scaleFactor",
