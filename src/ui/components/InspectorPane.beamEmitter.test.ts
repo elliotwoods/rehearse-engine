@@ -94,4 +94,48 @@ describe("InspectorPane beam emitter", () => {
       root.unmount();
     });
   });
+
+  it("shows xyz scale controls and resets scale to one", async () => {
+    const kernel = createKernelStub();
+    const actions = kernel.store.getState().actions;
+    const actorId = actions.createActor({
+      actorType: "plugin",
+      pluginType: "plugin.beamCrossover.emitter",
+      name: "Beam Emitter"
+    });
+    actions.setActorTransform(actorId, "scale", [2, 3, 4]);
+    actions.select([{ kind: "actor", id: actorId }]);
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () => {
+      root.render(
+        React.createElement(
+          KernelProvider as React.ComponentType<{ kernel: AppKernel; children?: React.ReactNode }>,
+          { kernel },
+          React.createElement(InspectorPane)
+        )
+      );
+    });
+
+    expect(container.textContent).toContain("Scale");
+    expect(container.textContent).toContain("X");
+    expect(container.textContent).toContain("Y");
+    expect(container.textContent).toContain("Z");
+
+    const resetScaleButton = Array.from(container.querySelectorAll("button")).find((button) => button.title === "Reset Scale");
+    expect(resetScaleButton).toBeTruthy();
+
+    await act(async () => {
+      resetScaleButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(kernel.store.getState().state.actors[actorId]?.transform.scale).toEqual([1, 1, 1]);
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
 });

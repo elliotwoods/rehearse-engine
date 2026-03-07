@@ -5,24 +5,27 @@ import type { AppKernel } from "@/app/kernel";
 import { CURVE_VERTEX_SELECT_EVENT } from "@/render/curveEditController";
 import type { SceneController } from "@/render/sceneController";
 
-export type ActorTransformMode = "translate" | "rotate";
+export type ActorTransformMode = "none" | "translate" | "rotate" | "scale";
 const ACTOR_TRANSLATION_SNAP = 0.1;
 const ACTOR_ROTATION_SNAP_RADIANS = Math.PI / 12;
+const ACTOR_SCALE_SNAP = 0.1;
 
 interface CurveVertexSelectionDetail {
   actorId?: string | null;
+  pointIndex?: number | null;
+  controlType?: string;
 }
 
 export class ActorTransformController {
   private readonly transformControls: any;
   private readonly transformHelper: THREE.Object3D;
   private readonly domElement: HTMLElement;
-  private mode: ActorTransformMode = "translate";
+  private mode: ActorTransformMode = "none";
   private snappingEnabled = true;
   private activeActorId: string | null = null;
   private activeSignature = "";
   private dragHistoryPushed = false;
-  private activeCurveControlActorId: string | null = null;
+  private activeCurveSelection: CurveVertexSelectionDetail | null = null;
   private pendingOrbitBlock = false;
 
   public constructor(
@@ -34,7 +37,7 @@ export class ActorTransformController {
   ) {
     this.domElement = domElement;
     this.transformControls = new TransformControls(initialCamera, domElement);
-    this.transformControls.setMode(this.mode);
+    this.transformControls.setMode("translate");
     this.transformControls.space = "world";
     this.transformControls.size = 1.05;
     this.applySnapState();
@@ -72,7 +75,7 @@ export class ActorTransformController {
     this.transformHelper.parent?.remove(this.transformHelper);
     this.activeActorId = null;
     this.activeSignature = "";
-    this.activeCurveControlActorId = null;
+    this.activeCurveSelection = null;
     this.dragHistoryPushed = false;
     this.pendingOrbitBlock = false;
     (this.orbitControls as any).enabled = true;
@@ -87,9 +90,12 @@ export class ActorTransformController {
       return;
     }
     this.mode = mode;
-    this.transformControls.setMode(mode);
-    this.transformControls.space = mode === "translate" ? "world" : "local";
+    if (mode !== "none") {
+      this.transformControls.setMode(mode);
+      this.transformControls.space = mode === "translate" ? "world" : "local";
+    }
     this.applySnapState();
+    this.activeSignature = "";
   }
 
   public setSnappingEnabled(enabled: boolean): void {
@@ -109,12 +115,16 @@ export class ActorTransformController {
       this.hideControls();
       return;
     }
+    if (this.mode === "none") {
+      this.hideControls();
+      return;
+    }
     const selectedActor = this.getSingleSelectedActor();
     if (!selectedActor) {
       this.hideControls();
       return;
     }
-    if (selectedActor.actorType === "curve" && this.activeCurveControlActorId === selectedActor.id) {
+    if (this.hasActiveCurveControlSelectionFor(selectedActor.id)) {
       this.hideControls(false);
       return;
     }
@@ -183,6 +193,12 @@ export class ActorTransformController {
       return;
     }
     const object = this.transformControls.object;
+    const nextScale: [number, number, number] = [
+      Math.max(0, object.scale.x),
+      Math.max(0, object.scale.y),
+      Math.max(0, object.scale.z)
+    ];
+    object.scale.set(...nextScale);
     const actions = this.kernel.store.getState().actions;
     actions.setActorTransformNoHistory(this.activeActorId, "position", [
       object.position.x,
@@ -194,11 +210,14 @@ export class ActorTransformController {
       object.rotation.y,
       object.rotation.z
     ]);
+    actions.setActorTransformNoHistory(this.activeActorId, "scale", nextScale);
   }
 
   private applySnapState(): void {
-    this.transformControls.translationSnap = this.snappingEnabled ? ACTOR_TRANSLATION_SNAP : null;
-    this.transformControls.rotationSnap = this.snappingEnabled ? ACTOR_ROTATION_SNAP_RADIANS : null;
+    this.transformControls.translationSnap = this.mode === "translate" && this.snappingEnabled ? ACTOR_TRANSLATION_SNAP : null;
+    this.transformControls.rotationSnap =
+      this.mode === "rotate" && this.snappingEnabled ? ACTOR_ROTATION_SNAP_RADIANS : null;
+    this.transformControls.scaleSnap = this.mode === "scale" && this.snappingEnabled ? ACTOR_SCALE_SNAP : null;
   }
 
   private pointerToNdc(event: PointerEvent): { x: number; y: number; button: number } | null {
@@ -214,7 +233,10 @@ export class ActorTransformController {
   }
 
   private onPointerDownCapture = (event: PointerEvent): void => {
-    if (event.button !== 0 || !this.transformControls.object) {
+    if (event.button !== 0 || !this.transformControls.object || this.mode === "none") {
+      return;
+    }
+    if (this.activeActorId && this.hasActiveCurveControlSelectionFor(this.activeActorId)) {
       return;
     }
     const pointer = this.pointerToNdc(event);
@@ -242,8 +264,16 @@ export class ActorTransformController {
   private onCurveVertexSelect = (event: Event): void => {
     const custom = event as CustomEvent<CurveVertexSelectionDetail>;
     const actorId = custom.detail?.actorId ?? null;
-    this.activeCurveControlActorId = actorId;
-    if (this.activeActorId && actorId === this.activeActorId) {
+    const pointIndex = custom.detail?.pointIndex;
+    this.activeCurveSelection =
+      actorId && typeof pointIndex === "number" && pointIndex >= 0
+        ? {
+            actorId,
+            pointIndex,
+            controlType: custom.detail?.controlType
+          }
+        : null;
+    if (this.activeActorId && this.hasActiveCurveControlSelectionFor(this.activeActorId)) {
       this.hideControls(false);
       return;
     }
@@ -252,4 +282,8 @@ export class ActorTransformController {
       this.activeSignature = "";
     }
   };
+
+  private hasActiveCurveControlSelectionFor(actorId: string): boolean {
+    return this.activeCurveSelection?.actorId === actorId && typeof this.activeCurveSelection.pointIndex === "number";
+  }
 }

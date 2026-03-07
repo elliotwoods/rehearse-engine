@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faMagnet, faRotateRight, faUpDownLeftRight } from "@fortawesome/free-solid-svg-icons";
+import { faMagnet, faMaximize, faRotateRight, faUpDownLeftRight } from "@fortawesome/free-solid-svg-icons";
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import type { SceneFramePacingSettings } from "@/core/types";
@@ -56,10 +56,13 @@ export function ViewportPanel(props: ViewportPanelProps) {
   const resizeObservedElementsRef = useRef<HTMLElement[]>([]);
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [showResolutionOverlay, setShowResolutionOverlay] = useState(false);
-  const [actorTransformMode, setActorTransformMode] = useState<ActorTransformMode>("translate");
+  const [actorTransformMode, setActorTransformMode] = useState<ActorTransformMode>("none");
   const [actorTransformSnapToggled, setActorTransformSnapToggled] = useState(true);
   const [actorTransformSnapShiftOverride, setActorTransformSnapShiftOverride] = useState(false);
   const actorTransformSnappingEnabled = actorTransformSnapToggled !== actorTransformSnapShiftOverride;
+  const toggleActorTransformMode = (mode: Exclude<ActorTransformMode, "none">) => {
+    setActorTransformMode((current) => (current === mode ? "none" : mode));
+  };
 
   useEffect(() => {
     if (props.suspended) {
@@ -117,12 +120,17 @@ export function ViewportPanel(props: ViewportPanelProps) {
       }
       if (event.key === "g" || event.key === "G") {
         event.preventDefault();
-        setActorTransformMode("translate");
+        setActorTransformMode((current) => (current === "translate" ? "none" : "translate"));
         return;
       }
       if (event.key === "r" || event.key === "R") {
         event.preventDefault();
-        setActorTransformMode("rotate");
+        setActorTransformMode((current) => (current === "rotate" ? "none" : "rotate"));
+        return;
+      }
+      if (event.key === "s" || event.key === "S") {
+        event.preventDefault();
+        setActorTransformMode((current) => (current === "scale" ? "none" : "scale"));
       }
     };
     const onKeyUp = (event: KeyboardEvent) => {
@@ -224,8 +232,8 @@ export function ViewportPanel(props: ViewportPanelProps) {
           <button
             type="button"
             className={`viewport-transform-button${actorTransformMode === "translate" ? " is-active" : ""}`}
-            onClick={() => setActorTransformMode("translate")}
-            title="Translate selected actor (G)"
+            onClick={() => toggleActorTransformMode("translate")}
+            title={`Translate selected actor (G)${actorTransformMode === "translate" ? " - click again to hide gizmo" : ""}`}
             aria-label="Translate selected actor (G)"
           >
             <FontAwesomeIcon icon={faUpDownLeftRight} />
@@ -233,11 +241,20 @@ export function ViewportPanel(props: ViewportPanelProps) {
           <button
             type="button"
             className={`viewport-transform-button${actorTransformMode === "rotate" ? " is-active" : ""}`}
-            onClick={() => setActorTransformMode("rotate")}
-            title="Rotate selected actor (R)"
+            onClick={() => toggleActorTransformMode("rotate")}
+            title={`Rotate selected actor (R)${actorTransformMode === "rotate" ? " - click again to hide gizmo" : ""}`}
             aria-label="Rotate selected actor (R)"
           >
             <FontAwesomeIcon icon={faRotateRight} />
+          </button>
+          <button
+            type="button"
+            className={`viewport-transform-button${actorTransformMode === "scale" ? " is-active" : ""}`}
+            onClick={() => toggleActorTransformMode("scale")}
+            title={`Scale selected actor (S)${actorTransformMode === "scale" ? " - click again to hide gizmo" : ""}`}
+            aria-label="Scale selected actor (S)"
+          >
+            <FontAwesomeIcon icon={faMaximize} />
           </button>
           <button
             type="button"

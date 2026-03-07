@@ -1821,7 +1821,7 @@ export function InspectorPane() {
   };
 
   const updateSelectedActorTransformAxis = (
-    key: "position" | "rotation",
+    key: "position" | "rotation" | "scale",
     axisIndex: 0 | 1 | 2,
     nextValue: number
   ): void => {
@@ -1834,8 +1834,8 @@ export function InspectorPane() {
     scheduleAutosave();
   };
 
-  const resetSelectedActorTransform = (key: "position" | "rotation"): void => {
-    const nextValue: [number, number, number] = [0, 0, 0];
+  const resetSelectedActorTransform = (key: "position" | "rotation" | "scale"): void => {
+    const nextValue: [number, number, number] = key === "scale" ? [1, 1, 1] : [0, 0, 0];
     for (const actor of actorSelection) {
       kernel.store.getState().actions.setActorTransform(actor.id, key, nextValue);
     }
@@ -1880,6 +1880,11 @@ export function InspectorPane() {
     actorSelection.map((actor) => actor.transform.rotation[1] * RAD_TO_DEG),
     actorSelection.map((actor) => actor.transform.rotation[2] * RAD_TO_DEG)
   ];
+  const scaleValuesByAxis: [number[], number[], number[]] = [
+    actorSelection.map((actor) => actor.transform.scale[0]),
+    actorSelection.map((actor) => actor.transform.scale[1]),
+    actorSelection.map((actor) => actor.transform.scale[2])
+  ];
   const canResetEnabled = !allActorsMatch(actorSelection, (actor) => actor.enabled === true);
   const canResetVisibility = !allActorsMatch(actorSelection, (actor) => (actor.visibilityMode ?? "visible") === "visible");
   const canResetTranslation = !allActorsMatch(
@@ -1895,6 +1900,13 @@ export function InspectorPane() {
       Math.abs(actor.transform.rotation[0]) <= 1e-9 &&
       Math.abs(actor.transform.rotation[1]) <= 1e-9 &&
       Math.abs(actor.transform.rotation[2]) <= 1e-9
+  );
+  const canResetScale = !allActorsMatch(
+    actorSelection,
+    (actor) =>
+      Math.abs(actor.transform.scale[0] - 1) <= 1e-9 &&
+      Math.abs(actor.transform.scale[1] - 1) <= 1e-9 &&
+      Math.abs(actor.transform.scale[2] - 1) <= 1e-9
   );
   const cameraPathRefs =
     singleSelection && singleSelection.actorType === "camera-path"
@@ -2406,6 +2418,37 @@ export function InspectorPane() {
                 title="Reset Rotation"
                 disabled={readOnly || !canResetRotation}
                 onClick={() => resetSelectedActorTransform("rotation")}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Scale</span>
+            <div className="inspector-common-control-wrap">
+              <div className="inspector-vector-inputs">
+                {([0, 1, 2] as const).map((axisIndex) => {
+                  const values = scaleValuesByAxis[axisIndex];
+                  return (
+                    <div key={`scale-${axisIndex}`} className="inspector-vector-cell">
+                      <span className="inspector-axis-label">{axisIndex === 0 ? "X" : axisIndex === 1 ? "Y" : "Z"}</span>
+                      <DigitScrubInput
+                        value={values[0] ?? 1}
+                        mixed={isMixedNumber(values)}
+                        precision={3}
+                        disabled={readOnly}
+                        onChange={(next) => updateSelectedActorTransformAxis("scale", axisIndex, Math.max(0, next))}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                className={`widget-reset-button${canResetScale ? "" : " is-hidden"}`}
+                title="Reset Scale"
+                disabled={readOnly || !canResetScale}
+                onClick={() => resetSelectedActorTransform("scale")}
               >
                 <FontAwesomeIcon icon={faRotateLeft} />
               </button>

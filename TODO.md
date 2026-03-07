@@ -59,8 +59,11 @@ Options of different interactive cameras:
 * Unreal first person style
 
 Perhaps we can combine things, e.g.:
-* left click drag = orbit
-* right click drag = 
+* left click drag = orbit around whatever is under the mouse cursor (ofxGrabCam style)
+* right click drag = look around
+* middle click or both button drag = pan
+
+whilst in right click drag, WASD keys are active (they are not active otherwise)
 
 # Refactor splats
 

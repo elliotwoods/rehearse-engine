@@ -74,6 +74,7 @@ export class CurveEditController {
   private hoverObject: any | null = null;
   private hoveredPointActorId: string | null = null;
   private hoveredPointIndex: number | null = null;
+  private pendingOrbitBlock = false;
   private readonly unregisterDeleteCommandHandler: () => void;
 
   public constructor(
@@ -111,6 +112,7 @@ export class CurveEditController {
     this.sceneController.scene.add(this.transformHelper);
     this.domElement.addEventListener("pointerdown", this.onPointerDown, true);
     this.domElement.addEventListener("pointermove", this.onPointerMove, true);
+    this.domElement.addEventListener("pointerup", this.onPointerUp, true);
     this.domElement.addEventListener("dblclick", this.onDoubleClick, true);
     window.addEventListener(CURVE_VERTEX_HOVER_EVENT, this.onCurveVertexHover as EventListener);
     window.addEventListener(CURVE_VERTEX_SELECT_EVENT, this.onCurveVertexSelect as EventListener);
@@ -120,6 +122,7 @@ export class CurveEditController {
   public dispose(): void {
     this.domElement.removeEventListener("pointerdown", this.onPointerDown, true);
     this.domElement.removeEventListener("pointermove", this.onPointerMove, true);
+    this.domElement.removeEventListener("pointerup", this.onPointerUp, true);
     this.domElement.removeEventListener("dblclick", this.onDoubleClick, true);
     window.removeEventListener(CURVE_VERTEX_HOVER_EVENT, this.onCurveVertexHover as EventListener);
     window.removeEventListener(CURVE_VERTEX_SELECT_EVENT, this.onCurveVertexSelect as EventListener);
@@ -137,6 +140,7 @@ export class CurveEditController {
     this.hoverObject = null;
     this.hoveredPointActorId = null;
     this.hoveredPointIndex = null;
+    this.pendingOrbitBlock = false;
     (this.orbitControls as any).enabled = true;
     this.domElement.style.cursor = "";
   }
@@ -332,6 +336,7 @@ export class CurveEditController {
     (this.orbitControls as any).enabled = true;
     this.domElement.style.cursor = "";
     this.dragHistoryPushed = false;
+    this.pendingOrbitBlock = false;
   }
 
   private pickControl(event: PointerEvent): any | null {
@@ -347,9 +352,32 @@ export class CurveEditController {
     return hits[0]?.object ?? null;
   }
 
+  private pointerToNdc(event: PointerEvent): { x: number; y: number; button: number } | null {
+    const rect = this.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return null;
+    }
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      y: -((event.clientY - rect.top) / rect.height) * 2 + 1,
+      button: event.button
+    };
+  }
+
   private onPointerDown = (event: PointerEvent): void => {
     if (event.button !== 0) {
       return;
+    }
+    if (this.activeControlMeta && this.transformControls.object) {
+      const pointer = this.pointerToNdc(event);
+      if (pointer) {
+        this.transformControls.pointerHover(pointer);
+        if (this.transformControls.axis) {
+          this.pendingOrbitBlock = true;
+          (this.orbitControls as any).enabled = false;
+          return;
+        }
+      }
     }
     const picked = this.pickControl(event);
     if (!picked) {
@@ -376,6 +404,16 @@ export class CurveEditController {
     this.kernel.store.getState().actions.setStatus(
       "Curve control selected. Drag gizmo handles for X/Y/Z or XY/XZ/YZ movement."
     );
+  };
+
+  private onPointerUp = (): void => {
+    if (!this.pendingOrbitBlock) {
+      return;
+    }
+    this.pendingOrbitBlock = false;
+    if (!this.transformControls.dragging) {
+      (this.orbitControls as any).enabled = true;
+    }
   };
 
   private onPointerMove = (event: PointerEvent): void => {
