@@ -1,16 +1,42 @@
 import * as THREE from "three";
 import { SplatMesh } from "@sparkjsdev/spark";
 import type { AppKernel } from "@/app/kernel";
-import type { ActorNode } from "@/core/types";
+import type { ActorNode, SplatColorInputSpace } from "@/core/types";
 import { SceneController } from "@/render/sceneController";
 
 const SPARK_COORDINATE_CORRECTION_EULER = new THREE.Euler(-Math.PI / 2, 0, 0, "XYZ");
+interface SparkColorControls {
+  decodeEnabled: { value: boolean };
+  colorInputSpace: { value: number };
+}
 
 interface SparkActorEntry {
   assetId: string;
   reloadToken: number;
   mesh: any;
   correctedRoot: any;
+  colorControls: SparkColorControls;
+}
+
+function parseSparkColorInputSpace(value: unknown): SplatColorInputSpace {
+  return value === "linear" || value === "iphone-sdr" || value === "srgb" ? value : "srgb";
+}
+
+function sparkColorInputSpaceCode(value: SplatColorInputSpace): number {
+  if (value === "linear") {
+    return 0;
+  }
+  if (value === "iphone-sdr") {
+    return 2;
+  }
+  return 1;
+}
+
+function createSparkColorControls(): SparkColorControls {
+  return {
+    decodeEnabled: { value: false },
+    colorInputSpace: { value: 1 }
+  };
 }
 
 function formatLoadError(error: unknown): string {
@@ -104,7 +130,7 @@ export class SparkSplatController {
     const isLoaded =
       existingEntry && existingEntry.assetId === assetId && existingEntry.reloadToken === reloadToken && existingEntry.mesh;
     if (isLoaded) {
-      this.applySparkRuntimeParams(existingEntry.mesh, actor);
+      this.applySparkRuntimeParams(existingEntry, actor);
       return;
     }
 
@@ -132,6 +158,7 @@ export class SparkSplatController {
       const correctedRoot = new THREE.Group();
       correctedRoot.rotation.copy(SPARK_COORDINATE_CORRECTION_EULER);
       actorObject.add(correctedRoot);
+      const colorControls = createSparkColorControls();
       const mesh = new (SplatMesh as any)({
         fileBytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
       });
@@ -146,16 +173,18 @@ export class SparkSplatController {
       }
 
       correctedRoot.add(mesh);
-      this.applySparkRuntimeParams(mesh, actor);
-
-      const bounds = typeof mesh.getBoundingBox === "function" ? mesh.getBoundingBox() : null;
-      const pointCount = Number(mesh.numSplats ?? mesh.splatCount ?? 0);
-      this.entriesByActorId.set(actor.id, {
+      const entry: SparkActorEntry = {
         assetId,
         reloadToken,
         mesh,
-        correctedRoot
-      });
+        correctedRoot,
+        colorControls
+      };
+      this.applySparkRuntimeParams(entry, actor);
+
+      const bounds = typeof mesh.getBoundingBox === "function" ? mesh.getBoundingBox() : null;
+      const pointCount = Number(mesh.numSplats ?? mesh.splatCount ?? 0);
+      this.entriesByActorId.set(actor.id, entry);
       this.kernel.store.getState().actions.setActorStatus(actor.id, {
         values: {
           backend: "spark-webgl",
@@ -201,10 +230,23 @@ export class SparkSplatController {
     this.entriesByActorId.delete(actorId);
   }
 
-  private applySparkRuntimeParams(mesh: any, actor: ActorNode): void {
+  private applySparkRuntimeParams(entry: SparkActorEntry, actor: ActorNode): void {
+    const { mesh, colorControls } = entry;
     const scaleFactor = Number(actor.params.scaleFactor ?? 1);
     const safeScale = Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1;
     mesh.scale?.setScalar?.(safeScale);
+
+    const brightness = Number(actor.params.brightness ?? 1);
+    const safeBrightness = Number.isFinite(brightness) ? Math.max(0, brightness) : 1;
+    if (mesh.recolor instanceof THREE.Color) {
+      mesh.recolor.setRGB(safeBrightness, safeBrightness, safeBrightness);
+    }
+
+    const colorInputSpace = parseSparkColorInputSpace(actor.params.colorInputSpace);
+    const tonemappingEnabled = this.kernel.store.getState().state.scene.tonemapping.mode !== "off";
+    colorControls.decodeEnabled.value = tonemappingEnabled;
+    colorControls.colorInputSpace.value = sparkColorInputSpaceCode(colorInputSpace);
+
     const opacity = Number(actor.params.opacity ?? 1);
     const safeOpacity = Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1;
     if (typeof mesh.setOpacity === "function") {
@@ -221,3 +263,6 @@ export class SparkSplatController {
     }
   }
 }
+
+
+

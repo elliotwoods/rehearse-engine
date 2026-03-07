@@ -18,6 +18,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
+import { DEFAULT_POST_PROCESSING } from "@/core/defaults";
 import type {
   ActorNode,
   ActorRuntimeStatus,
@@ -29,7 +30,8 @@ import type {
   ParameterDefinition,
   ParameterValue,
   ParameterValues,
-  RenderEngine
+  RenderEngine,
+  SceneToneMappingMode
 } from "@/core/types";
 import type { ActorStatusEntry, ReloadableDescriptor } from "@/core/hotReload/types";
 import {
@@ -72,6 +74,7 @@ import {
   ToggleField,
   MaterialRefField
 } from "@/ui/widgets";
+import type { ReferencePickerOption } from "@/ui/widgets/ReferencePicker";
 
 type BindingValue = ParameterValue;
 const RAD_TO_DEG = 180 / Math.PI;
@@ -81,6 +84,8 @@ const DEFAULT_SCENE_BACKGROUND = "#070b12";
 const DEFAULT_CAMERA_KEYBOARD_NAVIGATION = true;
 const DEFAULT_CAMERA_NAVIGATION_SPEED = 6;
 const DEFAULT_CAMERA_FOV_DEGREES = 50;
+const DEFAULT_SLOW_FRAME_DIAGNOSTICS_ENABLED = false;
+const DEFAULT_SLOW_FRAME_DIAGNOSTICS_THRESHOLD_MS = 100;
 const CURVE_VERTEX_SELECT_EVENT = "simularca:curve-vertex-select";
 type CurveControlType = "anchor" | "handleIn" | "handleOut";
 const CURVE_HANDLE_MODE_OPTIONS = [
@@ -120,6 +125,10 @@ const CURVE_WEIGHT_MODE_OPTIONS = [
 const SCENE_ENGINE_OPTIONS: Array<{ value: RenderEngine; label: string }> = [
   { value: "webgl2", label: "WebGL2" },
   { value: "webgpu", label: "WebGPU" }
+];
+const SCENE_TONEMAPPING_OPTIONS: Array<{ value: SceneToneMappingMode; label: string }> = [
+  { value: "aces", label: "ACES" },
+  { value: "off", label: "Off" }
 ];
 
 function resolveActorDescriptor(
@@ -318,16 +327,56 @@ function bindingValueFor(definition: ParameterDefinition, actor: ActorNode): Bin
   return defaultValueForDefinition(definition);
 }
 
-function isDefinitionVisibleForActor(definition: ParameterDefinition, actor: ActorNode): boolean {
+function isDefinitionVisibleForActor(
+  definition: ParameterDefinition,
+  actor: ActorNode,
+  definitions: ParameterDefinition[]
+): boolean {
   const rules = definition.visibleWhen;
   if (!rules || rules.length === 0) {
     return true;
   }
   return rules.every((rule) => {
     const value = actor.params[rule.key];
-    const effectiveValue = value === undefined && rule.key === "shape" ? "cube" : value;
+    const controllingDefinition = definitions.find((candidate) => candidate.key === rule.key);
+    const effectiveValue = value !== undefined ? value : controllingDefinition ? defaultValueForDefinition(controllingDefinition) : undefined;
     return effectiveValue === rule.equals;
   });
+}
+
+const BEAM_SHADER_GROUP_KEY = "__beam-shader__";
+const BEAM_SHADER_GROUP_LABEL = "Shader Properties";
+const BEAM_SHADER_PARAM_KEYS = new Set([
+  "beamType",
+  "beamColor",
+  "beamAlpha",
+  "alongBeamPower",
+  "scatteringFactor",
+  "hazeIntensity",
+  "scatteringCoeff",
+  "extinctionCoeff",
+  "anisotropyG",
+  "beamDivergenceRad",
+  "beamApertureDiameter",
+  "distanceFalloffExponent",
+  "pathLengthGain",
+  "pathLengthExponent",
+  "phaseGain",
+  "scanDuty",
+  "nearFadeStart",
+  "nearFadeEnd",
+  "softClampKnee"
+]);
+
+function isBeamEmitterSelection(actorSelection: ActorNode[]): boolean {
+  return actorSelection.length > 0 && actorSelection.every((actor) =>
+    actor.actorType === "plugin" &&
+    (actor.pluginType === "plugin.beamCrossover.emitter" || actor.pluginType === "plugin.beamCrossover.emitterArray")
+  );
+}
+
+function isBeamShaderDefinition(definition: ParameterDefinition): boolean {
+  return BEAM_SHADER_PARAM_KEYS.has(definition.key);
 }
 
 function commonDefinitionsForGroup(
@@ -338,13 +387,15 @@ function commonDefinitionsForGroup(
   if (!firstActor) {
     return [];
   }
-  const firstDefinitions = getParameterDefinitions(firstActor, descriptors).filter((definition) =>
-    isDefinitionVisibleForActor(definition, firstActor)
+  const firstActorDefinitions = getParameterDefinitions(firstActor, descriptors);
+  const firstDefinitions = firstActorDefinitions.filter((definition) =>
+    isDefinitionVisibleForActor(definition, firstActor, firstActorDefinitions)
   );
   const otherDefinitionsByActor = actorSelection.slice(1).map((actor) => {
+    const actorDefinitions = getParameterDefinitions(actor, descriptors);
     return new Map(
-      getParameterDefinitions(actor, descriptors)
-        .filter((definition) => isDefinitionVisibleForActor(definition, actor))
+      actorDefinitions
+        .filter((definition) => isDefinitionVisibleForActor(definition, actor, actorDefinitions))
         .map((definition) => [definition.key, definition])
     );
   });
@@ -437,7 +488,7 @@ function actorRefOptionsForDefinition(
   definition: Extract<ParameterDefinition, { type: "actor-ref" | "actor-ref-list" }>,
   actors: Record<string, ActorNode>,
   selectedActors: ActorNode[]
-): { id: string; label: string }[] {
+): ReferencePickerOption[] {
   const selectedIds = new Set(selectedActors.map((actor) => actor.id));
   return Object.values(actors)
     .filter((actor) => {
@@ -451,7 +502,10 @@ function actorRefOptionsForDefinition(
     })
     .map((actor) => ({
       id: actor.id,
-      label: `${actor.name} (${actor.actorType})`
+      label: actor.name,
+      detail: `${actor.actorType}${actor.enabled ? "" : " · disabled"} · ${actor.id.slice(0, 8)}`,
+      kindLabel: actor.actorType.toUpperCase(),
+      searchText: `${actor.name} ${actor.actorType} ${actor.id}`
     }))
     .sort((a, b) => a.label.localeCompare(b.label));
 }
@@ -471,11 +525,42 @@ function SceneInspectorView(props: SceneInspectorViewProps) {
   const canResetBackground = props.appState.scene.backgroundColor.toLowerCase() !== DEFAULT_SCENE_BACKGROUND;
   const canResetEngine = props.appState.scene.renderEngine !== "webgl2";
   const canResetAntialiasing = props.appState.scene.antialiasing !== true;
+  const canResetTonemappingMode = props.appState.scene.tonemapping.mode !== "aces";
+  const canResetTonemappingDither = props.appState.scene.tonemapping.dither !== true;
+  const canResetBloomEnabled = props.appState.scene.postProcessing.bloom.enabled !== DEFAULT_POST_PROCESSING.bloom.enabled;
+  const canResetBloomStrength =
+    Math.abs(props.appState.scene.postProcessing.bloom.strength - DEFAULT_POST_PROCESSING.bloom.strength) > 1e-9;
+  const canResetBloomRadius =
+    Math.abs(props.appState.scene.postProcessing.bloom.radius - DEFAULT_POST_PROCESSING.bloom.radius) > 1e-9;
+  const canResetBloomThreshold =
+    Math.abs(props.appState.scene.postProcessing.bloom.threshold - DEFAULT_POST_PROCESSING.bloom.threshold) > 1e-9;
+  const canResetVignetteEnabled =
+    props.appState.scene.postProcessing.vignette.enabled !== DEFAULT_POST_PROCESSING.vignette.enabled;
+  const canResetVignetteOffset =
+    Math.abs(props.appState.scene.postProcessing.vignette.offset - DEFAULT_POST_PROCESSING.vignette.offset) > 1e-9;
+  const canResetVignetteDarkness =
+    Math.abs(props.appState.scene.postProcessing.vignette.darkness - DEFAULT_POST_PROCESSING.vignette.darkness) > 1e-9;
+  const canResetChromaticAberrationEnabled =
+    props.appState.scene.postProcessing.chromaticAberration.enabled !==
+    DEFAULT_POST_PROCESSING.chromaticAberration.enabled;
+  const canResetChromaticAberrationOffset =
+    Math.abs(
+      props.appState.scene.postProcessing.chromaticAberration.offset - DEFAULT_POST_PROCESSING.chromaticAberration.offset
+    ) > 1e-9;
+  const canResetGrainEnabled = props.appState.scene.postProcessing.grain.enabled !== DEFAULT_POST_PROCESSING.grain.enabled;
+  const canResetGrainIntensity =
+    Math.abs(props.appState.scene.postProcessing.grain.intensity - DEFAULT_POST_PROCESSING.grain.intensity) > 1e-9;
   const canResetKeyboardNavigation =
     props.appState.scene.cameraKeyboardNavigation !== DEFAULT_CAMERA_KEYBOARD_NAVIGATION;
   const canResetNavigationSpeed =
     Math.abs(props.appState.scene.cameraNavigationSpeed - DEFAULT_CAMERA_NAVIGATION_SPEED) > 1e-9;
   const canResetCameraFov = Math.abs(props.appState.camera.fov - DEFAULT_CAMERA_FOV_DEGREES) > 1e-9;
+  const canResetSlowFrameDiagnosticsEnabled =
+    props.appState.runtimeDebug.slowFrameDiagnosticsEnabled !== DEFAULT_SLOW_FRAME_DIAGNOSTICS_ENABLED;
+  const canResetSlowFrameDiagnosticsThreshold =
+    Math.abs(
+      props.appState.runtimeDebug.slowFrameDiagnosticsThresholdMs - DEFAULT_SLOW_FRAME_DIAGNOSTICS_THRESHOLD_MS
+    ) > 1e-9;
   const sceneStatsRows = [
     { label: "FPS", value: Number.isFinite(props.appState.stats.fps) ? props.appState.stats.fps.toFixed(1) : "0.0" },
     {
@@ -651,6 +736,500 @@ function SceneInspectorView(props: SceneInspectorViewProps) {
             </div>
           </div>
           <div className="inspector-common-row">
+            <span className="inspector-common-label">Tonemapping</span>
+            <div className="inspector-common-control-wrap">
+              <select
+                className="widget-select"
+                value={props.appState.scene.tonemapping.mode}
+                disabled={props.readOnly}
+                onChange={(event) => {
+                  const value = event.target.value === "off" ? "off" : "aces";
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    tonemapping: {
+                      mode: value
+                    }
+                  });
+                }}
+              >
+                {SCENE_TONEMAPPING_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className={`widget-reset-button${canResetTonemappingMode ? "" : " is-hidden"}`}
+                title="Reset Tonemapping"
+                disabled={props.readOnly || !canResetTonemappingMode}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    tonemapping: {
+                      mode: "aces"
+                    }
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Dither 8-bit Output</span>
+            <div className="inspector-common-control-wrap">
+              <ToggleField
+                label=""
+                checked={props.appState.scene.tonemapping.dither}
+                disabled={props.readOnly}
+                embedded
+                onChange={(next) => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    tonemapping: {
+                      dither: next
+                    }
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className={`widget-reset-button${canResetTonemappingDither ? "" : " is-hidden"}`}
+                title="Reset Output Dither"
+                disabled={props.readOnly || !canResetTonemappingDither}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    tonemapping: {
+                      dither: true
+                    }
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Bloom</span>
+            <div className="inspector-common-control-wrap">
+              <ToggleField
+                label=""
+                checked={props.appState.scene.postProcessing.bloom.enabled}
+                disabled={props.readOnly}
+                embedded
+                onChange={(next) => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      bloom: {
+                        enabled: next
+                      }
+                    }
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className={`widget-reset-button${canResetBloomEnabled ? "" : " is-hidden"}`}
+                title="Reset Bloom"
+                disabled={props.readOnly || !canResetBloomEnabled}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      bloom: {
+                        enabled: DEFAULT_POST_PROCESSING.bloom.enabled
+                      }
+                    }
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Bloom Strength</span>
+            <div className="inspector-common-control-wrap">
+              <NumberField
+                label=""
+                value={props.appState.scene.postProcessing.bloom.strength}
+                min={0}
+                step={0.05}
+                precision={2}
+                disabled={props.readOnly}
+                onChange={(next) => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      bloom: {
+                        strength: next
+                      }
+                    }
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className={`widget-reset-button${canResetBloomStrength ? "" : " is-hidden"}`}
+                title="Reset Bloom Strength"
+                disabled={props.readOnly || !canResetBloomStrength}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      bloom: {
+                        strength: DEFAULT_POST_PROCESSING.bloom.strength
+                      }
+                    }
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Bloom Radius</span>
+            <div className="inspector-common-control-wrap">
+              <NumberField
+                label=""
+                value={props.appState.scene.postProcessing.bloom.radius}
+                min={0}
+                step={0.01}
+                precision={2}
+                disabled={props.readOnly}
+                onChange={(next) => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      bloom: {
+                        radius: next
+                      }
+                    }
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className={`widget-reset-button${canResetBloomRadius ? "" : " is-hidden"}`}
+                title="Reset Bloom Radius"
+                disabled={props.readOnly || !canResetBloomRadius}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      bloom: {
+                        radius: DEFAULT_POST_PROCESSING.bloom.radius
+                      }
+                    }
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Bloom Threshold</span>
+            <div className="inspector-common-control-wrap">
+              <NumberField
+                label=""
+                value={props.appState.scene.postProcessing.bloom.threshold}
+                min={0}
+                step={0.01}
+                precision={2}
+                disabled={props.readOnly}
+                onChange={(next) => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      bloom: {
+                        threshold: next
+                      }
+                    }
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className={`widget-reset-button${canResetBloomThreshold ? "" : " is-hidden"}`}
+                title="Reset Bloom Threshold"
+                disabled={props.readOnly || !canResetBloomThreshold}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      bloom: {
+                        threshold: DEFAULT_POST_PROCESSING.bloom.threshold
+                      }
+                    }
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Vignette</span>
+            <div className="inspector-common-control-wrap">
+              <ToggleField
+                label=""
+                checked={props.appState.scene.postProcessing.vignette.enabled}
+                disabled={props.readOnly}
+                embedded
+                onChange={(next) => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      vignette: {
+                        enabled: next
+                      }
+                    }
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className={`widget-reset-button${canResetVignetteEnabled ? "" : " is-hidden"}`}
+                title="Reset Vignette"
+                disabled={props.readOnly || !canResetVignetteEnabled}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      vignette: {
+                        enabled: DEFAULT_POST_PROCESSING.vignette.enabled
+                      }
+                    }
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Vignette Offset</span>
+            <div className="inspector-common-control-wrap">
+              <NumberField
+                label=""
+                value={props.appState.scene.postProcessing.vignette.offset}
+                min={0}
+                step={0.01}
+                precision={2}
+                disabled={props.readOnly}
+                onChange={(next) => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      vignette: {
+                        offset: next
+                      }
+                    }
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className={`widget-reset-button${canResetVignetteOffset ? "" : " is-hidden"}`}
+                title="Reset Vignette Offset"
+                disabled={props.readOnly || !canResetVignetteOffset}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      vignette: {
+                        offset: DEFAULT_POST_PROCESSING.vignette.offset
+                      }
+                    }
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Vignette Darkness</span>
+            <div className="inspector-common-control-wrap">
+              <NumberField
+                label=""
+                value={props.appState.scene.postProcessing.vignette.darkness}
+                min={0}
+                max={1}
+                step={0.01}
+                precision={2}
+                disabled={props.readOnly}
+                onChange={(next) => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      vignette: {
+                        darkness: next
+                      }
+                    }
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className={`widget-reset-button${canResetVignetteDarkness ? "" : " is-hidden"}`}
+                title="Reset Vignette Darkness"
+                disabled={props.readOnly || !canResetVignetteDarkness}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      vignette: {
+                        darkness: DEFAULT_POST_PROCESSING.vignette.darkness
+                      }
+                    }
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Chromatic Aberration</span>
+            <div className="inspector-common-control-wrap">
+              <ToggleField
+                label=""
+                checked={props.appState.scene.postProcessing.chromaticAberration.enabled}
+                disabled={props.readOnly}
+                embedded
+                onChange={(next) => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      chromaticAberration: {
+                        enabled: next
+                      }
+                    }
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className={`widget-reset-button${canResetChromaticAberrationEnabled ? "" : " is-hidden"}`}
+                title="Reset Chromatic Aberration"
+                disabled={props.readOnly || !canResetChromaticAberrationEnabled}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      chromaticAberration: {
+                        enabled: DEFAULT_POST_PROCESSING.chromaticAberration.enabled
+                      }
+                    }
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Chromatic Offset</span>
+            <div className="inspector-common-control-wrap">
+              <NumberField
+                label=""
+                value={props.appState.scene.postProcessing.chromaticAberration.offset}
+                min={0}
+                step={0.0001}
+                precision={4}
+                disabled={props.readOnly}
+                onChange={(next) => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      chromaticAberration: {
+                        offset: next
+                      }
+                    }
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className={`widget-reset-button${canResetChromaticAberrationOffset ? "" : " is-hidden"}`}
+                title="Reset Chromatic Offset"
+                disabled={props.readOnly || !canResetChromaticAberrationOffset}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      chromaticAberration: {
+                        offset: DEFAULT_POST_PROCESSING.chromaticAberration.offset
+                      }
+                    }
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Film Grain</span>
+            <div className="inspector-common-control-wrap">
+              <ToggleField
+                label=""
+                checked={props.appState.scene.postProcessing.grain.enabled}
+                disabled={props.readOnly}
+                embedded
+                onChange={(next) => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      grain: {
+                        enabled: next
+                      }
+                    }
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className={`widget-reset-button${canResetGrainEnabled ? "" : " is-hidden"}`}
+                title="Reset Film Grain"
+                disabled={props.readOnly || !canResetGrainEnabled}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      grain: {
+                        enabled: DEFAULT_POST_PROCESSING.grain.enabled
+                      }
+                    }
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Grain Intensity</span>
+            <div className="inspector-common-control-wrap">
+              <NumberField
+                label=""
+                value={props.appState.scene.postProcessing.grain.intensity}
+                min={0}
+                step={0.005}
+                precision={3}
+                disabled={props.readOnly}
+                onChange={(next) => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      grain: {
+                        intensity: next
+                      }
+                    }
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className={`widget-reset-button${canResetGrainIntensity ? "" : " is-hidden"}`}
+                title="Reset Grain Intensity"
+                disabled={props.readOnly || !canResetGrainIntensity}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    postProcessing: {
+                      grain: {
+                        intensity: DEFAULT_POST_PROCESSING.grain.intensity
+                      }
+                    }
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
             <span className="inspector-common-label">Keyboard Camera Nav</span>
             <div className="inspector-common-control-wrap">
               <ToggleField
@@ -743,6 +1322,74 @@ function SceneInspectorView(props: SceneInspectorViewProps) {
             </div>
           </div>
         </div>
+      </section>
+      <section className="inspector-common-card">
+        <header>
+          <h4>Diagnostics</h4>
+        </header>
+        <div className="inspector-common-grid">
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Slow Frame Logging</span>
+            <div className="inspector-common-control-wrap">
+              <ToggleField
+                label=""
+                checked={props.appState.runtimeDebug.slowFrameDiagnosticsEnabled}
+                disabled={props.readOnly}
+                embedded
+                onChange={(next) => {
+                  props.kernel.store.getState().actions.setRuntimeDebugSettings({
+                    slowFrameDiagnosticsEnabled: next
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className={`widget-reset-button${canResetSlowFrameDiagnosticsEnabled ? "" : " is-hidden"}`}
+                title="Reset Slow Frame Logging"
+                disabled={props.readOnly || !canResetSlowFrameDiagnosticsEnabled}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setRuntimeDebugSettings({
+                    slowFrameDiagnosticsEnabled: DEFAULT_SLOW_FRAME_DIAGNOSTICS_ENABLED
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Slow Frame Threshold (ms)</span>
+            <div className="inspector-common-control-wrap">
+              <NumberField
+                label=""
+                value={props.appState.runtimeDebug.slowFrameDiagnosticsThresholdMs}
+                min={1}
+                step={1}
+                precision={0}
+                disabled={props.readOnly}
+                onChange={(next) => {
+                  props.kernel.store.getState().actions.setRuntimeDebugSettings({
+                    slowFrameDiagnosticsThresholdMs: next
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className={`widget-reset-button${canResetSlowFrameDiagnosticsThreshold ? "" : " is-hidden"}`}
+                title="Reset Slow Frame Threshold"
+                disabled={props.readOnly || !canResetSlowFrameDiagnosticsThreshold}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setRuntimeDebugSettings({
+                    slowFrameDiagnosticsThresholdMs: DEFAULT_SLOW_FRAME_DIAGNOSTICS_THRESHOLD_MS
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+        </div>
+        <p className="panel-empty">Slow frames are logged to the app console when enabled. Browser devtools stay quiet by default.</p>
       </section>
       <StatsBlock
         title="Status"
@@ -941,12 +1588,24 @@ export function InspectorPane() {
       return [];
     }
     if (actorSelection.length === 1) {
-      return getParameterDefinitions(first, actorDescriptors).filter((definition) =>
-        isDefinitionVisibleForActor(definition, first)
+      const firstDefinitions = getParameterDefinitions(first, actorDescriptors);
+      return firstDefinitions.filter((definition) =>
+        isDefinitionVisibleForActor(definition, first, firstDefinitions)
       );
     }
     return commonDefinitionsForGroup(actorSelection, actorDescriptors);
   }, [actorSelection, actorDescriptors]);
+  const hasBeamShaderGroup = isBeamEmitterSelection(actorSelection) && definitions.some(isBeamShaderDefinition);
+  const beamTypeDefinition = definitions.find((definition) => definition.key === "beamType");
+  const beamTypeValues = beamTypeDefinition ? actorSelection.map((actor) => bindingValueFor(beamTypeDefinition, actor)) : [];
+  const beamShaderGroupSummary =
+    beamTypeValues.length === 0
+      ? undefined
+      : isMixedValue(beamTypeValues)
+        ? "Mixed"
+        : typeof beamTypeValues[0] === "string"
+          ? beamTypeValues[0]
+          : undefined;
   const componentDefinitions = useMemo(() => {
     const first = componentSelection[0];
     if (!first) {
@@ -2277,9 +2936,24 @@ export function InspectorPane() {
         });
       })()}
       {inspectorView.kind === "actor-root" && definitions.length === 0 ? <div className="inspector-empty">No common editable params in current selection</div> : null}
+      {inspectorView.kind === "actor-root" && hasBeamShaderGroup ? (
+        <DrillInRow
+          label={BEAM_SHADER_GROUP_LABEL}
+          summary={beamShaderGroupSummary}
+          onClick={() => setInspectorView({ kind: "param-group", paramKey: BEAM_SHADER_GROUP_KEY, paramLabel: BEAM_SHADER_GROUP_LABEL, fromComponentId: null })}
+        />
+      ) : null}
       {definitions.map((definition) => {
         if (inspectorView.kind === "component") return null;
-        if (inspectorView.kind === "param-group" && definition.key !== inspectorView.paramKey) return null;
+        if (inspectorView.kind === "param-group") {
+          if (inspectorView.paramKey === BEAM_SHADER_GROUP_KEY) {
+            if (!isBeamShaderDefinition(definition)) return null;
+          } else if (definition.key !== inspectorView.paramKey) {
+            return null;
+          }
+        } else if (hasBeamShaderGroup && isBeamShaderDefinition(definition)) {
+          return null;
+        }
         const values = actorSelection.map((actor) => bindingValueFor(definition, actor));
         const mixed = isMixedValue(values);
         const current = values[0] ?? defaultValueForDefinition(definition);
@@ -2402,6 +3076,7 @@ export function InspectorPane() {
             <MaterialRefField
               key={definition.key}
               label={definition.label}
+              description={definition.description}
               value={typeof current === "string" ? current : ""}
               onChange={(next) => {
                 updateSelectedActorParams(definition.key, next ?? null);

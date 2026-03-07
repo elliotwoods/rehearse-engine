@@ -15,6 +15,10 @@ import type {
   Material,
   ParameterValues,
   RenderEngine,
+  RuntimeDebugState,
+  SceneFramePacingSettings,
+  ScenePostProcessingSettings,
+  SceneToneMappingMode,
   SceneStats,
   SelectionEntry,
   TimeSpeedPreset
@@ -42,12 +46,23 @@ export interface AppActions {
   setSnapshotName(name: string): void;
   setSceneBackgroundColor(color: string): void;
   setSceneRenderSettings(
-    settings: Partial<{
-      renderEngine: RenderEngine;
-      antialiasing: boolean;
-      cameraKeyboardNavigation: boolean;
-      cameraNavigationSpeed: number;
-    }>
+      settings: Partial<{
+        renderEngine: RenderEngine;
+        antialiasing: boolean;
+        framePacing: Partial<SceneFramePacingSettings>;
+        tonemapping: Partial<{
+          mode: SceneToneMappingMode;
+          dither: boolean;
+        }>;
+        postProcessing: Partial<{
+          bloom: Partial<ScenePostProcessingSettings["bloom"]>;
+          vignette: Partial<ScenePostProcessingSettings["vignette"]>;
+          chromaticAberration: Partial<ScenePostProcessingSettings["chromaticAberration"]>;
+          grain: Partial<ScenePostProcessingSettings["grain"]>;
+        }>;
+        cameraKeyboardNavigation: boolean;
+        cameraNavigationSpeed: number;
+      }>
   ): void;
   createActor(input: {
     actorType: ActorNode["actorType"];
@@ -80,6 +95,7 @@ export interface AppActions {
   setElapsedSimSeconds(seconds: number): void;
   applyCameraPreset(preset: CameraPreset): void;
   setCameraState(camera: Partial<AppState["camera"]>, markDirty?: boolean): void;
+  setRuntimeDebugSettings(settings: Partial<RuntimeDebugState>): void;
   saveCameraBookmark(name: string): void;
   loadCameraBookmark(id: string): void;
   removeCameraBookmark(id: string): void;
@@ -382,6 +398,72 @@ export function createAppStore(mode: AppMode): AppStoreApi {
             if (typeof settings.antialiasing === "boolean") {
               draft.scene.antialiasing = settings.antialiasing;
             }
+            if (settings.framePacing) {
+              if (settings.framePacing.mode) {
+                draft.scene.framePacing.mode = settings.framePacing.mode;
+              }
+              if (typeof settings.framePacing.targetFps === "number" && Number.isFinite(settings.framePacing.targetFps)) {
+                draft.scene.framePacing.targetFps = Math.max(1, Math.round(settings.framePacing.targetFps));
+              }
+            }
+            if (settings.tonemapping) {
+              if (settings.tonemapping.mode) {
+                draft.scene.tonemapping.mode = settings.tonemapping.mode;
+              }
+              if (typeof settings.tonemapping.dither === "boolean") {
+                draft.scene.tonemapping.dither = settings.tonemapping.dither;
+              }
+            }
+            if (settings.postProcessing) {
+              if (settings.postProcessing.bloom) {
+                const bloom = settings.postProcessing.bloom;
+                if (typeof bloom.enabled === "boolean") {
+                  draft.scene.postProcessing.bloom.enabled = bloom.enabled;
+                }
+                if (typeof bloom.strength === "number" && Number.isFinite(bloom.strength)) {
+                  draft.scene.postProcessing.bloom.strength = Math.max(0, bloom.strength);
+                }
+                if (typeof bloom.radius === "number" && Number.isFinite(bloom.radius)) {
+                  draft.scene.postProcessing.bloom.radius = Math.max(0, bloom.radius);
+                }
+                if (typeof bloom.threshold === "number" && Number.isFinite(bloom.threshold)) {
+                  draft.scene.postProcessing.bloom.threshold = Math.max(0, bloom.threshold);
+                }
+              }
+              if (settings.postProcessing.vignette) {
+                const vignette = settings.postProcessing.vignette;
+                if (typeof vignette.enabled === "boolean") {
+                  draft.scene.postProcessing.vignette.enabled = vignette.enabled;
+                }
+                if (typeof vignette.offset === "number" && Number.isFinite(vignette.offset)) {
+                  draft.scene.postProcessing.vignette.offset = Math.max(0, vignette.offset);
+                }
+                if (typeof vignette.darkness === "number" && Number.isFinite(vignette.darkness)) {
+                  draft.scene.postProcessing.vignette.darkness = Math.max(0, vignette.darkness);
+                }
+              }
+              if (settings.postProcessing.chromaticAberration) {
+                const chromaticAberration = settings.postProcessing.chromaticAberration;
+                if (typeof chromaticAberration.enabled === "boolean") {
+                  draft.scene.postProcessing.chromaticAberration.enabled = chromaticAberration.enabled;
+                }
+                if (
+                  typeof chromaticAberration.offset === "number" &&
+                  Number.isFinite(chromaticAberration.offset)
+                ) {
+                  draft.scene.postProcessing.chromaticAberration.offset = Math.max(0, chromaticAberration.offset);
+                }
+              }
+              if (settings.postProcessing.grain) {
+                const grain = settings.postProcessing.grain;
+                if (typeof grain.enabled === "boolean") {
+                  draft.scene.postProcessing.grain.enabled = grain.enabled;
+                }
+                if (typeof grain.intensity === "number" && Number.isFinite(grain.intensity)) {
+                  draft.scene.postProcessing.grain.intensity = Math.max(0, grain.intensity);
+                }
+              }
+            }
             if (typeof settings.cameraKeyboardNavigation === "boolean") {
               draft.scene.cameraKeyboardNavigation = settings.cameraKeyboardNavigation;
             }
@@ -674,6 +756,21 @@ export function createAppStore(mode: AppMode): AppStoreApi {
             draft.camera = { ...draft.camera, ...camera };
             if (markDirty) {
               draft.dirty = true;
+            }
+          })
+        });
+      },
+      setRuntimeDebugSettings(settings) {
+        set({
+          state: produce(get().state, (draft) => {
+            if (typeof settings.slowFrameDiagnosticsEnabled === "boolean") {
+              draft.runtimeDebug.slowFrameDiagnosticsEnabled = settings.slowFrameDiagnosticsEnabled;
+            }
+            if (
+              typeof settings.slowFrameDiagnosticsThresholdMs === "number" &&
+              Number.isFinite(settings.slowFrameDiagnosticsThresholdMs)
+            ) {
+              draft.runtimeDebug.slowFrameDiagnosticsThresholdMs = Math.max(1, settings.slowFrameDiagnosticsThresholdMs);
             }
           })
         });

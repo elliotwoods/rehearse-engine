@@ -1,13 +1,20 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import type { AppKernel } from "@/app/kernel";
 import { estimateProjectPayloadBytes } from "@/core/project/projectSize";
+import type { SceneFramePacingSettings } from "@/core/types";
 import { ActorTransformController, type ActorTransformMode } from "@/render/actorTransformController";
 import { CurveEditController } from "@/render/curveEditController";
 import { incompatibilityReason } from "@/render/engineCompatibility";
+import { FramePacer } from "@/render/framePacing";
 import { SceneController } from "@/render/sceneController";
+import { reportSlowFrame } from "@/render/slowFrameDiagnostics";
 import { SparkSplatController } from "@/render/sparkSplatController";
 import { countActorStats, summarizeMemory, type RenderStatsSample } from "@/render/stats";
+import { SceneOutputPass, threeToneMappingForMode } from "@/render/tonemapping";
 
 const FAST_STATS_INTERVAL_MS = 500;
 const SLOW_STATS_INTERVAL_MS = 2000;
@@ -26,6 +33,10 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 export class WebGlViewport {
   private readonly renderer: any;
+  private readonly composer: EffectComposer;
+  private readonly renderPass: RenderPass;
+  private readonly bloomPass: UnrealBloomPass;
+  private readonly sceneOutputPass: SceneOutputPass;
   private readonly perspectiveCamera: any;
   private readonly orthographicCamera: any;
   private activeCamera: any;
@@ -54,6 +65,7 @@ export class WebGlViewport {
   private readonly wheelZoomSpeed = 0.12;
   private readonly navigationKeysDown = new Set<string>();
   private navigationLastAtMs = performance.now();
+  private readonly framePacer: FramePacer;
 
   public constructor(
     private readonly kernel: AppKernel,
@@ -62,6 +74,7 @@ export class WebGlViewport {
   ) {
     this.sceneController = new SceneController(kernel);
     this.sparkSplatController = new SparkSplatController(kernel, this.sceneController);
+    this.framePacer = new FramePacer(kernel.store.getState().state.scene.framePacing);
     this.renderer = new THREE.WebGLRenderer({ antialias: options.antialias, alpha: false });
     this.applyRenderScale(this.mountEl.clientWidth, this.mountEl.clientHeight);
     this.renderer.setSize(this.mountEl.clientWidth, this.mountEl.clientHeight);
@@ -88,6 +101,19 @@ export class WebGlViewport {
     this.orthographicCamera.position.set(8, 8, 8);
 
     this.activeCamera = this.perspectiveCamera;
+    this.composer = new EffectComposer(this.renderer);
+    this.renderPass = new RenderPass(this.sceneController.scene, this.activeCamera);
+    this.bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(this.mountEl.clientWidth, this.mountEl.clientHeight),
+      0.6,
+      0.2,
+      0.85
+    );
+    this.sceneOutputPass = new SceneOutputPass();
+    this.sceneOutputPass.renderToScreen = true;
+    this.composer.addPass(this.renderPass);
+    this.composer.addPass(this.bloomPass);
+    this.composer.addPass(this.sceneOutputPass);
     this.controls = new OrbitControls(this.activeCamera, this.renderer.domElement);
     this.controls.enableDamping = true;
     (this.controls as any).enableZoom = false;
@@ -156,6 +182,8 @@ export class WebGlViewport {
     this.actorTransformController.dispose();
     this.curveEditController.dispose();
     this.sparkSplatController.dispose();
+    this.bloomPass.dispose();
+    this.sceneOutputPass.dispose();
     this.clearNativeGaussianConflictStatus();
     this.renderer.dispose();
     if (this.mountEl.contains(this.renderer.domElement)) {
@@ -167,7 +195,15 @@ export class WebGlViewport {
     this.actorTransformController.setMode(mode);
   }
 
-  private animate = (): void => {
+  public setActorTransformSnappingEnabled(enabled: boolean): void {
+    this.actorTransformController.setSnappingEnabled(enabled);
+  }
+
+  public setFramePacing(settings: SceneFramePacingSettings): void {
+    this.framePacer.setSettings(settings);
+  }
+
+  private animate = (nowMs = performance.now()): void => {
     if (this.disposed) {
       return;
     }
@@ -175,7 +211,10 @@ export class WebGlViewport {
     if (this.renderInFlight) {
       return;
     }
-    this.kernel.clock.tick(performance.now(), this.kernel.store);
+    if (!this.framePacer.shouldRender(nowMs)) {
+      return;
+    }
+    this.kernel.clock.tick(nowMs, this.kernel.store);
     this.renderInFlight = true;
     void this.renderFrame().finally(() => {
       this.renderInFlight = false;
@@ -198,18 +237,26 @@ export class WebGlViewport {
     this.controls.update();
     this.syncCameraToState();
     const _rf3 = performance.now();
-    this.renderer.render(this.sceneController.scene, this.activeCamera);
+    const tonemapping = this.kernel.store.getState().state.scene.tonemapping;
+    const postProcessing = this.kernel.store.getState().state.scene.postProcessing;
+    this.renderer.toneMapping = threeToneMappingForMode(tonemapping.mode);
+    this.renderPass.camera = this.activeCamera;
+    this.bloomPass.enabled = postProcessing.bloom.enabled;
+    this.bloomPass.strength = postProcessing.bloom.strength;
+    this.bloomPass.radius = postProcessing.bloom.radius;
+    this.bloomPass.threshold = postProcessing.bloom.threshold;
+    this.sceneOutputPass.setDitherEnabled(tonemapping.dither);
+    this.sceneOutputPass.setPostProcessingSettings(postProcessing);
+    this.composer.render();
     const _rf4 = performance.now();
-    const _rfTotal = _rf4 - _rf0;
-    if (_rfTotal > 100) {
-      console.warn(
-        "[simularca] renderFrame slow:", _rfTotal.toFixed(0), "ms |",
-        "sceneSync:", (_rf1 - _rf0).toFixed(0), "ms |",
-        "sparkSync:", (_rf2 - _rf1).toFixed(0), "ms |",
-        "controls:", (_rf3 - _rf2).toFixed(0), "ms |",
-        "render:", (_rf4 - _rf3).toFixed(0), "ms"
-      );
-    }
+    reportSlowFrame(this.kernel, {
+      backend: "webgl2",
+      totalMs: _rf4 - _rf0,
+      sceneSyncMs: _rf1 - _rf0,
+      sparkSyncMs: _rf2 - _rf1,
+      controlsMs: _rf3 - _rf2,
+      renderMs: _rf4 - _rf3
+    });
     this.updateStats();
   }
 
@@ -333,6 +380,8 @@ export class WebGlViewport {
     this.mountEl.style.height = `${height}px`;
     this.applyRenderScale(width, height);
     this.renderer.setSize(width, height);
+    this.composer.setSize(width, height);
+    this.bloomPass.setSize(width, height);
     this.perspectiveCamera.aspect = width / height;
     this.perspectiveCamera.updateProjectionMatrix();
 

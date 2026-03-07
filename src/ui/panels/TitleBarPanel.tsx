@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faCircleInfo,
+  faClone,
   faFloppyDisk,
   faPenToSquare,
   faPlus,
@@ -162,6 +163,74 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
     kernel.store.getState().actions.setStatus(`${context}: ${message}`);
   };
 
+  const suggestProjectCopyName = (projectName: string): string =>
+    nextUntitledName(projectOptions, `${projectName}-copy`);
+
+  const handleProjectSaveAs = (sourceProjectName: string): void => {
+    void props
+      .requestTextInput({
+        title: "Save Project As",
+        label: "Project name",
+        initialValue: suggestProjectCopyName(sourceProjectName),
+        confirmLabel: "Save As"
+      })
+      .then(async (nextName) => {
+        if (!nextName) {
+          return;
+        }
+        try {
+          await kernel.projectService.saveProjectAs(nextName);
+          refreshProjects();
+          refreshSnapshots();
+          refreshDefaults();
+          setMenuOpen(false);
+        } catch (error) {
+          reportActionError("Unable to save project as", error);
+        }
+      });
+  };
+
+  const handleDuplicateProject = (sourceProjectName: string): void => {
+    void props
+      .requestTextInput({
+        title: "Duplicate Project",
+        label: "Project name",
+        initialValue: suggestProjectCopyName(sourceProjectName),
+        confirmLabel: "Duplicate"
+      })
+      .then(async (nextName) => {
+        if (!nextName) {
+          return;
+        }
+        try {
+          await kernel.projectService.duplicateProject(sourceProjectName, nextName);
+          refreshProjects();
+          refreshDefaults();
+        } catch (error) {
+          reportActionError("Unable to duplicate project", error);
+        }
+      });
+  };
+
+  const handleDeleteProject = (projectName: string): void => {
+    const activeWarning =
+      projectName === state.activeProjectName && state.dirty ? "\n\nUnsaved changes in the current project will be lost." : "";
+    const confirmed = window.confirm(`Delete project "${projectName}"?${activeWarning}`);
+    if (!confirmed) {
+      return;
+    }
+    void kernel.projectService
+      .deleteProject(projectName)
+      .then(() => {
+        refreshProjects();
+        refreshSnapshots();
+        refreshDefaults();
+      })
+      .catch((error) => {
+        reportActionError("Unable to delete project", error);
+      });
+  };
+
   const cancelSnapshotEdit = (): void => {
     setEditingSnapshot(null);
   };
@@ -302,27 +371,68 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
               <div className="titlebar-project-section">
                 <label>Active Project</label>
                 <div className="titlebar-project-list" role="listbox" aria-label="Projects">
-                  {projectOptions.map((projectName) => (
-                    <div
-                      key={projectName}
-                      className={`titlebar-project-list-item${projectName === state.activeProjectName ? " is-active" : ""}`}
-                    >
-                      <button
-                        type="button"
-                        className="titlebar-project-list-main"
-                        aria-selected={projectName === state.activeProjectName}
-                        onClick={() => {
-                          setMenuOpen(false);
-                          void kernel.projectService.loadProject(projectName, "main");
-                        }}
+                  {projectOptions.map((projectName) => {
+                    const isActive = projectName === state.activeProjectName;
+                    return (
+                      <div
+                        key={projectName}
+                        className={`titlebar-project-list-item${isActive ? " is-active" : ""}`}
                       >
-                        <span className="titlebar-project-list-name">{projectName}</span>
-                      </button>
-                      <span className="titlebar-project-list-indicator" aria-hidden="true">
-                        {isDefaultProject(projectName) ? <FontAwesomeIcon icon={faStar} /> : null}
-                      </span>
-                    </div>
-                  ))}
+                        <button
+                          type="button"
+                          className="titlebar-project-list-main"
+                          aria-selected={isActive}
+                          onClick={() => {
+                            setMenuOpen(false);
+                            void kernel.projectService.loadProject(projectName, "main");
+                          }}
+                        >
+                          <span className="titlebar-project-list-name">{projectName}</span>
+                        </button>
+                        <div className="titlebar-project-list-side">
+                          {!isReadOnly ? (
+                            <div className="titlebar-project-actions-inline">
+                              <button
+                                type="button"
+                                className={`titlebar-project-action${isDefaultProject(projectName) ? " is-active" : ""}`}
+                                title="Set as default project"
+                                onClick={() => {
+                                  void kernel.projectService.setDefaultSnapshot("main", projectName).then(() => {
+                                    refreshDefaults();
+                                  });
+                                }}
+                              >
+                                <FontAwesomeIcon icon={faStar} />
+                              </button>
+                              <button
+                                type="button"
+                                className="titlebar-project-action"
+                                title="Duplicate project"
+                                onClick={() => {
+                                  handleDuplicateProject(projectName);
+                                }}
+                              >
+                                <FontAwesomeIcon icon={faClone} />
+                              </button>
+                              <button
+                                type="button"
+                                className="titlebar-project-action"
+                                title="Delete project"
+                                onClick={() => {
+                                  handleDeleteProject(projectName);
+                                }}
+                              >
+                                <FontAwesomeIcon icon={faTrash} />
+                              </button>
+                            </div>
+                          ) : null}
+                          <span className="titlebar-project-list-indicator" aria-hidden="true">
+                            {isDefaultProject(projectName) ? <FontAwesomeIcon icon={faStar} /> : null}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
 
                 <div className="titlebar-project-actions">
@@ -355,6 +465,16 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
                     }}
                   >
                     <FontAwesomeIcon icon={faPlus} />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isReadOnly}
+                    title="Save project as"
+                    onClick={() => {
+                      handleProjectSaveAs(state.activeProjectName);
+                    }}
+                  >
+                    <FontAwesomeIcon icon={faClone} />
                   </button>
                   <button
                     type="button"

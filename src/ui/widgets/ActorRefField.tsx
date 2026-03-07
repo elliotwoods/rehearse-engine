@@ -1,15 +1,11 @@
 import { InspectorFieldRow } from "@/ui/widgets/InspectorFieldRow";
-
-interface ActorRefOption {
-  id: string;
-  label: string;
-}
+import { ReferencePicker, type ReferencePickerOption } from "@/ui/widgets/ReferencePicker";
 
 interface ActorRefFieldProps {
   label: string;
   description?: string;
   value: string;
-  options: ActorRefOption[];
+  options: ReferencePickerOption[];
   mixed?: boolean;
   disabled?: boolean;
   showReset?: boolean;
@@ -18,7 +14,7 @@ interface ActorRefFieldProps {
 }
 
 export function ActorRefField(props: ActorRefFieldProps) {
-  const selectedValue = props.mixed ? "" : props.value;
+  const selectedValue = props.mixed ? [] : props.value ? [props.value] : [];
 
   return (
     <InspectorFieldRow
@@ -28,22 +24,21 @@ export function ActorRefField(props: ActorRefFieldProps) {
       onReset={props.onReset}
       resetDisabled={props.disabled}
     >
-      <select
-        className="widget-select"
-        value={selectedValue}
+      <ReferencePicker
+        selectionMode="single"
+        selectedIds={selectedValue}
+        options={props.options}
+        placeholder="(none)"
         disabled={props.disabled}
-        onChange={(event) => {
-          props.onChange(event.target.value);
+        dropLabel="Drop actor here"
+        canDrop={!props.disabled}
+        onDropId={(nextId) => {
+          props.onChange(nextId);
         }}
-      >
-        {props.mixed ? <option value="">Mixed...</option> : null}
-        <option value="">(none)</option>
-        {props.options.map((option) => (
-          <option key={option.id} value={option.id}>
-            {option.label}
-          </option>
-        ))}
-      </select>
+        onChange={(nextIds) => {
+          props.onChange(nextIds[0] ?? "");
+        }}
+      />
     </InspectorFieldRow>
   );
 }

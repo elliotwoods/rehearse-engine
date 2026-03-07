@@ -98,6 +98,8 @@ declare module "three/examples/jsm/loaders/OBJLoader.js" {
 declare module "three/webgpu" {
   export class WebGPURenderer {
     public domElement: HTMLCanvasElement;
+    public toneMapping: number;
+    public outputColorSpace: string;
     public info: {
       render: {
         calls: number;
@@ -105,9 +107,20 @@ declare module "three/webgpu" {
       };
     };
     public constructor(parameters?: Record<string, unknown>);
+    public init?(): Promise<void>;
     public setPixelRatio(value: number): void;
     public setSize(width: number, height: number): void;
+    public renderAsync?(scene: any, camera: any): Promise<void>;
     public render(scene: any, camera: any): void;
+    public dispose(): void;
+  }
+  export class PostProcessing {
+    public outputNode: any;
+    public outputColorTransform: boolean;
+    public needsUpdate: boolean;
+    public constructor(renderer: WebGPURenderer, outputNode?: any);
+    public render(): void;
+    public renderAsync?(): Promise<void>;
     public dispose(): void;
   }
   export class MeshBasicNodeMaterial {
@@ -141,8 +154,17 @@ declare module "three/webgpu" {
 }
 
 declare module "three/tsl" {
+  export function clamp(value: any, min?: any, max?: any): any;
+  export function dot(a: any, b: any): any;
+  export function float(value?: any): any;
+  export function fract(value: any): any;
   export function instancedBufferAttribute(attribute: any, type?: string): any;
+  export function pass(scene: any, camera: any, options?: Record<string, unknown>): any;
+  export function renderOutput(color: any, toneMapping?: any, outputColorSpace?: any): any;
+  export const screenCoordinate: any;
   export function texture(value: any, uvNode?: any, levelNode?: any): any;
+  export function vec2(x?: any, y?: any): any;
+  export function vec3(x?: any, y?: any, z?: any): any;
   export function vec4(x?: any, y?: any, z?: any, w?: any): any;
 }
 

@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faMagnet, faRotateRight, faUpDownLeftRight } from "@fortawesome/free-solid-svg-icons";
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
+import type { SceneFramePacingSettings } from "@/core/types";
 import type { ActorTransformMode } from "@/render/actorTransformController";
 import { WebGpuViewport } from "@/render/webgpuRenderer";
 import { WebGlViewport } from "@/render/webglRenderer";
@@ -9,16 +12,30 @@ interface ViewportRuntime {
   start(): Promise<void>;
   stop(): void;
   setActorTransformMode(mode: ActorTransformMode): void;
+  setActorTransformSnappingEnabled(enabled: boolean): void;
+  setFramePacing(settings: SceneFramePacingSettings): void;
 }
 
 interface ViewportPanelProps {
   suspended?: boolean;
 }
 
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  if (target.isContentEditable) {
+    return true;
+  }
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
 export function ViewportPanel(props: ViewportPanelProps) {
   const kernel = useKernel();
   const backend = useAppStore((store) => store.state.scene.renderEngine);
   const antialiasing = useAppStore((store) => store.state.scene.antialiasing);
+  const framePacing = useAppStore((store) => store.state.scene.framePacing);
   // Returns a stable string so Zustand's reference equality check avoids spurious re-renders.
   const loadingBannerText = useAppStore((store) => {
     const statuses = store.state.actorStatusByActorId;
@@ -40,6 +57,9 @@ export function ViewportPanel(props: ViewportPanelProps) {
   const [viewportSize, setViewportSize] = useState({ width: 0, height: 0 });
   const [showResolutionOverlay, setShowResolutionOverlay] = useState(false);
   const [actorTransformMode, setActorTransformMode] = useState<ActorTransformMode>("translate");
+  const [actorTransformSnapToggled, setActorTransformSnapToggled] = useState(true);
+  const [actorTransformSnapShiftOverride, setActorTransformSnapShiftOverride] = useState(false);
+  const actorTransformSnappingEnabled = actorTransformSnapToggled !== actorTransformSnapShiftOverride;
 
   useEffect(() => {
     if (props.suspended) {
@@ -53,6 +73,8 @@ export function ViewportPanel(props: ViewportPanelProps) {
         ? new WebGlViewport(kernel, hostRef.current, { antialias: antialiasing })
         : new WebGpuViewport(kernel, hostRef.current, { antialias: antialiasing });
     viewport.setActorTransformMode(actorTransformMode);
+    viewport.setActorTransformSnappingEnabled(actorTransformSnappingEnabled);
+    viewport.setFramePacing(framePacing);
     viewportRef.current = viewport;
     let cancelled = false;
     void viewport.start().catch((error) => {
@@ -75,6 +97,51 @@ export function ViewportPanel(props: ViewportPanelProps) {
   useEffect(() => {
     viewportRef.current?.setActorTransformMode(actorTransformMode);
   }, [actorTransformMode]);
+
+  useEffect(() => {
+    viewportRef.current?.setActorTransformSnappingEnabled(actorTransformSnappingEnabled);
+  }, [actorTransformSnappingEnabled]);
+
+  useEffect(() => {
+    viewportRef.current?.setFramePacing(framePacing);
+  }, [framePacing]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Shift") {
+        setActorTransformSnapShiftOverride(true);
+        return;
+      }
+      if (event.altKey || event.ctrlKey || event.metaKey || isEditableTarget(event.target)) {
+        return;
+      }
+      if (event.key === "g" || event.key === "G") {
+        event.preventDefault();
+        setActorTransformMode("translate");
+        return;
+      }
+      if (event.key === "r" || event.key === "R") {
+        event.preventDefault();
+        setActorTransformMode("rotate");
+      }
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key === "Shift") {
+        setActorTransformSnapShiftOverride(false);
+      }
+    };
+    const onBlur = () => {
+      setActorTransformSnapShiftOverride(false);
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    window.addEventListener("keyup", onKeyUp, { capture: true });
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("keyup", onKeyUp, true);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
 
   useEffect(() => {
     if (!hostRef.current) {
@@ -158,17 +225,28 @@ export function ViewportPanel(props: ViewportPanelProps) {
             type="button"
             className={`viewport-transform-button${actorTransformMode === "translate" ? " is-active" : ""}`}
             onClick={() => setActorTransformMode("translate")}
-            title="Translate selected actor"
+            title="Translate selected actor (G)"
+            aria-label="Translate selected actor (G)"
           >
-            Move
+            <FontAwesomeIcon icon={faUpDownLeftRight} />
           </button>
           <button
             type="button"
             className={`viewport-transform-button${actorTransformMode === "rotate" ? " is-active" : ""}`}
             onClick={() => setActorTransformMode("rotate")}
-            title="Rotate selected actor"
+            title="Rotate selected actor (R)"
+            aria-label="Rotate selected actor (R)"
           >
-            Rotate
+            <FontAwesomeIcon icon={faRotateRight} />
+          </button>
+          <button
+            type="button"
+            className={`viewport-transform-button${actorTransformSnapToggled ? " is-active" : ""}`}
+            onClick={() => setActorTransformSnapToggled((value) => !value)}
+            title={`Transform snapping ${actorTransformSnapToggled ? "on" : "off"} (hold Shift to temporarily ${actorTransformSnapToggled ? "disable" : "enable"})`}
+            aria-label={`Transform snapping ${actorTransformSnapToggled ? "on" : "off"}`}
+          >
+            <FontAwesomeIcon icon={faMagnet} />
           </button>
         </div>
       ) : null}

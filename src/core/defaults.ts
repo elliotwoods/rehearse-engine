@@ -1,5 +1,14 @@
 import { createId } from "./ids";
-import type { ActorNode, AppState, CameraState, SceneState, TimeState, Material } from "./types";
+import type {
+  ActorNode,
+  AppState,
+  CameraState,
+  Material,
+  SceneFramePacingSettings,
+  ScenePostProcessingSettings,
+  SceneState,
+  TimeState
+} from "./types";
 
 export function createInitialMaterials(): Record<string, Material> {
   const materials: Material[] = [
@@ -154,6 +163,33 @@ export const DEFAULT_TIME: TimeState = {
   fixedStepSeconds: 1 / 60,
   elapsedSimSeconds: 0
 };
+export const DEFAULT_SLOW_FRAME_DIAGNOSTICS_ENABLED = false;
+export const DEFAULT_SLOW_FRAME_DIAGNOSTICS_THRESHOLD_MS = 100;
+export const DEFAULT_FRAME_PACING: SceneFramePacingSettings = {
+  mode: "vsync",
+  targetFps: 60
+};
+export const DEFAULT_POST_PROCESSING: ScenePostProcessingSettings = {
+  bloom: {
+    enabled: false,
+    strength: 0.6,
+    radius: 0.2,
+    threshold: 0.85
+  },
+  vignette: {
+    enabled: false,
+    offset: 1,
+    darkness: 0.35
+  },
+  chromaticAberration: {
+    enabled: false,
+    offset: 0.0015
+  },
+  grain: {
+    enabled: false,
+    intensity: 0.02
+  }
+};
 
 export function createDefaultScene(): {
   scene: SceneState;
@@ -169,6 +205,12 @@ export function createDefaultScene(): {
     backgroundColor: "#070b12",
     renderEngine: "webgl2",
     antialiasing: true,
+    framePacing: structuredClone(DEFAULT_FRAME_PACING),
+    tonemapping: {
+      mode: "aces",
+      dither: true
+    },
+    postProcessing: structuredClone(DEFAULT_POST_PROCESSING),
     cameraKeyboardNavigation: true,
     cameraNavigationSpeed: 6
   };
@@ -211,6 +253,10 @@ export function createInitialState(mode: AppState["mode"], projectName = "demo",
       cameraDistance: 0,
       cameraControlsEnabled: true,
       cameraZoomEnabled: true
+    },
+    runtimeDebug: {
+      slowFrameDiagnosticsEnabled: DEFAULT_SLOW_FRAME_DIAGNOSTICS_ENABLED,
+      slowFrameDiagnosticsThresholdMs: DEFAULT_SLOW_FRAME_DIAGNOSTICS_THRESHOLD_MS
     },
     dirty: false,
     statusMessage: "Ready",

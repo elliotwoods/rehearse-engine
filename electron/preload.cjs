@@ -43,6 +43,7 @@ const api = {
   loadProjectSnapshot: (args) => ipcRenderer.invoke("project:load-snapshot", args),
   saveProjectSnapshot: (args) => ipcRenderer.invoke("project:save-snapshot", args),
   cloneProject: (args) => ipcRenderer.invoke("project:clone", args),
+  deleteProject: (args) => ipcRenderer.invoke("project:delete", args),
   renameProject: (args) => ipcRenderer.invoke("project:rename", args),
   duplicateSnapshot: (args) => ipcRenderer.invoke("snapshot:duplicate", args),
   renameSnapshot: (args) => ipcRenderer.invoke("snapshot:rename", args),

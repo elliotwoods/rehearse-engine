@@ -1,14 +1,19 @@
 import * as THREE from "three";
-import { WebGPURenderer } from "three/webgpu";
+import { PostProcessing, WebGPURenderer } from "three/webgpu";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { pass } from "three/tsl";
 import type { AppKernel } from "@/app/kernel";
 import { estimateProjectPayloadBytes } from "@/core/project/projectSize";
+import type { SceneFramePacingSettings } from "@/core/types";
 import { ActorTransformController, type ActorTransformMode } from "./actorTransformController";
 import { SceneController } from "./sceneController";
 import { incompatibilityReason } from "./engineCompatibility";
+import { FramePacer } from "./framePacing";
 import { clearSplatQueryProvider, registerSplatQueryProvider } from "./splatQueryRegistry";
 import { countActorStats, summarizeMemory, type RenderStatsSample } from "./stats";
 import { CurveEditController } from "./curveEditController";
+import { reportSlowFrame } from "./slowFrameDiagnostics";
+import { buildWebGpuToneMappedOutputNode, threeToneMappingForMode } from "./tonemapping";
 
 const FAST_STATS_INTERVAL_MS = 500;
 const SLOW_STATS_INTERVAL_MS = 2000;
@@ -27,6 +32,8 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 export class WebGpuViewport {
   private readonly renderer: WebGPURenderer;
+  private readonly postProcessing: PostProcessing;
+  private readonly scenePass: any;
   private readonly perspectiveCamera: any;
   private readonly orthographicCamera: any;
   private activeCamera: any;
@@ -60,6 +67,8 @@ export class WebGpuViewport {
   private readonly wheelZoomSpeed = 0.12;
   private readonly navigationKeysDown = new Set<string>();
   private navigationLastAtMs = performance.now();
+  private lastOutputSignature = "";
+  private readonly framePacer: FramePacer;
   public constructor(
     private readonly kernel: AppKernel,
     private readonly mountEl: HTMLElement,
@@ -70,6 +79,7 @@ export class WebGpuViewport {
     }
 
     this.sceneController = new SceneController(kernel);
+    this.framePacer = new FramePacer(kernel.store.getState().state.scene.framePacing);
     this.renderer = new WebGPURenderer({ antialias: options.antialias, alpha: false });
     this.applyRenderScale(this.mountEl.clientWidth, this.mountEl.clientHeight);
     this.renderer.setSize(this.mountEl.clientWidth, this.mountEl.clientHeight);
@@ -96,6 +106,10 @@ export class WebGpuViewport {
     this.orthographicCamera.position.set(8, 8, 8);
 
     this.activeCamera = this.perspectiveCamera;
+    this.scenePass = pass(this.sceneController.scene, this.activeCamera);
+    this.postProcessing = new PostProcessing(this.renderer, this.scenePass);
+    this.postProcessing.outputColorTransform = false;
+    this.syncToneMappingOutput();
     this.controls = new OrbitControls(this.activeCamera, this.renderer.domElement);
     this.controls.enableDamping = true;
     (this.controls as any).enableZoom = false;
@@ -185,7 +199,15 @@ export class WebGpuViewport {
     this.actorTransformController.setMode(mode);
   }
 
-  private animate = (): void => {
+  public setActorTransformSnappingEnabled(enabled: boolean): void {
+    this.actorTransformController.setSnappingEnabled(enabled);
+  }
+
+  public setFramePacing(settings: SceneFramePacingSettings): void {
+    this.framePacer.setSettings(settings);
+  }
+
+  private animate = (nowMs = performance.now()): void => {
     if (this.disposed) {
       return;
     }
@@ -193,8 +215,20 @@ export class WebGpuViewport {
     if (!this.initialized || this.renderInFlight) {
       return;
     }
-    this.kernel.clock.tick(performance.now(), this.kernel.store);
-    void this.sceneController.syncFromState();
+    if (!this.framePacer.shouldRender(nowMs)) {
+      return;
+    }
+    this.kernel.clock.tick(nowMs, this.kernel.store);
+    this.renderInFlight = true;
+    void this.renderFrame().finally(() => {
+      this.renderInFlight = false;
+    });
+  };
+
+  private async renderFrame(): Promise<void> {
+    const _rf0 = performance.now();
+    await this.sceneController.syncFromState();
+    const _rf1 = performance.now();
     this.syncCameraState();
     this.applyKeyboardNavigation(performance.now());
     this.curveEditController.setCamera(this.activeCamera);
@@ -205,16 +239,24 @@ export class WebGpuViewport {
     this.enforceActorCompatibility("webgpu");
     this.updateGaussianDepthSortingIfNeeded();
     this.syncCameraToState();
-    this.renderInFlight = true;
+    this.syncToneMappingOutput();
+    const _rf2 = performance.now();
     const renderPromise =
-      typeof (this.renderer as any).renderAsync === "function"
-        ? (this.renderer as any).renderAsync(this.sceneController.scene, this.activeCamera)
-        : Promise.resolve((this.renderer as any).render(this.sceneController.scene, this.activeCamera));
-    void Promise.resolve(renderPromise).finally(() => {
-      this.renderInFlight = false;
+      typeof (this.postProcessing as any).renderAsync === "function"
+        ? (this.postProcessing as any).renderAsync()
+        : Promise.resolve((this.postProcessing as any).render());
+    await Promise.resolve(renderPromise);
+    const _rf3 = performance.now();
+    reportSlowFrame(this.kernel, {
+      backend: "webgpu",
+      totalMs: _rf3 - _rf0,
+      sceneSyncMs: _rf1 - _rf0,
+      sparkSyncMs: 0,
+      controlsMs: _rf2 - _rf1,
+      renderMs: _rf3 - _rf2
     });
     this.updateStats();
-  };
+  }
 
   private syncCameraState(): void {
     const cameraState = this.kernel.store.getState().state.camera;
@@ -607,6 +649,30 @@ export class WebGpuViewport {
     this.lastGaussianSortCameraQuaternion.copy(currentQuaternion);
     this.lastGaussianSortCameraPosition.copy(currentPosition);
     this.hasGaussianSortCameraState = true;
+  }
+
+  private syncToneMappingOutput(): void {
+    const tonemapping = this.kernel.store.getState().state.scene.tonemapping;
+    const postProcessing = this.kernel.store.getState().state.scene.postProcessing;
+    const signature = JSON.stringify({
+      mode: tonemapping.mode,
+      dither: tonemapping.dither,
+      postProcessing,
+      outputColorSpace: this.renderer.outputColorSpace
+    });
+    this.renderer.toneMapping = threeToneMappingForMode(tonemapping.mode);
+    this.scenePass.camera = this.activeCamera;
+    if (signature === this.lastOutputSignature) {
+      return;
+    }
+    this.lastOutputSignature = signature;
+    this.postProcessing.outputNode = buildWebGpuToneMappedOutputNode(
+      this.scenePass.getTextureNode("output"),
+      this.renderer.outputColorSpace,
+      tonemapping,
+      postProcessing
+    );
+    this.postProcessing.needsUpdate = true;
   }
 
   private onViewportWheel = (event: WheelEvent): void => {

@@ -92,6 +92,90 @@ const projectSnapshotSchema = z.object({
     backgroundColor: z.string().default("#070b12"),
     renderEngine: z.enum(["webgl2", "webgpu"]).default("webgl2"),
     antialiasing: z.boolean().default(true),
+    framePacing: z
+      .object({
+        mode: z.enum(["vsync", "fixed"]).default("vsync"),
+        targetFps: z.number().default(60)
+      })
+      .default({
+        mode: "vsync",
+        targetFps: 60
+      }),
+    tonemapping: z
+      .object({
+        mode: z.enum(["off", "aces"]).default("aces"),
+        dither: z.boolean().default(true)
+      })
+      .default({
+        mode: "aces",
+        dither: true
+      }),
+    postProcessing: z
+      .object({
+        bloom: z
+          .object({
+            enabled: z.boolean().default(false),
+            strength: z.number().default(0.6),
+            radius: z.number().default(0.2),
+            threshold: z.number().default(0.85)
+          })
+          .default({
+            enabled: false,
+            strength: 0.6,
+            radius: 0.2,
+            threshold: 0.85
+          }),
+        vignette: z
+          .object({
+            enabled: z.boolean().default(false),
+            offset: z.number().default(1),
+            darkness: z.number().default(0.35)
+          })
+          .default({
+            enabled: false,
+            offset: 1,
+            darkness: 0.35
+          }),
+        chromaticAberration: z
+          .object({
+            enabled: z.boolean().default(false),
+            offset: z.number().default(0.0015)
+          })
+          .default({
+            enabled: false,
+            offset: 0.0015
+          }),
+        grain: z
+          .object({
+            enabled: z.boolean().default(false),
+            intensity: z.number().default(0.02)
+          })
+          .default({
+            enabled: false,
+            intensity: 0.02
+          })
+      })
+      .default({
+        bloom: {
+          enabled: false,
+          strength: 0.6,
+          radius: 0.2,
+          threshold: 0.85
+        },
+        vignette: {
+          enabled: false,
+          offset: 1,
+          darkness: 0.35
+        },
+        chromaticAberration: {
+          enabled: false,
+          offset: 0.0015
+        },
+        grain: {
+          enabled: false,
+          intensity: 0.02
+        }
+      }),
     cameraKeyboardNavigation: z.boolean().default(true),
     cameraNavigationSpeed: z.number().default(6)
   }),

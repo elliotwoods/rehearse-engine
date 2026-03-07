@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, net, protocol, screen, type OpenDialogOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, net, protocol, screen, type OpenDialogOptions } from "electron";
 import { promises as fs } from "node:fs";
 import fsSync from "node:fs";
 import path from "node:path";
@@ -34,6 +34,7 @@ const DEFAULT_WINDOW_WIDTH = 1680;
 const DEFAULT_WINDOW_HEIGHT = 960;
 const MIN_WINDOW_WIDTH = 1200;
 const MIN_WINDOW_HEIGHT = 720;
+const APP_ICON_FILE_NAME = "icon.png";
 const renderPipeJobs = new Map<string, { child: ReturnType<typeof spawn>; encoder: string; outputPath: string }>();
 const renderTempJobs = new Map<
   string,
@@ -66,6 +67,27 @@ function getRepoRoot(): string {
 
 function getLogsRoot(): string {
   return path.join(getRepoRoot(), "logs");
+}
+
+function getAppIconPath(): string {
+  return path.join(getRepoRoot(), APP_ICON_FILE_NAME);
+}
+
+function configureAppIcon(): string | undefined {
+  const iconPath = getAppIconPath();
+  if (!fsSync.existsSync(iconPath)) {
+    void writeRuntimeLog("app", "App icon file not found", { iconPath });
+    return undefined;
+  }
+  const icon = nativeImage.createFromPath(iconPath);
+  if (icon.isEmpty()) {
+    void writeRuntimeLog("app", "App icon could not be loaded", { iconPath });
+    return undefined;
+  }
+  if (process.platform === "darwin") {
+    app.dock?.setIcon(icon);
+  }
+  return iconPath;
 }
 
 function getRuntimeLogFilePath(): string {
@@ -518,6 +540,7 @@ function tempEncodeArgs(args: {
 function createWindow(): BrowserWindow {
   const persisted = readPersistedWindowState();
   const usePersistedBounds = persisted && isWindowBoundsVisible(persisted);
+  const iconPath = configureAppIcon();
   const mainWindow = new BrowserWindow({
     width: usePersistedBounds ? persisted.width : DEFAULT_WINDOW_WIDTH,
     height: usePersistedBounds ? persisted.height : DEFAULT_WINDOW_HEIGHT,
@@ -528,6 +551,7 @@ function createWindow(): BrowserWindow {
     frame: false,
     backgroundColor: "#0a0f17",
     autoHideMenuBar: true,
+    icon: iconPath,
     webPreferences: {
       preload: path.join(getRepoRoot(), "electron", "preload.cjs"),
       contextIsolation: true,
@@ -1124,6 +1148,20 @@ function registerIpcHandlers(): void {
         recursive: true,
         errorOnExist: true,
         force: false
+      });
+    }
+  );
+  ipcMain.handle(
+    "project:delete",
+    async (
+      _event,
+      args: {
+        projectName: string;
+      }
+    ) => {
+      await fs.rm(getProjectDirectory(args.projectName), {
+        recursive: true,
+        force: true
       });
     }
   );

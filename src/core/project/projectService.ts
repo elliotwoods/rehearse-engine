@@ -107,6 +107,21 @@ export class ProjectService {
     await this.saveProject();
   }
 
+  public async duplicateProject(sourceProjectName: string, nextProjectName: string): Promise<void> {
+    if (this.storage.isReadOnly) {
+      return;
+    }
+
+    const normalizedName = nextProjectName.trim();
+    if (!normalizedName) {
+      throw new Error("Project name is required.");
+    }
+    if (sourceProjectName === normalizedName) {
+      throw new Error("Duplicate project name must be different.");
+    }
+    await this.storage.cloneProject(sourceProjectName, normalizedName);
+  }
+
   public async saveSnapshotAs(snapshotName: string): Promise<void> {
     if (this.storage.isReadOnly) {
       return;
@@ -168,6 +183,48 @@ export class ProjectService {
     });
     if (renamingActiveProject) {
       await this.saveProject();
+    }
+  }
+
+  public async deleteProject(projectName: string): Promise<void> {
+    if (this.storage.isReadOnly) {
+      return;
+    }
+
+    const projects = await this.storage.listProjects();
+    if (projects.length <= 1) {
+      throw new Error("Cannot delete the last remaining project.");
+    }
+
+    const state = this.store.getState().state;
+    const defaults = await this.storage.loadDefaults();
+    const deletingActiveProject = state.activeProjectName === projectName;
+    const deletingDefaultProject = defaults.defaultProjectName === projectName;
+    const remainingProjects = projects.filter((entry) => entry !== projectName);
+    const fallbackProjectName = deletingActiveProject ? remainingProjects[0] : state.activeProjectName;
+    if (!fallbackProjectName) {
+      throw new Error("No fallback project is available.");
+    }
+
+    await this.storage.deleteProject(projectName);
+
+    if (deletingActiveProject) {
+      const fallbackSnapshotName = await this.resolvePreferredSnapshotName(fallbackProjectName);
+      await this.loadProject(fallbackProjectName, fallbackSnapshotName);
+      if (deletingDefaultProject) {
+        await this.storage.saveDefaults({
+          defaultProjectName: fallbackProjectName,
+          defaultSnapshotName: fallbackSnapshotName
+        });
+      }
+      return;
+    }
+
+    if (deletingDefaultProject) {
+      await this.storage.saveDefaults({
+        defaultProjectName: state.activeProjectName,
+        defaultSnapshotName: state.activeSnapshotName
+      });
     }
   }
 
@@ -282,5 +339,11 @@ export class ProjectService {
       defaultProjectName: state.activeProjectName,
       defaultSnapshotName: state.activeSnapshotName
     });
+  }
+
+  private async resolvePreferredSnapshotName(projectName: string): Promise<string> {
+    const snapshots = await this.storage.listSnapshots(projectName);
+    const mainSnapshot = snapshots.find((entry) => entry.name === DEFAULT_SNAPSHOT_NAME);
+    return mainSnapshot?.name ?? snapshots[0]?.name ?? DEFAULT_SNAPSHOT_NAME;
   }
 }

@@ -28,6 +28,10 @@ const LATE_RENDER_ORDER = 10_000;
 const GHOST_BEAM_TYPE = "ghost";
 const NORMALS_BEAM_TYPE = "normals";
 const SCATTERING_SHELL_BEAM_TYPE = "scatteringShell";
+const SCATTERING_SHELL2_BEAM_TYPE = "scatteringShell2";
+const DEFAULT_ALONG_BEAM_POWER = 2.0;
+const DEFAULT_SCATTERING_FACTOR = 0.25;
+const SCATTERING_SHELL2_DISTANCE_CLAMP_METERS = 0.1;
 const DEFAULT_HAZE_INTENSITY = 1.0;
 const DEFAULT_SCATTERING_COEFFICIENT = 1.0;
 const DEFAULT_EXTINCTION_COEFFICIENT = 0.05;
@@ -148,6 +152,23 @@ export interface ScatteringShellComputationResult {
   alpha: number;
 }
 
+export interface ScatteringShell2ComputationInput {
+  emitterPos: THREE.Vector3;
+  worldPos: THREE.Vector3;
+  worldNormal: THREE.Vector3;
+  cameraPos: THREE.Vector3;
+  beamAlpha: number;
+  alongBeamPower: number;
+  scatteringFactor: number;
+}
+
+export interface ScatteringShell2ComputationResult {
+  alongBeamShapeFactor: number;
+  distanceFactor: number;
+  visibility: number;
+  alpha: number;
+}
+
 export function computeScatteringShellVisibility(
   input: ScatteringShellComputationInput
 ): ScatteringShellComputationResult {
@@ -229,18 +250,52 @@ export function computeScatteringShellVisibility(
   };
 }
 
+export function computeScatteringShell2Visibility(
+  input: ScatteringShell2ComputationInput
+): ScatteringShell2ComputationResult {
+  const lookDir = input.cameraPos.clone().sub(input.worldPos);
+  const worldNormal = input.worldNormal.clone();
+  if (lookDir.lengthSq() <= EPSILON * EPSILON || worldNormal.lengthSq() <= EPSILON * EPSILON) {
+    return {
+      alongBeamShapeFactor: 0,
+      distanceFactor: 0,
+      visibility: 0,
+      alpha: 0
+    };
+  }
+
+  lookDir.normalize();
+  worldNormal.normalize();
+  const distanceToEmitter = Math.max(input.worldPos.distanceTo(input.emitterPos), SCATTERING_SHELL2_DISTANCE_CLAMP_METERS);
+  const dotValue = THREE.MathUtils.clamp(worldNormal.dot(lookDir), -1, 1);
+  const alongBeamShapeFactor = Math.pow(Math.max(1 - Math.abs(dotValue), 0), Math.max(input.alongBeamPower, 0));
+  const distanceFactor = 1 / distanceToEmitter;
+  const visibility = Math.max(input.scatteringFactor, 0) * alongBeamShapeFactor * distanceFactor;
+  return {
+    alongBeamShapeFactor,
+    distanceFactor,
+    visibility,
+    alpha: THREE.MathUtils.clamp(input.beamAlpha, 0, 1) * visibility
+  };
+}
+
 function parseBeamParams(actor: ActorNode): BeamParams {
   const beamType = actor.params.beamType;
   return {
     targetActorId: typeof actor.params.targetActorId === "string" ? actor.params.targetActorId : null,
     beamType:
-      beamType === GHOST_BEAM_TYPE || beamType === NORMALS_BEAM_TYPE || beamType === SCATTERING_SHELL_BEAM_TYPE
+      beamType === GHOST_BEAM_TYPE ||
+      beamType === NORMALS_BEAM_TYPE ||
+      beamType === SCATTERING_SHELL_BEAM_TYPE ||
+      beamType === SCATTERING_SHELL2_BEAM_TYPE
         ? beamType
-        : SOLID_BEAM_TYPE,
+        : SCATTERING_SHELL_BEAM_TYPE,
     resolution: Math.max(3, Math.min(1024, Math.floor(Number(actor.params.resolution ?? DEFAULT_RESOLUTION)) || DEFAULT_RESOLUTION)),
     beamLength: Math.max(0, Number(actor.params.beamLength ?? DEFAULT_BEAM_LENGTH) || DEFAULT_BEAM_LENGTH),
     beamColor: sanitizeColor(actor.params.beamColor),
     beamAlpha: Math.max(0, Math.min(1, Number(actor.params.beamAlpha ?? DEFAULT_BEAM_ALPHA) || DEFAULT_BEAM_ALPHA)),
+    alongBeamPower: clampNumber(actor.params.alongBeamPower, DEFAULT_ALONG_BEAM_POWER, 0),
+    scatteringFactor: clampNumber(actor.params.scatteringFactor, DEFAULT_SCATTERING_FACTOR, 0),
     hazeIntensity: clampNumber(actor.params.hazeIntensity, DEFAULT_HAZE_INTENSITY, 0),
     scatteringCoeff: clampNumber(actor.params.scatteringCoeff, DEFAULT_SCATTERING_COEFFICIENT, 0),
     extinctionCoeff: clampNumber(actor.params.extinctionCoeff, DEFAULT_EXTINCTION_COEFFICIENT, 0),
@@ -301,13 +356,16 @@ function buildSingleStatus(actor: ActorNode, runtimeStatus?: ActorRuntimeStatus)
     { label: "Ghost Shading Active", value: params.beamType === GHOST_BEAM_TYPE },
     { label: "Normals Shading Active", value: params.beamType === NORMALS_BEAM_TYPE },
     { label: "Scattering Shell Active", value: params.beamType === SCATTERING_SHELL_BEAM_TYPE },
-    { label: "WebGL-Only Mode", value: params.beamType === SCATTERING_SHELL_BEAM_TYPE },
+    { label: "Scattering Shell 2 Active", value: params.beamType === SCATTERING_SHELL2_BEAM_TYPE },
+    { label: "WebGL-Only Mode", value: params.beamType === SCATTERING_SHELL_BEAM_TYPE || params.beamType === SCATTERING_SHELL2_BEAM_TYPE },
     { label: "Target Actor", value: runtimeStatus?.values.targetActorName ?? "n/a" },
     { label: "Target Shape", value: runtimeStatus?.values.targetShape ?? "n/a" },
     { label: "Resolution", value: params.resolution },
     { label: "Beam Length (m)", value: params.beamLength },
     { label: "Beam Color", value: params.beamColor },
     { label: "Beam Alpha", value: params.beamAlpha },
+    { label: "Along Beam Power", value: params.alongBeamPower },
+    { label: "Scattering Factor", value: params.scatteringFactor },
     { label: "Anisotropy g", value: params.anisotropyG },
     { label: "Scan Duty", value: params.scanDuty },
     { label: "Divergence (rad)", value: params.beamDivergenceRad },
@@ -330,11 +388,14 @@ function buildArrayStatus(actor: ActorNode, runtimeStatus?: ActorRuntimeStatus):
     { label: "Ghost Shading Active", value: params.beamType === GHOST_BEAM_TYPE },
     { label: "Normals Shading Active", value: params.beamType === NORMALS_BEAM_TYPE },
     { label: "Scattering Shell Active", value: params.beamType === SCATTERING_SHELL_BEAM_TYPE },
-    { label: "WebGL-Only Mode", value: params.beamType === SCATTERING_SHELL_BEAM_TYPE },
+    { label: "Scattering Shell 2 Active", value: params.beamType === SCATTERING_SHELL2_BEAM_TYPE },
+    { label: "WebGL-Only Mode", value: params.beamType === SCATTERING_SHELL_BEAM_TYPE || params.beamType === SCATTERING_SHELL2_BEAM_TYPE },
     { label: "Emitter Curve", value: runtimeStatus?.values.emitterCurveName ?? "n/a" },
     { label: "Target Actor", value: runtimeStatus?.values.targetActorName ?? "n/a" },
     { label: "Target Shape", value: runtimeStatus?.values.targetShape ?? "n/a" },
     { label: "Requested Count", value: params.count },
+    { label: "Along Beam Power", value: params.alongBeamPower },
+    { label: "Scattering Factor", value: params.scatteringFactor },
     { label: "Anisotropy g", value: params.anisotropyG },
     { label: "Scan Duty", value: params.scanDuty },
     { label: "Divergence (rad)", value: params.beamDivergenceRad },
@@ -466,6 +527,14 @@ type ScatteringShellUniforms = {
   uNearFadeStart: { value: number };
   uNearFadeEnd: { value: number };
   uSoftClampKnee: { value: number };
+  uCameraPos: { value: THREE.Vector3 };
+};
+
+type ScatteringShell2Uniforms = {
+  uBeamColor: { value: THREE.Color };
+  uBaseAlpha: { value: number };
+  uAlongBeamPower: { value: number };
+  uScatteringFactor: { value: number };
   uCameraPos: { value: THREE.Vector3 };
 };
 
@@ -603,6 +672,75 @@ function createScatteringShellMaterial(): THREE.ShaderMaterial {
   return material;
 }
 
+function createScatteringShell2Material(): THREE.ShaderMaterial {
+  const material = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    uniforms: {
+      uBeamColor: { value: new THREE.Color(DEFAULT_BEAM_COLOR) },
+      uBaseAlpha: { value: DEFAULT_BEAM_ALPHA },
+      uAlongBeamPower: { value: DEFAULT_ALONG_BEAM_POWER },
+      uScatteringFactor: { value: DEFAULT_SCATTERING_FACTOR },
+      uCameraPos: { value: new THREE.Vector3() }
+    },
+    vertexShader: `
+      attribute vec3 beamEmitterPosition;
+
+      varying vec3 vWorldPosition;
+      varying vec3 vWorldNormal;
+      varying vec3 vEmitterPosition;
+
+      void main() {
+        vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+        vWorldPosition = worldPosition.xyz;
+        vWorldNormal = normalize(mat3(transpose(inverse(modelMatrix))) * normal);
+        vEmitterPosition = (modelMatrix * vec4(beamEmitterPosition, 1.0)).xyz;
+        gl_Position = projectionMatrix * viewMatrix * worldPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uBeamColor;
+      uniform float uBaseAlpha;
+      uniform float uAlongBeamPower;
+      uniform float uScatteringFactor;
+      uniform vec3 uCameraPos;
+
+      varying vec3 vWorldPosition;
+      varying vec3 vWorldNormal;
+      varying vec3 vEmitterPosition;
+
+      void main() {
+        // This is still a shell proxy, not a true volumetric beam integration.
+        // The shell is only used as a thin surface where we approximate visible scatter.
+        vec3 lookVector = uCameraPos - vWorldPosition;
+        vec3 lookDir = lookVector / max(length(lookVector), 1e-4);
+        vec3 worldNormal = normalize(vWorldNormal);
+
+        // A simple silhouette-style heuristic: brighter when the shell normal is more orthogonal to the viewer.
+        float alongBeamShapeFactor = pow(
+          max(1.0 - abs(dot(worldNormal, lookDir)), 0.0),
+          max(uAlongBeamPower, 0.0)
+        );
+
+        // This mode intentionally uses a very simple emitter-distance falloff.
+        float distanceToEmitter = max(length(vWorldPosition - vEmitterPosition), ${SCATTERING_SHELL2_DISTANCE_CLAMP_METERS.toFixed(1)});
+        float distanceFactor = 1.0 / distanceToEmitter;
+
+        // Scattering Factor is a normalized artistic approximation of stage haze / water fog scatter strength.
+        float visibility = max(uScatteringFactor, 0.0) * alongBeamShapeFactor * distanceFactor;
+        float alpha = clamp(uBaseAlpha, 0.0, 1.0) * visibility;
+        vec3 rgb = uBeamColor * visibility;
+        gl_FragColor = vec4(rgb, alpha);
+      }
+    `
+  });
+  material.userData.beamMaterialKind = SCATTERING_SHELL2_BEAM_TYPE;
+  return material;
+}
+
 function readCameraPosition(state: SceneHookContext["state"]): THREE.Vector3 {
   const position = state.camera?.position;
   if (Array.isArray(position) && position.length === 3) {
@@ -616,6 +754,8 @@ function updateMaterial(state: BeamObjectState, params: BeamParams, _cameraPosit
     beamType: params.beamType,
     beamColor: params.beamColor,
     beamAlpha: params.beamAlpha,
+    alongBeamPower: params.alongBeamPower,
+    scatteringFactor: params.scatteringFactor,
     hazeIntensity: params.hazeIntensity,
     scatteringCoeff: params.scatteringCoeff,
     extinctionCoeff: params.extinctionCoeff,
@@ -691,6 +831,25 @@ function updateMaterial(state: BeamObjectState, params: BeamParams, _cameraPosit
     material.side = THREE.DoubleSide;
     material.blending = THREE.AdditiveBlending;
     material.needsUpdate = materialSignature !== state.lastMaterialSignature;
+  } else if (params.beamType === SCATTERING_SHELL2_BEAM_TYPE) {
+    if (!(state.material instanceof THREE.ShaderMaterial) || state.material.userData.beamMaterialKind !== SCATTERING_SHELL2_BEAM_TYPE) {
+      state.material.dispose();
+      state.material = createScatteringShell2Material();
+      state.mesh.material = state.material;
+    }
+    const material = state.material;
+    const uniforms = material.uniforms as ScatteringShell2Uniforms;
+    uniforms.uBeamColor.value.set(params.beamColor);
+    uniforms.uBaseAlpha.value = params.beamAlpha;
+    uniforms.uAlongBeamPower.value = params.alongBeamPower;
+    uniforms.uScatteringFactor.value = params.scatteringFactor;
+    uniforms.uCameraPos.value.copy(_cameraPosition);
+    material.transparent = true;
+    material.depthWrite = false;
+    material.depthTest = true;
+    material.side = THREE.DoubleSide;
+    material.blending = THREE.AdditiveBlending;
+    material.needsUpdate = materialSignature !== state.lastMaterialSignature;
   } else {
     if (!(state.material instanceof THREE.MeshBasicMaterial) || state.material.userData.beamMaterialKind !== SOLID_BEAM_TYPE) {
       state.material.dispose();
@@ -738,6 +897,7 @@ function buildSingleGeometrySignature(params: BeamParams, emitterObject: THREE.O
 
 function buildArrayGeometrySignature(params: BeamArrayParams, targetObject: THREE.Object3D, targetActor: ActorNode, curveActor: ActorNode): string {
   targetObject.updateWorldMatrix(true, false);
+  const curveType = curveActor.params.curveType === "circle" ? "circle" : "spline";
   return JSON.stringify({
     beamLength: params.beamLength,
     resolution: params.resolution,
@@ -749,13 +909,21 @@ function buildArrayGeometrySignature(params: BeamArrayParams, targetObject: THRE
     cylinderRadius: targetActor.params.cylinderRadius,
     cylinderHeight: targetActor.params.cylinderHeight,
     curveTransform: curveActor.transform,
+    curveType,
+    curveRadius: curveType === "circle" ? curveActor.params.radius : null,
     curveData: curveActor.params.curveData,
-    curveClosed: curveActor.params.closed,
+    curveClosed: curveType === "circle" ? true : curveActor.params.closed,
     curveSamplesPerSegment: curveActor.params.samplesPerSegment
   });
 }
 
 function getCurveMetadata(actor: ActorNode): { closed: boolean; segmentCount: number } {
+  if (actor.params.curveType === "circle") {
+    return {
+      closed: true,
+      segmentCount: 1
+    };
+  }
   const points = Array.isArray((actor.params.curveData as { points?: unknown[] } | undefined)?.points)
     ? ((actor.params.curveData as { points?: unknown[] }).points ?? [])
     : [];
@@ -995,8 +1163,8 @@ const sharedBeamParams = [
     key: "beamType",
     label: "Beam Type",
     type: "select",
-    options: [SOLID_BEAM_TYPE, GHOST_BEAM_TYPE, NORMALS_BEAM_TYPE, SCATTERING_SHELL_BEAM_TYPE],
-    defaultValue: SOLID_BEAM_TYPE
+    options: [SOLID_BEAM_TYPE, GHOST_BEAM_TYPE, NORMALS_BEAM_TYPE, SCATTERING_SHELL_BEAM_TYPE, SCATTERING_SHELL2_BEAM_TYPE],
+    defaultValue: SCATTERING_SHELL_BEAM_TYPE
   },
   {
     key: "resolution",
@@ -1030,8 +1198,30 @@ const sharedBeamParams = [
     max: 1,
     step: 0.01,
     description:
-      "Base transparency multiplier for the final shell intensity. In Scattering Shell mode this maps directly to the shader's base alpha after the scattering terms are evaluated.",
+      "Base transparency multiplier for the final shell intensity. In the shell-based beam modes this maps directly to the shader's base alpha after the visibility terms are evaluated.",
     defaultValue: DEFAULT_BEAM_ALPHA
+  },
+  {
+    key: "alongBeamPower",
+    label: "Along Beam Power",
+    type: "number",
+    min: 0,
+    step: 0.1,
+    defaultValue: DEFAULT_ALONG_BEAM_POWER,
+    visibleWhen: [{ key: "beamType", equals: SCATTERING_SHELL2_BEAM_TYPE }],
+    description:
+      "Controls how strongly the shell brightens toward silhouette and tangent views. Higher values concentrate the effect more tightly into the along-beam shape and reduce brightness on more front-facing shell areas."
+  },
+  {
+    key: "scatteringFactor",
+    label: "Scattering Factor",
+    type: "number",
+    min: 0,
+    step: 0.01,
+    defaultValue: DEFAULT_SCATTERING_FACTOR,
+    visibleWhen: [{ key: "beamType", equals: SCATTERING_SHELL2_BEAM_TYPE }],
+    description:
+      "Normalized artistic approximation of how strongly the medium makes the beam visible. Suggested values: stage haze about 0.2 to 0.35, recommended start 0.25; water fog about 0.8 to 1.2, recommended start 0.9."
   },
   {
     key: "hazeIntensity",

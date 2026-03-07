@@ -38,6 +38,7 @@ function createStorageMocks(overrides: Partial<StorageAdapter> = {}): StorageAda
     loadProjectSnapshot: vi.fn(async () => "{}"),
     saveProjectSnapshot: vi.fn(async () => {}),
     cloneProject: vi.fn(async () => {}),
+    deleteProject: vi.fn(async () => {}),
     renameProject: vi.fn(async () => {}),
     duplicateSnapshot: vi.fn(async () => {}),
     renameSnapshot: vi.fn(async () => {}),
@@ -160,6 +161,68 @@ describe("project service", () => {
 
     expect(storage.renameProject).toHaveBeenCalledWith("demo", "renamed");
     expect(store.getState().state.activeProjectName).toBe("renamed");
+  });
+
+  it("duplicates a non-active project without loading it", async () => {
+    const storage = createStorageMocks();
+    const store = createAppStore("electron-rw");
+    const service = new ProjectService(storage, store);
+
+    await service.duplicateProject("archive", "archive-copy");
+
+    expect(storage.cloneProject).toHaveBeenCalledWith("archive", "archive-copy");
+    expect(storage.saveProjectSnapshot).not.toHaveBeenCalled();
+    expect(store.getState().state.activeProjectName).toBe("demo");
+  });
+
+  it("deletes the default non-active project and retargets defaults to the active project", async () => {
+    const storage = createStorageMocks({
+      listProjects: vi.fn(async () => ["archive", "demo"]),
+      loadDefaults: vi.fn(async () => ({ defaultProjectName: "archive", defaultSnapshotName: "main" }))
+    });
+    const store = createAppStore("electron-rw");
+    const service = new ProjectService(storage, store);
+
+    await service.deleteProject("archive");
+
+    expect(storage.deleteProject).toHaveBeenCalledWith("archive");
+    expect(storage.saveDefaults).toHaveBeenCalledWith({
+      defaultProjectName: "demo",
+      defaultSnapshotName: "main"
+    });
+    expect(store.getState().state.activeProjectName).toBe("demo");
+  });
+
+  it("deletes the active project and loads the fallback project", async () => {
+    const storage = createStorageMocks({
+      listProjects: vi.fn(async () => ["alpha", "demo"]),
+      loadProjectSnapshot: vi.fn(async (projectName: string) => serializeProjectSnapshot(buildManifest(projectName, "main"))),
+      loadDefaults: vi.fn(async () => ({ defaultProjectName: "demo", defaultSnapshotName: "main" }))
+    });
+    const store = createAppStore("electron-rw");
+    const service = new ProjectService(storage, store);
+
+    await service.deleteProject("demo");
+
+    expect(storage.deleteProject).toHaveBeenCalledWith("demo");
+    expect(store.getState().state.activeProjectName).toBe("alpha");
+    expect(store.getState().state.activeSnapshotName).toBe("main");
+    expect(storage.saveDefaults).toHaveBeenCalledWith({
+      defaultProjectName: "alpha",
+      defaultSnapshotName: "main"
+    });
+  });
+
+  it("blocks deleting the last remaining project", async () => {
+    const storage = createStorageMocks({
+      listProjects: vi.fn(async () => ["demo"])
+    });
+    const store = createAppStore("electron-rw");
+    const service = new ProjectService(storage, store);
+
+    await expect(service.deleteProject("demo")).rejects.toThrow("Cannot delete the last remaining project.");
+
+    expect(storage.deleteProject).not.toHaveBeenCalled();
   });
 
   it("does not rewrite snapshot file when manifest identity already matches and no migration happens", async () => {

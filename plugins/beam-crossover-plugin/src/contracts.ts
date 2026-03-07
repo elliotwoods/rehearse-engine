@@ -1,7 +1,7 @@
 import type * as THREE from "three";
 
 export type PrimitiveShape = "sphere" | "cube" | "cylinder";
-export type BeamType = "solid" | "ghost" | "normals" | "scatteringShell";
+export type BeamType = "solid" | "ghost" | "normals" | "scatteringShell" | "scatteringShell2";
 export type ActorType =
   | "plugin"
   | "empty"
@@ -137,6 +137,8 @@ export interface BeamParams {
   beamLength: number;
   beamColor: string;
   beamAlpha: number;
+  alongBeamPower: number;
+  scatteringFactor: number;
   hazeIntensity: number;
   scatteringCoeff: number;
   extinctionCoeff: number;

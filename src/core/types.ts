@@ -1,9 +1,12 @@
 import type { AppMode, HdriTranscodeOptions, ProjectAssetRef } from "@/types/ipc";
 
-export const PROJECT_SCHEMA_VERSION = 3;
+export const PROJECT_SCHEMA_VERSION = 4;
 
 export type SceneNodeKind = "scene" | "actor" | "component";
 export type RenderEngine = "webgl2" | "webgpu";
+export type SceneToneMappingMode = "off" | "aces";
+export type SceneFramePacingMode = "vsync" | "fixed";
+export type SplatColorInputSpace = "linear" | "srgb" | "iphone-sdr";
 export type ActorType =
   | "empty"
   | "environment"
@@ -57,6 +60,46 @@ export interface SceneNodeBase {
   name: string;
   enabled: boolean;
   kind: SceneNodeKind;
+}
+
+export interface SceneTonemappingSettings {
+  mode: SceneToneMappingMode;
+  dither: boolean;
+}
+
+export interface SceneFramePacingSettings {
+  mode: SceneFramePacingMode;
+  targetFps: number;
+}
+
+export interface SceneBloomSettings {
+  enabled: boolean;
+  strength: number;
+  radius: number;
+  threshold: number;
+}
+
+export interface SceneVignetteSettings {
+  enabled: boolean;
+  offset: number;
+  darkness: number;
+}
+
+export interface SceneChromaticAberrationSettings {
+  enabled: boolean;
+  offset: number;
+}
+
+export interface SceneGrainSettings {
+  enabled: boolean;
+  intensity: number;
+}
+
+export interface ScenePostProcessingSettings {
+  bloom: SceneBloomSettings;
+  vignette: SceneVignetteSettings;
+  chromaticAberration: SceneChromaticAberrationSettings;
+  grain: SceneGrainSettings;
 }
 
 export interface ParameterDefinitionBase {
@@ -185,6 +228,9 @@ export interface SceneState extends SceneNodeBase {
   backgroundColor: string;
   renderEngine: RenderEngine;
   antialiasing: boolean;
+  framePacing: SceneFramePacingSettings;
+  tonemapping: SceneTonemappingSettings;
+  postProcessing: ScenePostProcessingSettings;
   cameraKeyboardNavigation: boolean;
   cameraNavigationSpeed: number;
 }
@@ -255,6 +301,11 @@ export interface SceneStats {
   cameraZoomEnabled: boolean;
 }
 
+export interface RuntimeDebugState {
+  slowFrameDiagnosticsEnabled: boolean;
+  slowFrameDiagnosticsThresholdMs: number;
+}
+
 export type ActorStatusValue = string | number | boolean | [number, number, number] | string[] | object | null;
 
 export interface ActorRuntimeStatus {
@@ -303,6 +354,7 @@ export interface AppState {
   assets: ProjectAssetRef[];
   selection: SelectionEntry[];
   stats: SceneStats;
+  runtimeDebug: RuntimeDebugState;
   dirty: boolean;
   statusMessage: string;
   consoleEntries: ConsoleEntry[];

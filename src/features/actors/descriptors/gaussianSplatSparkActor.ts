@@ -5,6 +5,8 @@ interface GaussianSplatSparkRuntime {
   assetId?: string;
   scaleFactor: number;
   opacity: number;
+  brightness: number;
+  colorInputSpace: string;
 }
 
 export const gaussianSplatSparkActorDescriptor: ReloadableDescriptor<GaussianSplatSparkRuntime> = {
@@ -22,12 +24,16 @@ export const gaussianSplatSparkActorDescriptor: ReloadableDescriptor<GaussianSpl
   createRuntime: ({ params }) => ({
     assetId: typeof params.assetId === "string" ? params.assetId : undefined,
     scaleFactor: typeof params.scaleFactor === "number" ? params.scaleFactor : 1,
-    opacity: typeof params.opacity === "number" ? params.opacity : 1
+    opacity: typeof params.opacity === "number" ? params.opacity : 1,
+    brightness: typeof params.brightness === "number" ? params.brightness : 1,
+    colorInputSpace: typeof params.colorInputSpace === "string" ? params.colorInputSpace : "srgb"
   }),
   updateRuntime(runtime, { params }) {
     runtime.assetId = typeof params.assetId === "string" ? params.assetId : runtime.assetId;
     runtime.scaleFactor = typeof params.scaleFactor === "number" ? params.scaleFactor : runtime.scaleFactor;
     runtime.opacity = typeof params.opacity === "number" ? params.opacity : runtime.opacity;
+    runtime.brightness = typeof params.brightness === "number" ? params.brightness : runtime.brightness;
+    runtime.colorInputSpace = typeof params.colorInputSpace === "string" ? params.colorInputSpace : runtime.colorInputSpace;
   },
   status: {
     build({ actor, state, runtimeStatus }) {
@@ -43,6 +49,14 @@ export const gaussianSplatSparkActorDescriptor: ReloadableDescriptor<GaussianSpl
         {
           label: "Opacity",
           value: typeof actor.params.opacity === "number" ? actor.params.opacity : 1
+        },
+        {
+          label: "Brightness",
+          value: typeof actor.params.brightness === "number" ? actor.params.brightness : 1
+        },
+        {
+          label: "Captured Color Space",
+          value: typeof actor.params.colorInputSpace === "string" ? actor.params.colorInputSpace : "srgb"
         },
         { label: "Backend", value: runtimeStatus?.values.backend ?? "n/a" },
         { label: "Load State", value: runtimeStatus?.values.loadState ?? "n/a" },

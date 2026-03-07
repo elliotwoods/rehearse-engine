@@ -10,6 +10,7 @@ export interface StorageAdapter {
   loadProjectSnapshot(projectName: string, snapshotName: string): Promise<string>;
   saveProjectSnapshot(projectName: string, snapshotName: string, payload: string): Promise<void>;
   cloneProject(previousName: string, nextName: string): Promise<void>;
+  deleteProject(projectName: string): Promise<void>;
   renameProject(previousName: string, nextName: string): Promise<void>;
   duplicateSnapshot(projectName: string, previousName: string, nextName: string): Promise<void>;
   renameSnapshot(projectName: string, previousName: string, nextName: string): Promise<void>;

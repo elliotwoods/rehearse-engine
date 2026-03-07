@@ -1,11 +1,14 @@
 import React from "react";
 import { useAppStore } from "@/app/useAppStore";
 import { Material } from "@/core/types";
+import { InspectorFieldRow } from "@/ui/widgets/InspectorFieldRow";
+import { ReferencePicker, type ReferencePickerOption } from "@/ui/widgets/ReferencePicker";
 
 interface MaterialRefFieldProps {
   value: string | undefined;
   onChange: (value: string | undefined) => void;
   label?: string;
+  description?: string;
   placeholder?: string;
   extraMaterials?: Record<string, Material>;
 }
@@ -14,35 +17,50 @@ const MaterialRefFieldImpl: React.FC<MaterialRefFieldProps> = ({
   value,
   onChange,
   label,
+  description,
   placeholder = "None (Default)",
   extraMaterials
 }) => {
   const materials = useAppStore((s) => s.state.materials);
   // Memoize sort — localeCompare on 100 items is expensive and materials rarely change.
-  const materialList = React.useMemo(
+  const materialList = React.useMemo<ReferencePickerOption[]>(
     () => {
+      const localIds = new Set(Object.keys(extraMaterials ?? {}));
       const merged = extraMaterials ? { ...extraMaterials, ...materials } : materials;
-      return Object.values(merged).sort((a, b) => a.name.localeCompare(b.name));
+      return Object.values(merged)
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((mat) => ({
+          id: mat.id,
+          label: mat.name,
+          detail: `${localIds.has(mat.id) ? "Local" : "Global"} material${mat.transparent ? " · transparent" : ""}${
+            mat.wireframe ? " · wireframe" : ""
+          }`,
+          kindLabel: localIds.has(mat.id) ? "LOCAL" : "GLOBAL",
+          searchText: `${mat.name} ${mat.id}`,
+          swatchColor: mat.albedo.mode === "color" ? mat.albedo.color : null
+        }));
     },
     [materials, extraMaterials]
   );
 
+  const picker = (
+    <ReferencePicker
+      selectionMode="single"
+      selectedIds={value ? [value] : []}
+      options={materialList}
+      placeholder={placeholder}
+      onChange={(nextIds) => onChange(nextIds[0] || undefined)}
+    />
+  );
+
+  if (!label) {
+    return <div className="widget-material-ref">{picker}</div>;
+  }
+
   return (
-    <div className="widget-material-ref">
-      {label && <label className="widget-label">{label}</label>}
-      <select
-        className="widget-select"
-        value={value ?? ""}
-        onChange={(e) => onChange(e.target.value || undefined)}
-      >
-        <option value="">{placeholder}</option>
-        {materialList.map((mat) => (
-          <option key={mat.id} value={mat.id}>
-            {mat.name}
-          </option>
-        ))}
-      </select>
-    </div>
+    <InspectorFieldRow label={label} description={description}>
+      <div className="widget-material-ref">{picker}</div>
+    </InspectorFieldRow>
   );
 };
 
@@ -53,6 +71,7 @@ const MaterialRefFieldImpl: React.FC<MaterialRefFieldProps> = ({
 export const MaterialRefField = React.memo(MaterialRefFieldImpl, (prev, next) =>
   prev.value === next.value &&
   prev.label === next.label &&
+  prev.description === next.description &&
   prev.placeholder === next.placeholder &&
   prev.extraMaterials === next.extraMaterials
 );

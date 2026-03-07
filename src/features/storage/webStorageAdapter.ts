@@ -50,6 +50,9 @@ export function createWebStorageAdapter(): StorageAdapter {
     async cloneProject() {
       throw new Error("Read-only mode: projects cannot be cloned.");
     },
+    async deleteProject() {
+      throw new Error("Read-only mode: projects cannot be deleted.");
+    },
     async renameProject() {
       throw new Error("Read-only mode: projects cannot be renamed.");
     },

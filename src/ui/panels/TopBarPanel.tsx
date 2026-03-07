@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faCube,
@@ -16,6 +17,7 @@ import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import type { CameraPreset, TimeSpeedPreset } from "@/core/types";
 import { discoverAndLoadLocalPlugins, formatPluginDiscoverySummary } from "@/features/plugins/discovery";
+import { formatFramePacingLabel } from "@/render/framePacing";
 import { AddActorMenu } from "@/ui/components/AddActorMenu";
 import { PluginsModal } from "@/ui/components/PluginsModal";
 import { MaterialsModal } from "@/ui/components/MaterialsModal";
@@ -23,6 +25,8 @@ import { DigitScrubInput } from "@/ui/widgets";
 
 const SPEEDS: TimeSpeedPreset[] = [0.125, 0.25, 0.5, 1, 2, 4];
 const CAMERA_PRESETS: CameraPreset[] = ["perspective", "isometric", "top", "left", "front", "back"];
+const FPS_TARGET_PRESETS = [30, 60, 120];
+const MAX_CUSTOM_TARGET_FPS = 240;
 
 function formatSpeed(speed: TimeSpeedPreset): string {
   if (speed >= 1) {
@@ -73,10 +77,20 @@ export function TopBarPanel(props: TopBarPanelProps) {
   const [pluginsRefreshLoading, setPluginsRefreshLoading] = useState(false);
   const [pluginsRefreshSummary, setPluginsRefreshSummary] = useState<string | null>(null);
   const [pluginsRevision, setPluginsRevision] = useState(0);
+  const [fpsMenuOpen, setFpsMenuOpen] = useState(false);
+  const [customTargetOpen, setCustomTargetOpen] = useState(false);
+  const [customTargetDraft, setCustomTargetDraft] = useState("60");
+  const fpsMenuRef = useRef<HTMLDivElement | null>(null);
+  const fpsButtonRef = useRef<HTMLButtonElement | null>(null);
+  const fpsPopoverRef = useRef<HTMLDivElement | null>(null);
+  const customTargetInputRef = useRef<HTMLInputElement | null>(null);
+  const [fpsMenuPosition, setFpsMenuPosition] = useState({ top: 0, left: 0, minWidth: 210 });
 
   const isReadOnly = state.mode === "web-ro";
   const fpsValue = Number.isFinite(state.stats.fps) ? state.stats.fps : 0;
   const frameMsValue = Number.isFinite(state.stats.frameMs) ? state.stats.frameMs : 0;
+  const framePacing = state.scene.framePacing;
+  const framePacingLabel = formatFramePacingLabel(framePacing);
   const simTimeSeconds = Number.isFinite(state.time.elapsedSimSeconds) ? state.time.elapsedSimSeconds : 0;
   const fixedStepMs = Number.isFinite(state.time.fixedStepSeconds) ? state.time.fixedStepSeconds * 1000 : 0;
   const fixedStepSeconds = Number.isFinite(state.time.fixedStepSeconds) ? state.time.fixedStepSeconds : 0;
@@ -109,21 +123,108 @@ export function TopBarPanel(props: TopBarPanelProps) {
     });
   }, [fpsValue]);
 
+  const fpsGraphMax = useMemo(() => {
+    const targetMax = framePacing.mode === "fixed" ? framePacing.targetFps : 0;
+    return Math.max(30, targetMax, ...fpsHistory);
+  }, [fpsHistory, framePacing.mode, framePacing.targetFps]);
+
   const fpsGraphPath = useMemo(() => {
     if (fpsHistory.length === 0) {
       return "";
     }
     const width = 92;
     const height = 18;
-    const maxFps = Math.max(30, ...fpsHistory);
     const points = fpsHistory.map((value, index) => {
       const x = fpsHistory.length > 1 ? (index / (fpsHistory.length - 1)) * width : width;
-      const normalized = Math.max(0, Math.min(1, value / maxFps));
+      const normalized = Math.max(0, Math.min(1, value / fpsGraphMax));
       const y = height - normalized * height;
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     });
     return points.join(" ");
-  }, [fpsHistory]);
+  }, [fpsGraphMax, fpsHistory]);
+
+  const fpsTargetY = useMemo(() => {
+    if (framePacing.mode !== "fixed") {
+      return null;
+    }
+    const height = 18;
+    const normalized = Math.max(0, Math.min(1, framePacing.targetFps / fpsGraphMax));
+    return height - normalized * height;
+  }, [fpsGraphMax, framePacing.mode, framePacing.targetFps]);
+
+  useEffect(() => {
+    setCustomTargetDraft(String(Math.max(1, Math.round(framePacing.targetFps))));
+  }, [framePacing.targetFps]);
+
+  useEffect(() => {
+    if (!fpsMenuOpen) {
+      setCustomTargetOpen(false);
+      return;
+    }
+    const updatePosition = () => {
+      const rect = fpsButtonRef.current?.getBoundingClientRect();
+      if (!rect) {
+        return;
+      }
+      setFpsMenuPosition({
+        top: Math.round(rect.bottom + 8),
+        left: Math.round(rect.right - Math.max(rect.width, 210)),
+        minWidth: Math.max(Math.round(rect.width), 210)
+      });
+    };
+    updatePosition();
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Node &&
+        !fpsMenuRef.current?.contains(target) &&
+        !fpsPopoverRef.current?.contains(target)
+      ) {
+        setFpsMenuOpen(false);
+      }
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setFpsMenuOpen(false);
+      }
+    };
+    window.addEventListener("resize", updatePosition);
+    window.addEventListener("scroll", updatePosition, true);
+    window.addEventListener("pointerdown", onPointerDown);
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("resize", updatePosition);
+      window.removeEventListener("scroll", updatePosition, true);
+      window.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [fpsMenuOpen]);
+
+  useEffect(() => {
+    if (fpsMenuOpen && customTargetOpen) {
+      customTargetInputRef.current?.focus();
+      customTargetInputRef.current?.select();
+    }
+  }, [customTargetOpen, fpsMenuOpen]);
+
+  const applyFramePacing = (mode: "vsync" | "fixed", targetFps: number) => {
+    kernel.store.getState().actions.setSceneRenderSettings({
+      framePacing: {
+        mode,
+        targetFps
+      }
+    });
+    setFpsMenuOpen(false);
+  };
+
+  const submitCustomTarget = () => {
+    const parsed = Number(customTargetDraft);
+    if (!Number.isFinite(parsed)) {
+      kernel.store.getState().actions.setStatus("Target framerate must be a number.");
+      return;
+    }
+    applyFramePacing("fixed", Math.max(1, Math.min(MAX_CUSTOM_TARGET_FPS, Math.round(parsed))));
+  };
   const plugins = useMemo(() => {
     void pluginsRevision;
     return kernel.pluginApi.listPlugins();
@@ -323,14 +424,105 @@ export function TopBarPanel(props: TopBarPanelProps) {
 
       <div className="toolbar-group toolbar-fps-group" title="Viewport frame rate">
         <label>FPS</label>
-        <div className="toolbar-fps-widget">
-          <div className="toolbar-fps-values">
-            <strong>{fpsValue.toFixed(1)}</strong>
-            <span>{frameMsValue.toFixed(2)} ms</span>
-          </div>
-          <svg className="toolbar-fps-graph" viewBox="0 0 92 18" preserveAspectRatio="none" aria-hidden>
-            {fpsGraphPath ? <polyline points={fpsGraphPath} /> : null}
-          </svg>
+        <div className="toolbar-fps-shell" ref={fpsMenuRef}>
+          <button
+            ref={fpsButtonRef}
+            type="button"
+            className={`toolbar-fps-widget${fpsMenuOpen ? " is-open" : ""}`}
+            onClick={() => {
+              if (isReadOnly) {
+                return;
+              }
+              setFpsMenuOpen((value) => !value);
+            }}
+            disabled={isReadOnly}
+            aria-haspopup="dialog"
+            aria-expanded={fpsMenuOpen}
+            title={isReadOnly ? `Viewport frame rate (${framePacingLabel})` : `Viewport frame rate target: ${framePacingLabel}`}
+          >
+            <div className="toolbar-fps-values">
+              <strong>{fpsValue.toFixed(1)}</strong>
+              <span>{frameMsValue.toFixed(2)} ms</span>
+              <span>target {framePacingLabel}</span>
+            </div>
+            <svg className="toolbar-fps-graph" viewBox="0 0 92 18" preserveAspectRatio="none" aria-hidden>
+              {fpsTargetY !== null ? <line x1="0" y1={fpsTargetY} x2="92" y2={fpsTargetY} className="toolbar-fps-target-line" /> : null}
+              {fpsGraphPath ? <polyline points={fpsGraphPath} /> : null}
+            </svg>
+          </button>
+          {fpsMenuOpen
+            ? createPortal(
+                <div
+                  ref={fpsPopoverRef}
+                  className="toolbar-fps-popover"
+                  style={{
+                    top: `${fpsMenuPosition.top}px`,
+                    left: `${fpsMenuPosition.left}px`,
+                    minWidth: `${fpsMenuPosition.minWidth}px`
+                  }}
+                  role="dialog"
+                  aria-label="Target framerate"
+                >
+              <div className="toolbar-fps-popover-title">Target Framerate</div>
+              <button
+                type="button"
+                className={`toolbar-fps-option${framePacing.mode === "vsync" ? " is-active" : ""}`}
+                onClick={() => applyFramePacing("vsync", framePacing.targetFps)}
+              >
+                <span>VSync</span>
+                <small>Use the display refresh ceiling</small>
+              </button>
+              {FPS_TARGET_PRESETS.map((preset) => (
+                <button
+                  key={preset}
+                  type="button"
+                  className={`toolbar-fps-option${framePacing.mode === "fixed" && framePacing.targetFps === preset ? " is-active" : ""}`}
+                  onClick={() => applyFramePacing("fixed", preset)}
+                >
+                  <span>{preset} FPS</span>
+                  <small>Fixed frame cap</small>
+                </button>
+              ))}
+              {customTargetOpen ? (
+                <form
+                  className="toolbar-fps-custom"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    submitCustomTarget();
+                  }}
+                >
+                  <input
+                    ref={customTargetInputRef}
+                    type="number"
+                    min={1}
+                    max={MAX_CUSTOM_TARGET_FPS}
+                    step={1}
+                    value={customTargetDraft}
+                    onChange={(event) => setCustomTargetDraft(event.target.value)}
+                    onBlur={() => {
+                      if (!customTargetDraft.trim()) {
+                        setCustomTargetOpen(false);
+                      }
+                    }}
+                  />
+                  <button type="submit">Set</button>
+                </form>
+              ) : (
+                <button
+                  type="button"
+                  className={`toolbar-fps-option${
+                    framePacing.mode === "fixed" && !FPS_TARGET_PRESETS.includes(framePacing.targetFps) ? " is-active" : ""
+                  }`}
+                  onClick={() => setCustomTargetOpen(true)}
+                >
+                  <span>Custom...</span>
+                  <small>{framePacing.mode === "fixed" ? `${framePacing.targetFps} FPS` : "Enter any target up to 240 FPS"}</small>
+                </button>
+              )}
+                </div>,
+                document.body
+              )
+            : null}
         </div>
       </div>
       <MaterialsModal open={materialsModalOpen} onClose={() => setMaterialsModalOpen(false)} />

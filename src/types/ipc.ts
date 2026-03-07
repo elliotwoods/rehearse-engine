@@ -69,6 +69,7 @@ export interface ElectronApi {
   loadProjectSnapshot(args: { projectName: string; snapshotName: string }): Promise<string>;
   saveProjectSnapshot(args: { projectName: string; snapshotName: string; payload: string }): Promise<void>;
   cloneProject(args: { previousName: string; nextName: string }): Promise<void>;
+  deleteProject(args: { projectName: string }): Promise<void>;
   renameProject(args: { previousName: string; nextName: string }): Promise<void>;
   duplicateSnapshot(args: { projectName: string; previousName: string; nextName: string }): Promise<void>;
   renameSnapshot(args: { projectName: string; previousName: string; nextName: string }): Promise<void>;

@@ -6,6 +6,8 @@ import { CURVE_VERTEX_SELECT_EVENT } from "@/render/curveEditController";
 import type { SceneController } from "@/render/sceneController";
 
 export type ActorTransformMode = "translate" | "rotate";
+const ACTOR_TRANSLATION_SNAP = 0.1;
+const ACTOR_ROTATION_SNAP_RADIANS = Math.PI / 12;
 
 interface CurveVertexSelectionDetail {
   actorId?: string | null;
@@ -14,11 +16,14 @@ interface CurveVertexSelectionDetail {
 export class ActorTransformController {
   private readonly transformControls: any;
   private readonly transformHelper: THREE.Object3D;
+  private readonly domElement: HTMLElement;
   private mode: ActorTransformMode = "translate";
+  private snappingEnabled = true;
   private activeActorId: string | null = null;
   private activeSignature = "";
   private dragHistoryPushed = false;
   private activeCurveControlActorId: string | null = null;
+  private pendingOrbitBlock = false;
 
   public constructor(
     private readonly kernel: AppKernel,
@@ -27,10 +32,12 @@ export class ActorTransformController {
     domElement: HTMLElement,
     initialCamera: THREE.Camera
   ) {
+    this.domElement = domElement;
     this.transformControls = new TransformControls(initialCamera, domElement);
     this.transformControls.setMode(this.mode);
     this.transformControls.space = "world";
     this.transformControls.size = 1.05;
+    this.applySnapState();
     this.transformHelper =
       typeof this.transformControls.getHelper === "function" ? this.transformControls.getHelper() : this.transformControls;
 
@@ -51,10 +58,14 @@ export class ActorTransformController {
     });
 
     this.sceneController.scene.add(this.transformHelper);
+    this.domElement.addEventListener("pointerdown", this.onPointerDownCapture, true);
+    this.domElement.addEventListener("pointerup", this.onPointerUpCapture, true);
     window.addEventListener(CURVE_VERTEX_SELECT_EVENT, this.onCurveVertexSelect as EventListener);
   }
 
   public dispose(): void {
+    this.domElement.removeEventListener("pointerdown", this.onPointerDownCapture, true);
+    this.domElement.removeEventListener("pointerup", this.onPointerUpCapture, true);
     window.removeEventListener(CURVE_VERTEX_SELECT_EVENT, this.onCurveVertexSelect as EventListener);
     this.transformControls.detach();
     this.transformControls.dispose();
@@ -63,6 +74,7 @@ export class ActorTransformController {
     this.activeSignature = "";
     this.activeCurveControlActorId = null;
     this.dragHistoryPushed = false;
+    this.pendingOrbitBlock = false;
     (this.orbitControls as any).enabled = true;
   }
 
@@ -77,9 +89,21 @@ export class ActorTransformController {
     this.mode = mode;
     this.transformControls.setMode(mode);
     this.transformControls.space = mode === "translate" ? "world" : "local";
+    this.applySnapState();
+  }
+
+  public setSnappingEnabled(enabled: boolean): void {
+    if (this.snappingEnabled === enabled) {
+      return;
+    }
+    this.snappingEnabled = enabled;
+    this.applySnapState();
   }
 
   public update(): void {
+    if (this.transformControls.dragging) {
+      return;
+    }
     const state = this.kernel.store.getState().state;
     if (state.mode === "web-ro") {
       this.hideControls();
@@ -171,6 +195,49 @@ export class ActorTransformController {
       object.rotation.z
     ]);
   }
+
+  private applySnapState(): void {
+    this.transformControls.translationSnap = this.snappingEnabled ? ACTOR_TRANSLATION_SNAP : null;
+    this.transformControls.rotationSnap = this.snappingEnabled ? ACTOR_ROTATION_SNAP_RADIANS : null;
+  }
+
+  private pointerToNdc(event: PointerEvent): { x: number; y: number; button: number } | null {
+    const rect = this.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      return null;
+    }
+    return {
+      x: ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      y: -((event.clientY - rect.top) / rect.height) * 2 + 1,
+      button: event.button
+    };
+  }
+
+  private onPointerDownCapture = (event: PointerEvent): void => {
+    if (event.button !== 0 || !this.transformControls.object) {
+      return;
+    }
+    const pointer = this.pointerToNdc(event);
+    if (!pointer) {
+      return;
+    }
+    this.transformControls.pointerHover(pointer);
+    if (!this.transformControls.axis) {
+      return;
+    }
+    this.pendingOrbitBlock = true;
+    (this.orbitControls as any).enabled = false;
+  };
+
+  private onPointerUpCapture = (): void => {
+    if (!this.pendingOrbitBlock) {
+      return;
+    }
+    this.pendingOrbitBlock = false;
+    if (!this.transformControls.dragging) {
+      (this.orbitControls as any).enabled = true;
+    }
+  };
 
   private onCurveVertexSelect = (event: Event): void => {
     const custom = event as CustomEvent<CurveVertexSelectionDetail>;

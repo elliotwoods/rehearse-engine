@@ -94,7 +94,23 @@ export const GAUSSIAN_SPLAT_SPARK_SCHEMA: ParameterSchema = {
       precision: 3,
       defaultValue: 1
     },
-    { key: "opacity", label: "Opacity", type: "number", min: 0, max: 1, step: 0.01, defaultValue: 1 }
+    { key: "opacity", label: "Opacity", type: "number", min: 0, max: 1, step: 0.01, defaultValue: 1 },
+    {
+      key: "brightness",
+      label: "Brightness",
+      type: "number",
+      min: 0,
+      max: 8,
+      step: 0.05,
+      defaultValue: 1
+    },
+    {
+      key: "colorInputSpace",
+      label: "Captured Color Space",
+      type: "select",
+      options: ["srgb", "iphone-sdr", "linear"],
+      defaultValue: "srgb"
+    }
   ]
 };
 

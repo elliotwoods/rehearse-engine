@@ -16,6 +16,7 @@ export function createElectronStorageAdapter(): StorageAdapter {
     saveProjectSnapshot: (projectName, snapshotName, payload) =>
       window.electronAPI!.saveProjectSnapshot({ projectName, snapshotName, payload }),
     cloneProject: (previousName, nextName) => window.electronAPI!.cloneProject({ previousName, nextName }),
+    deleteProject: (projectName) => window.electronAPI!.deleteProject({ projectName }),
     renameProject: (previousName, nextName) => window.electronAPI!.renameProject({ previousName, nextName }),
     duplicateSnapshot: (projectName, previousName, nextName) =>
       window.electronAPI!.duplicateSnapshot({ projectName, previousName, nextName }),

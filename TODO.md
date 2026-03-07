@@ -58,6 +58,10 @@ Options of different interactive cameras:
 * Current orbit camera style
 * Unreal first person style
 
+Perhaps we can combine things, e.g.:
+* left click drag = orbit
+* right click drag = 
+
 # Refactor splats
 
 * Remove the WebGPU implementation completely (we will start from scratch if we try this again in future)
@@ -71,7 +75,4 @@ Options of different interactive cameras:
 Currently we have gizmos only for curve controls, we should have them for all actors
 Let's by default snap these controls (e.g. 0.1m, 15 degree snaps) and holding shift turns snapping off
 
-# Tonemapping
-
-* Tone-map the scene
-* Dithering support
+# Non-

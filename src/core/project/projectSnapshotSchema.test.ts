@@ -68,7 +68,69 @@ describe("project snapshot schema", () => {
     expect(parsed.projectName).toBe("demo");
     expect(parsed.snapshotName).toBe("main");
     expect(parsed.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
+    expect(parsed.scene.tonemapping).toEqual({
+      mode: "aces",
+      dither: true
+    });
+    expect(parsed.scene.framePacing).toEqual({
+      mode: "vsync",
+      targetFps: 60
+    });
     expect(parsed.actors[curveActorId]?.actorType).toBe("curve");
     expect(parsed.actors[curveActorId]?.params.curveData).toBeTruthy();
+  });
+
+  it("hydrates default tonemapping settings for legacy snapshots", () => {
+    const payload = {
+      schemaVersion: PROJECT_SCHEMA_VERSION - 1,
+      appMode: "electron-rw",
+      projectName: "demo",
+      snapshotName: "main",
+      createdAtIso: "2026-03-02T00:00:00.000Z",
+      updatedAtIso: "2026-03-02T00:00:00.000Z",
+      scene: {
+        id: "scene_legacy",
+        name: "Scene",
+        enabled: true,
+        kind: "scene",
+        actorIds: [],
+        sceneComponentIds: [],
+        backgroundColor: "#070b12",
+        renderEngine: "webgl2",
+        antialiasing: true,
+        cameraKeyboardNavigation: true,
+        cameraNavigationSpeed: 6
+      },
+      actors: {},
+      components: {},
+      camera: {
+        mode: "perspective",
+        position: [6, 4, 6],
+        target: [0, 0, 0],
+        fov: 50,
+        zoom: 1,
+        near: 0.01,
+        far: 1000
+      },
+      cameraBookmarks: [],
+      time: {
+        running: false,
+        speed: 1,
+        fixedStepSeconds: 1 / 60,
+        elapsedSimSeconds: 0
+      },
+      materials: {},
+      assets: []
+    };
+
+    const parsed = parseProjectSnapshot(JSON.stringify(payload));
+    expect(parsed.scene.tonemapping).toEqual({
+      mode: "aces",
+      dither: true
+    });
+    expect(parsed.scene.framePacing).toEqual({
+      mode: "vsync",
+      targetFps: 60
+    });
   });
 });

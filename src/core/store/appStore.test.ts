@@ -92,5 +92,75 @@ describe("appStore undo/redo", () => {
     expect(store.getState().historyPast.length).toBe(historyAfterCreate);
     expect(store.getState().state.actors[actorId]?.transform.position).toEqual([2, 3, 4]);
   });
+
+  it("updates runtime debug settings without dirtying the project or adding history", () => {
+    const store = createAppStore("web-ro");
+    const historyBefore = store.getState().historyPast.length;
+    const dirtyBefore = store.getState().state.dirty;
+
+    store.getState().actions.setRuntimeDebugSettings({
+      slowFrameDiagnosticsEnabled: true,
+      slowFrameDiagnosticsThresholdMs: 160
+    });
+
+    expect(store.getState().historyPast.length).toBe(historyBefore);
+    expect(store.getState().state.dirty).toBe(dirtyBefore);
+    expect(store.getState().state.runtimeDebug).toEqual({
+      slowFrameDiagnosticsEnabled: true,
+      slowFrameDiagnosticsThresholdMs: 160
+    });
+  });
+
+  it("updates scene tonemapping settings independently", () => {
+    const store = createAppStore("electron-rw");
+
+    store.getState().actions.setSceneRenderSettings({
+      tonemapping: {
+        dither: false
+      }
+    });
+
+    expect(store.getState().state.scene.tonemapping).toEqual({
+      mode: "aces",
+      dither: false
+    });
+
+    store.getState().actions.setSceneRenderSettings({
+      tonemapping: {
+        mode: "off"
+      }
+    });
+
+    expect(store.getState().state.scene.tonemapping).toEqual({
+      mode: "off",
+      dither: false
+    });
+  });
+
+  it("updates scene frame pacing settings independently", () => {
+    const store = createAppStore("electron-rw");
+
+    store.getState().actions.setSceneRenderSettings({
+      framePacing: {
+        targetFps: 120
+      }
+    });
+
+    expect(store.getState().state.scene.framePacing).toEqual({
+      mode: "vsync",
+      targetFps: 120
+    });
+
+    store.getState().actions.setSceneRenderSettings({
+      framePacing: {
+        mode: "fixed"
+      }
+    });
+
+    expect(store.getState().state.scene.framePacing).toEqual({
+      mode: "fixed",
+      targetFps: 120
+    });
+  });
 });
 

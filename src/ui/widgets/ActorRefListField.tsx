@@ -1,15 +1,11 @@
 import { InspectorFieldRow } from "@/ui/widgets/InspectorFieldRow";
-
-interface ActorRefOption {
-  id: string;
-  label: string;
-}
+import { ReferencePicker, type ReferencePickerOption } from "@/ui/widgets/ReferencePicker";
 
 interface ActorRefListFieldProps {
   label: string;
   description?: string;
   values: string[];
-  options: ActorRefOption[];
+  options: ReferencePickerOption[];
   mixed?: boolean;
   disabled?: boolean;
   showReset?: boolean;
@@ -20,8 +16,6 @@ interface ActorRefListFieldProps {
 export function ActorRefListField(props: ActorRefListFieldProps) {
   const selected = props.mixed ? [] : props.values;
   const optionIds = new Set(props.options.map((option) => option.id));
-  const canDrop = !props.disabled;
-  const hasValues = selected.length > 0;
 
   const appendFromDrop = (actorId: string): void => {
     if (!optionIds.has(actorId)) {
@@ -42,45 +36,19 @@ export function ActorRefListField(props: ActorRefListFieldProps) {
       resetDisabled={props.disabled}
       resetAlign="start"
     >
-      <div
-        className={`widget-actor-ref-list${canDrop ? " droppable" : ""}${!hasValues ? " empty" : ""}`}
-        onDragOver={(event) => {
-          if (!canDrop) {
-            return;
-          }
-          event.preventDefault();
+      <ReferencePicker
+        selectionMode="multiple"
+        selectedIds={selected}
+        options={props.options}
+        placeholder="No actors selected"
+        disabled={props.disabled}
+        dropLabel="Drop actor(s) here"
+        canDrop={!props.disabled}
+        onDropId={appendFromDrop}
+        onChange={(nextIds) => {
+          props.onChange(nextIds);
         }}
-        onDrop={(event) => {
-          if (!canDrop) {
-            return;
-          }
-          event.preventDefault();
-          const actorId = event.dataTransfer.getData("text/plain");
-          if (!actorId) {
-            return;
-          }
-          appendFromDrop(actorId);
-        }}
-      >
-        <select
-          className="widget-select widget-actor-ref-list-select"
-          multiple
-          size={Math.min(10, Math.max(6, props.options.length || 6))}
-          value={selected}
-          disabled={props.disabled}
-          onChange={(event) => {
-            const next = Array.from(event.target.selectedOptions).map((option) => option.value);
-            props.onChange(next);
-          }}
-        >
-          {props.options.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        {!hasValues ? <div className="widget-actor-ref-list-empty">Drop primitive actor(s) here</div> : null}
-      </div>
+      />
     </InspectorFieldRow>
   );
 }
