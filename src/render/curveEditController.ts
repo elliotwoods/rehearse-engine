@@ -28,6 +28,24 @@ interface CurvePointVisual {
   lineOut: any;
 }
 
+function createControlMaterial(color: number): THREE.MeshBasicMaterial {
+  return new THREE.MeshBasicMaterial({
+    color,
+    depthTest: false,
+    depthWrite: false
+  });
+}
+
+function createLineMaterial(color: number): THREE.LineBasicMaterial {
+  return new THREE.LineBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.8,
+    depthTest: false,
+    depthWrite: false
+  });
+}
+
 function handleLength(handle: [number, number, number]): number {
   return Math.hypot(handle[0], handle[1], handle[2]);
 }
@@ -237,20 +255,23 @@ export class CurveEditController {
 
       const lineIn = new THREE.Line(
         new THREE.BufferGeometry().setFromPoints([anchor.clone(), inPos.clone()]),
-        new THREE.LineBasicMaterial({ color: 0x2f7db8, transparent: true, opacity: 0.8 })
+        createLineMaterial(0x2f7db8)
       );
       const lineOut = new THREE.Line(
         new THREE.BufferGeometry().setFromPoints([anchor.clone(), outPos.clone()]),
-        new THREE.LineBasicMaterial({ color: 0x2f7db8, transparent: true, opacity: 0.8 })
+        createLineMaterial(0x2f7db8)
       );
+      lineIn.renderOrder = 10;
+      lineOut.renderOrder = 10;
       lineIn.visible = showHandleIn;
       lineOut.visible = showHandleOut;
       this.controlRoot.add(lineIn, lineOut);
 
       const anchorMesh = new THREE.Mesh(
         new THREE.SphereGeometry(anchorRadius, 16, 14),
-        new THREE.MeshBasicMaterial({ color: 0xffd166 })
+        createControlMaterial(0xffd166)
       );
+      anchorMesh.renderOrder = 11;
       anchorMesh.position.copy(anchor);
       anchorMesh.userData.curveControl = {
         actorId: actor.id,
@@ -260,8 +281,9 @@ export class CurveEditController {
 
       const handleInMesh = new THREE.Mesh(
         new THREE.SphereGeometry(handleRadius, 14, 12),
-        new THREE.MeshBasicMaterial({ color: 0x2fa3ff })
+        createControlMaterial(0x2fa3ff)
       );
+      handleInMesh.renderOrder = 11;
       handleInMesh.position.copy(inPos);
       handleInMesh.userData.curveControl = {
         actorId: actor.id,
@@ -271,8 +293,9 @@ export class CurveEditController {
 
       const handleOutMesh = new THREE.Mesh(
         new THREE.SphereGeometry(handleRadius, 14, 12),
-        new THREE.MeshBasicMaterial({ color: 0x2fa3ff })
+        createControlMaterial(0x2fa3ff)
       );
+      handleOutMesh.renderOrder = 11;
       handleOutMesh.position.copy(outPos);
       handleOutMesh.userData.curveControl = {
         actorId: actor.id,
@@ -368,6 +391,26 @@ export class CurveEditController {
     if (event.button !== 0) {
       return;
     }
+    const picked = this.pickControl(event);
+    if (picked) {
+      event.preventDefault();
+      event.stopPropagation();
+      this.pendingOrbitBlock = false;
+      this.activeControlMeta = getControlMeta(picked);
+      this.transformControls.attach(picked);
+      this.refreshControlSelectionVisuals();
+      if (this.activeControlMeta) {
+        this.emitCurveVertexSelection(
+          this.activeControlMeta.actorId,
+          this.activeControlMeta.pointIndex,
+          this.activeControlMeta.controlType
+        );
+      }
+      this.kernel.store.getState().actions.setStatus(
+        "Curve control selected. Drag gizmo handles for X/Y/Z or XY/XZ/YZ movement."
+      );
+      return;
+    }
     if (this.activeControlMeta && this.transformControls.object) {
       const pointer = this.pointerToNdc(event);
       if (pointer) {
@@ -379,7 +422,6 @@ export class CurveEditController {
         }
       }
     }
-    const picked = this.pickControl(event);
     if (!picked) {
       if (this.activeControlMeta) {
         this.transformControls.detach();
@@ -389,21 +431,6 @@ export class CurveEditController {
       }
       return;
     }
-    event.preventDefault();
-    event.stopPropagation();
-    this.activeControlMeta = getControlMeta(picked);
-    this.transformControls.attach(picked);
-    this.refreshControlSelectionVisuals();
-    if (this.activeControlMeta) {
-      this.emitCurveVertexSelection(
-        this.activeControlMeta.actorId,
-        this.activeControlMeta.pointIndex,
-        this.activeControlMeta.controlType
-      );
-    }
-    this.kernel.store.getState().actions.setStatus(
-      "Curve control selected. Drag gizmo handles for X/Y/Z or XY/XZ/YZ movement."
-    );
   };
 
   private onPointerUp = (): void => {
