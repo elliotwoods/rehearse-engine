@@ -257,16 +257,6 @@ export const CAMERA_PATH_ACTOR_SCHEMA: ParameterSchema = {
       type: "actor-ref",
       allowSelf: false,
       visibleWhen: [{ key: "targetMode", equals: "actor" }]
-    },
-    {
-      key: "previewDurationSeconds",
-      label: "Preview Duration",
-      type: "number",
-      min: 0.1,
-      max: 600,
-      step: 0.1,
-      defaultValue: 5,
-      unit: "s"
     }
   ]
 };

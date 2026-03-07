@@ -2,6 +2,7 @@ import { useMemo, useRef, useState } from "react";
 import { useAppStore } from "@/app/useAppStore";
 import { useKernel } from "@/app/useKernel";
 import { executeConsoleSource, getConsoleCompletions } from "@/core/console/runtime";
+import { CopyContentsButton } from "@/ui/components/CopyContentsButton";
 
 function formatTime(value: string): string {
   const date = new Date(value);
@@ -15,7 +16,6 @@ export function ConsolePanel() {
   const kernel = useKernel();
   const entries = useAppStore((store) => store.state.consoleEntries);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [source, setSource] = useState("");
   const [cursor, setCursor] = useState(0);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -43,22 +43,6 @@ export function ConsolePanel() {
       examples: []
     };
   }, [activeSuggestion, completionState.activeDoc]);
-
-  const copyToClipboard = async (text: string): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(text);
-      return;
-    } catch {
-      const textArea = document.createElement("textarea");
-      textArea.value = text;
-      textArea.style.position = "fixed";
-      textArea.style.left = "-99999px";
-      document.body.appendChild(textArea);
-      textArea.select();
-      document.execCommand("copy");
-      document.body.removeChild(textArea);
-    }
-  };
 
   const applyCompletion = (insertText: string): void => {
     const selectionStart = inputRef.current?.selectionStart ?? cursor;
@@ -261,23 +245,17 @@ export function ConsolePanel() {
                 .join("\n");
               return (
                 <article key={entry.id} className={`console-log-entry command ${entry.status}`}>
-                  <button
-                    type="button"
-                    className="console-log-summary"
-                    title="Copy command result"
-                    onClick={() => {
-                      void copyToClipboard(payload).then(() => {
-                        setCopiedId(entry.id);
-                        window.setTimeout(() => {
-                          setCopiedId((current) => (current === entry.id ? null : current));
-                        }, 1200);
-                      });
-                    }}
-                  >
+                  <div className="console-log-summary">
                     <span>{formatTime(entry.timestampIso)}</span>
                     <strong>{entry.status.toUpperCase()}</strong>
-                    <span>{copiedId === entry.id ? "Copied to clipboard" : entry.source}</span>
-                  </button>
+                    <span>{entry.source}</span>
+                  </div>
+                  <CopyContentsButton
+                    className="console-log-copy"
+                    text={payload}
+                    title="Copy command entry"
+                    ariaLabel="Copy command entry"
+                  />
                   <div className="console-command-summary">
                     {entry.summary ?? (entry.status === "running" ? "Running..." : "")}
                     {entry.error ? <span className="console-command-error">{entry.error}</span> : null}
@@ -304,23 +282,17 @@ export function ConsolePanel() {
               .join("\n");
             return (
               <article key={entry.id} className={`console-log-entry ${entry.level}`}>
-                <button
-                  type="button"
-                  className="console-log-summary"
-                  title="Copy log entry"
-                  onClick={() => {
-                    void copyToClipboard(payload).then(() => {
-                      setCopiedId(entry.id);
-                      window.setTimeout(() => {
-                        setCopiedId((current) => (current === entry.id ? null : current));
-                      }, 1200);
-                    });
-                  }}
-                >
+                <div className="console-log-summary">
                   <span>{formatTime(entry.timestampIso)}</span>
                   <strong>{entry.level.toUpperCase()}</strong>
-                  <span>{copiedId === entry.id ? "Copied to clipboard" : entry.message}</span>
-                </button>
+                  <span>{entry.message}</span>
+                </div>
+                <CopyContentsButton
+                  className="console-log-copy"
+                  text={payload}
+                  title="Copy log entry"
+                  ariaLabel="Copy log entry"
+                />
                 {entry.details ? (
                   <div className="console-log-actions">
                     <button

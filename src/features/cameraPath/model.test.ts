@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { ActorNode } from "@/core/types";
-import { sampleCameraPathPoseAtProgress } from "@/features/cameraPath/model";
+import {
+  appendCameraPathCurvePoint,
+  buildSinglePointCurveData,
+  clampCameraPathKeyframeTime,
+  getCameraPathDurationSeconds,
+  getCameraPathKeyframes,
+  sampleCameraPathPoseAtTime
+} from "@/features/cameraPath/model";
 
 function createActor(input: Partial<ActorNode> & Pick<ActorNode, "id" | "actorType" | "name">): ActorNode {
   return {
@@ -23,7 +30,46 @@ function createActor(input: Partial<ActorNode> & Pick<ActorNode, "id" | "actorTy
 }
 
 describe("cameraPath model", () => {
-  it("samples curve-target camera paths from managed child curves", () => {
+  it("seeds managed camera curves with auto anchors", () => {
+    expect(buildSinglePointCurveData([5, 6, 7])).toMatchObject({
+      closed: false,
+      points: [
+        {
+          position: [5, 6, 7],
+          mode: "auto",
+          handleInMode: "normal",
+          handleOutMode: "normal",
+          enabled: true
+        }
+      ]
+    });
+  });
+
+  it("appends camera path keyframes with neighbor-aware anchors", () => {
+    const curveActor = createActor({
+      id: "position",
+      actorType: "curve",
+      name: "camera position",
+      params: {
+        curveData: buildSinglePointCurveData([0, 0, 0])
+      }
+    });
+
+    expect(appendCameraPathCurvePoint(curveActor, [1, 2, 3])).toMatchObject({
+      points: [
+        { position: [0, 0, 0], mode: "auto" },
+        {
+          position: [1, 2, 3],
+          mode: "auto",
+          handleInMode: "normal",
+          handleOutMode: "normal",
+          enabled: true
+        }
+      ]
+    });
+  });
+
+  it("creates fallback explicit keyframes from managed curve counts", () => {
     const cameraPath = createActor({
       id: "path",
       actorType: "camera-path",
@@ -38,11 +84,69 @@ describe("cameraPath model", () => {
       id: "position",
       actorType: "curve",
       name: "camera position",
+      params: {
+        curveData: {
+          closed: false,
+          points: [
+            { position: [0, 0, 0], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "mirrored" },
+            { position: [1, 0, 0], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "mirrored" }
+          ]
+        }
+      }
+    });
+    const targetCurve = createActor({
+      id: "target",
+      actorType: "curve",
+      name: "camera target",
+      params: {
+        curveData: {
+          closed: false,
+          points: [
+            { position: [0, 0, 1], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "mirrored" },
+            { position: [0, 0, 2], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "mirrored" }
+          ]
+        }
+      }
+    });
+
+    const keyframes = getCameraPathKeyframes(cameraPath, {
+      [cameraPath.id]: cameraPath,
+      [positionCurve.id]: positionCurve,
+      [targetCurve.id]: targetCurve
+    });
+
+    expect(keyframes).toHaveLength(2);
+    expect(keyframes[0]?.timeSeconds).toBe(0);
+    expect(keyframes[1]?.timeSeconds).toBe(1);
+  });
+
+  it("samples curve-target camera paths from explicit times", () => {
+    const cameraPath = createActor({
+      id: "path",
+      actorType: "camera-path",
+      name: "Camera Path",
+      params: {
+        positionCurveActorId: "position",
+        targetCurveActorId: "target",
+        targetMode: "curve",
+        keyframes: [
+          { id: "kf0", timeSeconds: 0 },
+          { id: "kf1", timeSeconds: 2 }
+        ]
+      }
+    });
+    const positionCurve = createActor({
+      id: "position",
+      actorType: "curve",
+      name: "camera position",
       parentActorId: "path",
       params: {
         curveData: {
           closed: false,
-          points: [{ position: [5, 6, 7], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "mirrored" }]
+          points: [
+            { position: [0, 0, 0], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "mirrored" },
+            { position: [10, 0, 0], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "mirrored" }
+          ]
         }
       }
     });
@@ -54,24 +158,27 @@ describe("cameraPath model", () => {
       params: {
         curveData: {
           closed: false,
-          points: [{ position: [1, 2, 3], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "mirrored" }]
+          points: [
+            { position: [0, 0, 1], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "mirrored" },
+            { position: [0, 5, 1], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "mirrored" }
+          ]
         }
       }
     });
 
-    const pose = sampleCameraPathPoseAtProgress(cameraPath, {
+    const pose = sampleCameraPathPoseAtTime(cameraPath, {
       [cameraPath.id]: cameraPath,
       [positionCurve.id]: positionCurve,
       [targetCurve.id]: targetCurve
-    }, 0.5);
+    }, 1);
 
     expect(pose).toEqual({
-      position: [5, 6, 7],
-      target: [1, 2, 3]
+      position: [5, 0, 0],
+      target: [0, 2.5, 1]
     });
   });
 
-  it("samples actor-target camera paths using the target actor origin", () => {
+  it("samples actor-target camera paths using the target actor origin and clamps after duration", () => {
     const cameraPath = createActor({
       id: "path",
       actorType: "camera-path",
@@ -80,7 +187,11 @@ describe("cameraPath model", () => {
         positionCurveActorId: "position",
         targetCurveActorId: "target-curve",
         targetMode: "actor",
-        targetActorId: "target-actor"
+        targetActorId: "target-actor",
+        keyframes: [
+          { id: "kf0", timeSeconds: 0 },
+          { id: "kf1", timeSeconds: 3 }
+        ]
       }
     });
     const positionCurve = createActor({
@@ -91,7 +202,25 @@ describe("cameraPath model", () => {
       params: {
         curveData: {
           closed: false,
-          points: [{ position: [9, 8, 7], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "mirrored" }]
+          points: [
+            { position: [0, 0, 0], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "mirrored" },
+            { position: [9, 8, 7], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "mirrored" }
+          ]
+        }
+      }
+    });
+    const targetCurve = createActor({
+      id: "target-curve",
+      actorType: "curve",
+      name: "camera target",
+      parentActorId: "path",
+      params: {
+        curveData: {
+          closed: false,
+          points: [
+            { position: [0, 0, 0], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "mirrored" },
+            { position: [1, 1, 1], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "mirrored" }
+          ]
         }
       }
     });
@@ -106,15 +235,31 @@ describe("cameraPath model", () => {
       }
     });
 
-    const pose = sampleCameraPathPoseAtProgress(cameraPath, {
+    const pose = sampleCameraPathPoseAtTime(cameraPath, {
       [cameraPath.id]: cameraPath,
       [positionCurve.id]: positionCurve,
+      [targetCurve.id]: targetCurve,
       [targetActor.id]: targetActor
-    }, 0.25);
+    }, 10);
 
     expect(pose).toEqual({
       position: [9, 8, 7],
       target: [3, 4, 5]
     });
+    expect(getCameraPathDurationSeconds(cameraPath, {
+      [cameraPath.id]: cameraPath,
+      [positionCurve.id]: positionCurve,
+      [targetCurve.id]: targetCurve,
+      [targetActor.id]: targetActor
+    })).toBe(3);
+  });
+
+  it("clamps retimed keyframes between their neighbors", () => {
+    const clamped = clampCameraPathKeyframeTime([
+      { id: "kf0", timeSeconds: 0 },
+      { id: "kf1", timeSeconds: 2 },
+      { id: "kf2", timeSeconds: 4 }
+    ], 1, 10);
+    expect(clamped).toBeCloseTo(3.99, 6);
   });
 });

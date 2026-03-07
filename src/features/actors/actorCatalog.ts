@@ -1,6 +1,6 @@
 import type { AppKernel } from "@/app/kernel";
 import type { ActorType } from "@/core/types";
-import { buildSinglePointCurveData } from "@/features/cameraPath/model";
+import { buildDefaultCameraPathKeyframes, buildSinglePointCurveData } from "@/features/cameraPath/model";
 import { createDefaultCurveData } from "@/features/curves/types";
 
 export interface ActorCreationOption {
@@ -107,7 +107,7 @@ export function createActorFromDescriptor(kernel: AppKernel, descriptorId: strin
       targetCurveActorId,
       targetMode: "curve",
       targetActorId: "",
-      previewDurationSeconds: 5
+      keyframes: buildDefaultCameraPathKeyframes(1)
     });
     actions.select([{ kind: "actor", id: actorId }]);
     return actorId;

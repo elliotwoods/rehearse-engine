@@ -1,8 +1,3 @@
-# Version numbering
-
-Auto-increment version number
-Auto-add build date-time
-
 # Interface
 
 ## Can be improved
@@ -62,3 +57,5 @@ Options of different interactive cameras:
 * ofxGrabCam style
 * Current orbit camera style
 * Unreal first person style
+
+# 

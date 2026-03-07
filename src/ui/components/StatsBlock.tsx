@@ -1,5 +1,4 @@
-import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faCopy } from "@fortawesome/free-solid-svg-icons";
+import { CopyContentsButton } from "@/ui/components/CopyContentsButton";
 
 export type StatsTone = "default" | "warning" | "error";
 
@@ -23,22 +22,6 @@ interface StatsBlockProps {
   emptyText?: string;
   onCopySuccess?: (title: string) => void;
   onCopyError?: (title: string, message: string) => void;
-}
-
-async function copyToClipboard(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-    return;
-  } catch {
-    const textArea = document.createElement("textarea");
-    textArea.value = text;
-    textArea.style.position = "fixed";
-    textArea.style.left = "-99999px";
-    document.body.appendChild(textArea);
-    textArea.select();
-    document.execCommand("copy");
-    document.body.removeChild(textArea);
-  }
 }
 
 function schemaLine(label: string, value: string, indent: string): string {
@@ -76,23 +59,18 @@ export function StatsBlock(props: StatsBlockProps) {
     <section className={`stats-block ${props.className ?? ""}`.trim()}>
       <header className="stats-block-header">
         <HeadingTag>{props.title}</HeadingTag>
-        <button
-          type="button"
+        <CopyContentsButton
           className="stats-block-copy"
+          text={copyPayload}
           title="Copy panel contents"
-          onClick={() => {
-            void copyToClipboard(copyPayload)
-              .then(() => {
-                props.onCopySuccess?.(props.title);
-              })
-              .catch((error) => {
-                const message = error instanceof Error ? error.message : "Clipboard write failed";
-                props.onCopyError?.(props.title, message);
-              });
+          ariaLabel="Copy panel contents"
+          onCopySuccess={() => {
+            props.onCopySuccess?.(props.title);
           }}
-        >
-          <FontAwesomeIcon icon={faCopy} />
-        </button>
+          onCopyError={(message) => {
+            props.onCopyError?.(props.title, message);
+          }}
+        />
       </header>
       {!hasRows && !hasGroups ? (
         <p className="panel-empty">{props.emptyText ?? "No stats available."}</p>

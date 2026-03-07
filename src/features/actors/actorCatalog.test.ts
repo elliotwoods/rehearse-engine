@@ -44,11 +44,12 @@ describe("actorCatalog camera path creation", () => {
 
     expect(positionCurve?.parentActorId).toBe(actorId);
     expect(targetCurve?.parentActorId).toBe(actorId);
+    expect(actor?.params.keyframes).toMatchObject([{ timeSeconds: 0 }]);
     expect(positionCurve?.params.curveData).toMatchObject({
-      points: [{ position: [10, 20, 30] }]
+      points: [{ position: [10, 20, 30], mode: "auto" }]
     });
     expect(targetCurve?.params.curveData).toMatchObject({
-      points: [{ position: [1, 2, 3] }]
+      points: [{ position: [1, 2, 3], mode: "auto" }]
     });
 
     kernel.store.getState().actions.undo();

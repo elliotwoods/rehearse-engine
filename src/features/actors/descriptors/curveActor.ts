@@ -43,14 +43,16 @@ export const curveActorDescriptor: ReloadableDescriptor<CurveRuntime> = {
       const curve = curveDataWithOverrides(actor);
       const samplesPerSegment = getCurveSamplesPerSegmentFromActor(actor);
       const fallbackLength = estimateCurveLength(curve, samplesPerSegment);
+      const autoCount = curve.points.filter((point) => point.mode === "auto").length;
       const mirroredCount = curve.points.filter((point) => point.mode === "mirrored").length;
       const hardCount = curve.points.filter((point) => point.mode === "hard").length;
-      const normalCount = curve.points.length - mirroredCount - hardCount;
+      const normalCount = curve.points.length - autoCount - mirroredCount - hardCount;
       const defaultSegmentCount = curve.points.length < 2 ? 0 : (curve.closed ? curve.points.length : curve.points.length - 1);
       return [
         { label: "Type", value: "Curve" },
         { label: "Closed", value: curve.closed },
         { label: "Points", value: runtimeStatus?.values.pointCount ?? getCurveDataFromActor(actor).points.length },
+        { label: "Auto Points", value: autoCount },
         { label: "Mirrored Points", value: mirroredCount },
         { label: "Normal Points", value: normalCount },
         { label: "Hard Points", value: hardCount },

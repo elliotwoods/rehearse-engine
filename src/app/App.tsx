@@ -22,9 +22,8 @@ import { RenderSettingsModal } from "@/ui/components/RenderSettingsModal";
 import { RenderOverlay } from "@/ui/components/RenderOverlay";
 import type { CameraState } from "@/core/types";
 import type { RenderProgress, RenderSettings } from "@/features/render/types";
-import { computeFrameCount, frameProgress, frameSimTime } from "@/features/render/timeline";
+import { computeFrameCount, frameSimTime } from "@/features/render/timeline";
 import { solveRenderCamera } from "@/features/render/cameraSolver";
-import type { ArcLengthSample } from "@/features/cameraPath/model";
 import { canvasToPngBytes, createRenderExporter } from "@/features/render/exporters";
 import { WebGlViewport } from "@/render/webglRenderer";
 import { WebGpuViewport } from "@/render/webgpuRenderer";
@@ -349,8 +348,6 @@ export function App() {
           sessionName: activeSessionName
         });
         exporter = writeExporter;
-        const pathArcTableCache = new Map<string, ArcLengthSample[]>();
-
         kernel.store.getState().actions.setTimeRunning(false);
         kernel.store.getState().actions.setTimeSpeed(1);
 
@@ -358,15 +355,13 @@ export function App() {
           if (renderCancelRequestedRef.current) {
             throw new Error("Render cancelled.");
           }
-          const progress = frameProgress(frameIndex, frameCount);
           const simTime = frameSimTime(startTime, frameIndex, settings.fps);
           kernel.store.getState().actions.setElapsedSimSeconds(simTime);
           const nextCamera = solveRenderCamera(
             kernel.store.getState().state,
             previousCamera,
-            progress,
-            settings.cameraPathId,
-            pathArcTableCache
+            Math.max(0, simTime - startTime),
+            settings.cameraPathId
           );
           kernel.store.getState().actions.setCameraState(nextCamera, false);
           setRenderProgress({ frameIndex, frameCount, message: "Rendering frame..." });

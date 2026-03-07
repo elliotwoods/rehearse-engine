@@ -1,4 +1,5 @@
 import type { CurveData, CurveHandleMode, CurveHandleWeightMode, CurvePoint } from "@/features/curves/types";
+import { getEffectiveCurveHandlesAt } from "@/features/curves/handles";
 
 function add3(a: [number, number, number], b: [number, number, number]): [number, number, number] {
   return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
@@ -117,6 +118,10 @@ export function setCurvePointMode(curve: CurveData, pointIndex: number, mode: Cu
     return next;
   }
 
+  const effectiveHandles = getEffectiveCurveHandlesAt(next, pointIndex);
+  point.handleIn = [...effectiveHandles.handleIn];
+  point.handleOut = [...effectiveHandles.handleOut];
+
   if (mode === "mirrored" && point.mode !== "mirrored") {
     const mirroredOut = mul3(sub3(point.handleOut, point.handleIn), 0.5);
     point.handleOut = mirroredOut;
@@ -132,6 +137,8 @@ export function setCurvePointMode(curve: CurveData, pointIndex: number, mode: Cu
     return next;
   }
 
+  point.handleInMode = "normal";
+  point.handleOutMode = "normal";
   point.mode = mode;
   return next;
 }
@@ -147,7 +154,7 @@ export function setCurveHandleWeightMode(
   if (!point) {
     return next;
   }
-  if (point.mode === "mirrored") {
+  if (point.mode === "mirrored" || point.mode === "auto") {
     return next;
   }
   if (handleKind === "in") {
@@ -168,6 +175,15 @@ export function setCurveHandlePosition(
   const point = next.points[pointIndex];
   if (!point) {
     return next;
+  }
+
+  if (point.mode === "auto") {
+    const effectiveHandles = getEffectiveCurveHandlesAt(next, pointIndex);
+    point.mode = "normal";
+    point.handleInMode = "normal";
+    point.handleOutMode = "normal";
+    point.handleIn = [...effectiveHandles.handleIn];
+    point.handleOut = [...effectiveHandles.handleOut];
   }
 
   if (handleKind === "in") {

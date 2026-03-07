@@ -1,5 +1,5 @@
 import type { CurveData } from "@/features/curves/types";
-import { getEffectiveCurveHandles } from "@/features/curves/handles";
+import { getEffectiveCurveHandlesAt } from "@/features/curves/handles";
 
 function add3(a: [number, number, number], b: [number, number, number]): [number, number, number] {
   return [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
@@ -87,8 +87,8 @@ function segmentControls(curve: CurveData, segmentIndex: number): {
       p3: [0, 0, 0]
     };
   }
-  const currentHandles = getEffectiveCurveHandles(current);
-  const nextHandles = getEffectiveCurveHandles(next);
+  const currentHandles = getEffectiveCurveHandlesAt(curve, segmentIndex % count);
+  const nextHandles = getEffectiveCurveHandlesAt(curve, (segmentIndex + 1) % count);
   return {
     p0: current.position,
     p1: add3(current.position, currentHandles.handleOut),

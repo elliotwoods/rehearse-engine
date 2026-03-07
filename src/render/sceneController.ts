@@ -9,7 +9,7 @@ import { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
 import type { AppKernel } from "@/app/kernel";
 import type { ActorNode, ActorRuntimeStatus, AppState } from "@/core/types";
 import type { ReloadableDescriptor } from "@/core/hotReload/types";
-import { getEffectiveCurveHandles } from "@/features/curves/handles";
+import { getEffectiveCurveHandlesAt } from "@/features/curves/handles";
 import { curveDataWithOverrides, getCurveSamplesPerSegmentFromActor } from "@/features/curves/model";
 import { estimateCurveLength, sampleCurvePositionAndTangent } from "@/features/curves/sampler";
 import { tryParseSplatBinary } from "@/features/splats/splatBinaryFormat";
@@ -1201,8 +1201,8 @@ export class SceneController {
         if (!current || !next) {
           continue;
         }
-        const currentHandles = getEffectiveCurveHandles(current);
-        const nextHandles = getEffectiveCurveHandles(next);
+        const currentHandles = getEffectiveCurveHandlesAt({ closed, points: activePoints }, segmentIndex);
+        const nextHandles = getEffectiveCurveHandlesAt({ closed, points: activePoints }, (segmentIndex + 1) % pointCount);
         const p0 = new THREE.Vector3(...current.position);
         const p1 = new THREE.Vector3(
           current.position[0] + currentHandles.handleOut[0],

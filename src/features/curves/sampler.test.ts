@@ -43,4 +43,38 @@ describe("curve sampler", () => {
     expect(high).toBeGreaterThan(1);
     expect(Math.abs(high - low)).toBeLessThan(0.25);
   });
+
+  it("samples auto-anchor curves using neighbor-informed handles", () => {
+    const autoCurve: CurveData = {
+      closed: false,
+      points: [
+        {
+          position: [0, 0, 0],
+          handleIn: [0, 0, 0],
+          handleOut: [0, 0, 0],
+          mode: "auto"
+        },
+        {
+          position: [3, 3, 0],
+          handleIn: [0, 0, 0],
+          handleOut: [0, 0, 0],
+          mode: "auto"
+        },
+        {
+          position: [6, 0, 0],
+          handleIn: [0, 0, 0],
+          handleOut: [0, 0, 0],
+          mode: "auto"
+        }
+      ]
+    };
+
+    const midpoint = sampleCurvePosition(autoCurve, 0.5);
+    expect(midpoint[0]).toBeCloseTo(3, 6);
+    expect(midpoint[1]).toBeCloseTo(3, 6);
+
+    const tangent = sampleCurveTangent(autoCurve, 0.5);
+    expect(tangent[0]).toBeCloseTo(1, 6);
+    expect(tangent[1]).toBeCloseTo(0, 6);
+  });
 });

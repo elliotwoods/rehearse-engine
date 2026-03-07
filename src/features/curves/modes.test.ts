@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getEffectiveCurveHandles } from "@/features/curves/handles";
+import { getEffectiveCurveHandles, getEffectiveCurveHandlesAt } from "@/features/curves/handles";
 import { removeCurvePoint, setCurveHandlePosition, setCurveHandleWeightMode, setCurvePointMode } from "@/features/curves/editing";
 import { sanitizeCurveData, type CurveData } from "@/features/curves/types";
 
@@ -87,6 +87,40 @@ describe("curve handle modes", () => {
     expect(point?.handleOutMode).toBe("normal");
     expectVecClose(point ? getEffectiveCurveHandles(point).handleIn : undefined, [0, 0, 0]);
     expectVecClose(point ? getEffectiveCurveHandles(point).handleOut : undefined, [1, 0, 0]);
+  });
+
+  it("resolves auto mode handles from adjacent points", () => {
+    const autoCurve = sanitizeCurveData({
+      closed: false,
+      points: [
+        { position: [0, 0, 0], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "auto" },
+        { position: [3, 3, 0], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "auto" },
+        { position: [6, 0, 0], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "auto" }
+      ]
+    });
+
+    expectVecClose(getEffectiveCurveHandlesAt(autoCurve, 0).handleIn, [0, 0, 0]);
+    expectVecClose(getEffectiveCurveHandlesAt(autoCurve, 0).handleOut, [1, 1, 0]);
+    expectVecClose(getEffectiveCurveHandlesAt(autoCurve, 1).handleIn, [-1, 0, 0]);
+    expectVecClose(getEffectiveCurveHandlesAt(autoCurve, 1).handleOut, [1, 0, 0]);
+    expectVecClose(getEffectiveCurveHandlesAt(autoCurve, 2).handleIn, [-1, 1, 0]);
+    expectVecClose(getEffectiveCurveHandlesAt(autoCurve, 2).handleOut, [0, 0, 0]);
+  });
+
+  it("promotes auto mode to normal when a handle is edited directly", () => {
+    const autoCurve = sanitizeCurveData({
+      closed: false,
+      points: [
+        { position: [0, 0, 0], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "auto" },
+        { position: [3, 0, 0], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "auto" },
+        { position: [6, 0, 0], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "auto" }
+      ]
+    });
+
+    const edited = setCurveHandlePosition(autoCurve, 1, "out", [2, 1, 0]);
+    expect(edited.points[1]?.mode).toBe("normal");
+    expectVecClose(edited.points[1]?.handleIn, [-1, 0, 0]);
+    expectVecClose(edited.points[1]?.handleOut, [2, 1, 0]);
   });
 
   it("keeps explicit empty and single-point curves during sanitize", () => {

@@ -1,11 +1,12 @@
 import * as THREE from "three";
+import { createId } from "@/core/ids";
 import type { ActorNode } from "@/core/types";
 import { curveDataWithOverrides } from "@/features/curves/model";
 import { sampleCurvePositionAndTangent } from "@/features/curves/sampler";
 
-export interface ArcLengthSample {
-  t: number;
-  length: number;
+export interface CameraPathKeyframe {
+  id: string;
+  timeSeconds: number;
 }
 
 export interface CameraPathRefs {
@@ -20,16 +21,41 @@ export interface CameraPathPose {
   target: [number, number, number];
 }
 
+const CAMERA_PATH_KEYFRAME_EPSILON_SECONDS = 0.01;
+
 function getCameraPathTargetMode(value: unknown): "curve" | "actor" {
   return value === "actor" ? "actor" : "curve";
 }
 
-export function getCameraPathPreviewDurationSeconds(actor: ActorNode): number {
-  const raw = Number(actor.params.previewDurationSeconds);
+function toFiniteTimeSeconds(value: unknown, fallback: number): number {
+  const raw = Number(value);
   if (!Number.isFinite(raw)) {
-    return 5;
+    return fallback;
   }
-  return Math.max(0.1, Math.min(600, raw));
+  return Math.max(0, raw);
+}
+
+function getSharedManagedCurveCount(refs: CameraPathRefs): number {
+  const positionCount = refs.positionCurveActor ? curveDataWithOverrides(refs.positionCurveActor).points.length : 0;
+  if (refs.targetMode === "actor") {
+    return positionCount;
+  }
+  const targetCount = refs.targetCurveActor ? curveDataWithOverrides(refs.targetCurveActor).points.length : 0;
+  return Math.min(positionCount, targetCount);
+}
+
+export function createCameraPathKeyframe(timeSeconds: number): CameraPathKeyframe {
+  return {
+    id: createId("camkf"),
+    timeSeconds: Math.max(0, timeSeconds)
+  };
+}
+
+export function buildDefaultCameraPathKeyframes(count: number): CameraPathKeyframe[] {
+  const safeCount = Math.max(0, Math.floor(count));
+  return Array.from({ length: safeCount }, (_, index) =>
+    createCameraPathKeyframe(index === 0 ? 0 : index)
+  );
 }
 
 export function resolveCameraPathRefs(cameraPathActor: ActorNode, actors: Record<string, ActorNode>): CameraPathRefs {
@@ -49,14 +75,66 @@ export function resolveCameraPathRefs(cameraPathActor: ActorNode, actors: Record
   };
 }
 
-export function getCameraPathKeyframeCount(cameraPathActor: ActorNode, actors: Record<string, ActorNode>): number {
+export function getCameraPathKeyframes(cameraPathActor: ActorNode, actors: Record<string, ActorNode>): CameraPathKeyframe[] {
   const refs = resolveCameraPathRefs(cameraPathActor, actors);
-  const positionCount = refs.positionCurveActor ? curveDataWithOverrides(refs.positionCurveActor).points.length : 0;
-  if (refs.targetMode === "actor") {
-    return positionCount;
+  const expectedCount = getSharedManagedCurveCount(refs);
+  if (expectedCount <= 0) {
+    return [];
   }
-  const targetCount = refs.targetCurveActor ? curveDataWithOverrides(refs.targetCurveActor).points.length : 0;
-  return Math.min(positionCount, targetCount);
+
+  const source = Array.isArray(cameraPathActor.params.keyframes)
+    ? cameraPathActor.params.keyframes
+    : [];
+  const keyframes: CameraPathKeyframe[] = [];
+  for (let index = 0; index < expectedCount; index += 1) {
+    const raw = source[index];
+    const previous = keyframes[index - 1];
+    const fallbackTime = index === 0 ? 0 : (previous?.timeSeconds ?? index - 1) + 1;
+    if (!raw || typeof raw !== "object") {
+      keyframes.push({
+        id: `camera-path-keyframe-${String(index + 1)}`,
+        timeSeconds: fallbackTime
+      });
+      continue;
+    }
+    const candidate = raw as { id?: unknown; timeSeconds?: unknown };
+    keyframes.push({
+      id: typeof candidate.id === "string" && candidate.id.trim().length > 0
+        ? candidate.id
+        : `camera-path-keyframe-${String(index + 1)}`,
+      timeSeconds: toFiniteTimeSeconds(candidate.timeSeconds, fallbackTime)
+    });
+  }
+
+  for (let index = 0; index < keyframes.length; index += 1) {
+    if (index === 0) {
+      const current = keyframes[index];
+      if (!current) {
+        continue;
+      }
+      keyframes[index] = { id: current.id, timeSeconds: 0 };
+      continue;
+    }
+    const previous = keyframes[index - 1];
+    const current = keyframes[index];
+    if (!previous || !current) {
+      continue;
+    }
+    keyframes[index] = {
+      id: current.id,
+      timeSeconds: Math.max(previous.timeSeconds + CAMERA_PATH_KEYFRAME_EPSILON_SECONDS, current.timeSeconds)
+    };
+  }
+  return keyframes;
+}
+
+export function getCameraPathDurationSeconds(cameraPathActor: ActorNode, actors: Record<string, ActorNode>): number {
+  const keyframes = getCameraPathKeyframes(cameraPathActor, actors);
+  return keyframes[keyframes.length - 1]?.timeSeconds ?? 0;
+}
+
+export function getCameraPathKeyframeCount(cameraPathActor: ActorNode, actors: Record<string, ActorNode>): number {
+  return getCameraPathKeyframes(cameraPathActor, actors).length;
 }
 
 export function getCameraPathValidity(cameraPathActor: ActorNode, actors: Record<string, ActorNode>): {
@@ -67,11 +145,11 @@ export function getCameraPathValidity(cameraPathActor: ActorNode, actors: Record
   if (!refs.positionCurveActor) {
     return { ok: false, message: "Missing managed position curve." };
   }
-  if (refs.targetMode === "curve" && !refs.targetCurveActor) {
-    return { ok: false, message: "Missing managed target curve." };
-  }
   if (refs.targetMode === "actor" && !refs.targetActor) {
     return { ok: false, message: "Target actor is not assigned." };
+  }
+  if (refs.targetMode === "curve" && !refs.targetCurveActor) {
+    return { ok: false, message: "Missing managed target curve." };
   }
   return { ok: true, message: null };
 }
@@ -84,7 +162,7 @@ export function buildSinglePointCurveData(position: [number, number, number]) {
         position: [...position] as [number, number, number],
         handleIn: [-0.3, 0, 0] as [number, number, number],
         handleOut: [0.3, 0, 0] as [number, number, number],
-        mode: "mirrored" as const,
+        mode: "auto" as const,
         handleInMode: "normal" as const,
         handleOutMode: "normal" as const,
         enabled: true
@@ -93,42 +171,75 @@ export function buildSinglePointCurveData(position: [number, number, number]) {
   };
 }
 
-export function buildCameraPathArcLengthTable(actor: ActorNode): ArcLengthSample[] {
-  const curve = curveDataWithOverrides(actor);
-  const samples: ArcLengthSample[] = [{ t: 0, length: 0 }];
-  let length = 0;
-  let previous = sampleCurvePositionAndTangent(curve, 0).position;
-  for (let index = 1; index <= 256; index += 1) {
-    const t = index / 256;
-    const current = sampleCurvePositionAndTangent(curve, t).position;
-    const dx = current[0] - previous[0];
-    const dy = current[1] - previous[1];
-    const dz = current[2] - previous[2];
-    length += Math.hypot(dx, dy, dz);
-    samples.push({ t, length });
-    previous = current;
-  }
-  return samples;
+export function appendCameraPathCurvePoint(
+  actor: ActorNode,
+  position: [number, number, number]
+): ReturnType<typeof curveDataWithOverrides> {
+  const current = curveDataWithOverrides(actor);
+  return {
+    ...current,
+    points: [
+      ...current.points,
+      {
+        position: [...position] as [number, number, number],
+        handleIn: [-0.3, 0, 0] as [number, number, number],
+        handleOut: [0.3, 0, 0] as [number, number, number],
+        mode: "auto" as const,
+        handleInMode: "normal" as const,
+        handleOutMode: "normal" as const,
+        enabled: true
+      }
+    ]
+  };
 }
 
-export function remapProgressToCurveT(samples: ArcLengthSample[], progress: number): number {
-  const clamped = Math.max(0, Math.min(1, progress));
-  const total = samples[samples.length - 1]?.length ?? 0;
-  if (total <= 1e-6) {
-    return clamped;
+export function clampCameraPathKeyframeTime(
+  keyframes: CameraPathKeyframe[],
+  keyframeIndex: number,
+  timeSeconds: number
+): number {
+  if (keyframeIndex <= 0) {
+    return 0;
   }
-  const targetLength = total * clamped;
-  for (let index = 1; index < samples.length; index += 1) {
-    const previous = samples[index - 1];
-    const next = samples[index];
-    if (!previous || !next || next.length < targetLength) {
-      continue;
+  const previous = keyframes[keyframeIndex - 1];
+  const next = keyframes[keyframeIndex + 1];
+  const min = (previous?.timeSeconds ?? 0) + CAMERA_PATH_KEYFRAME_EPSILON_SECONDS;
+  const max = next ? next.timeSeconds - CAMERA_PATH_KEYFRAME_EPSILON_SECONDS : Number.POSITIVE_INFINITY;
+  return Math.max(min, Math.min(max, Math.max(0, timeSeconds)));
+}
+
+export function getCameraPathKeyframeIndexAtTime(
+  cameraPathActor: ActorNode,
+  actors: Record<string, ActorNode>,
+  timeSeconds: number
+): number {
+  const keyframes = getCameraPathKeyframes(cameraPathActor, actors);
+  if (keyframes.length <= 1) {
+    return 0;
+  }
+  let bestIndex = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < keyframes.length; index += 1) {
+    const distance = Math.abs((keyframes[index]?.timeSeconds ?? 0) - timeSeconds);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
     }
-    const span = Math.max(1e-6, next.length - previous.length);
-    const mix = (targetLength - previous.length) / span;
-    return previous.t + (next.t - previous.t) * mix;
   }
-  return 1;
+  return bestIndex;
+}
+
+export function getCameraPathTimeAtKeyframeIndex(
+  cameraPathActor: ActorNode,
+  actors: Record<string, ActorNode>,
+  keyframeIndex: number
+): number {
+  const keyframes = getCameraPathKeyframes(cameraPathActor, actors);
+  if (keyframes.length <= 0) {
+    return 0;
+  }
+  const clamped = Math.max(0, Math.min(keyframes.length - 1, keyframeIndex));
+  return keyframes[clamped]?.timeSeconds ?? 0;
 }
 
 export function resolveActorWorldMatrix(actorId: string, actors: Record<string, ActorNode>): THREE.Matrix4 {
@@ -183,21 +294,43 @@ export function actorWorldOrigin(actor: ActorNode, actors: Record<string, ActorN
   return [worldPosition.x, worldPosition.y, worldPosition.z];
 }
 
-export function sampleCameraPathPoseAtProgress(
+function resolveCurveTForTime(keyframes: CameraPathKeyframe[], timeSeconds: number): number {
+  if (keyframes.length <= 1) {
+    return 0;
+  }
+  const duration = keyframes[keyframes.length - 1]?.timeSeconds ?? 0;
+  const clampedTime = Math.max(0, Math.min(duration, timeSeconds));
+  for (let index = 0; index < keyframes.length - 1; index += 1) {
+    const start = keyframes[index];
+    const end = keyframes[index + 1];
+    if (!start || !end) {
+      continue;
+    }
+    if (clampedTime > end.timeSeconds && index < keyframes.length - 2) {
+      continue;
+    }
+    const span = Math.max(CAMERA_PATH_KEYFRAME_EPSILON_SECONDS, end.timeSeconds - start.timeSeconds);
+    const alpha = Math.max(0, Math.min(1, (clampedTime - start.timeSeconds) / span));
+    return (index + alpha) / (keyframes.length - 1);
+  }
+  return 1;
+}
+
+export function sampleCameraPathPoseAtTime(
   cameraPathActor: ActorNode,
   actors: Record<string, ActorNode>,
-  progress: number,
-  pathArcTableCache?: Map<string, ArcLengthSample[]>
+  timeSeconds: number
 ): CameraPathPose | null {
   const refs = resolveCameraPathRefs(cameraPathActor, actors);
   if (!refs.positionCurveActor) {
     return null;
   }
-  const positionSamples =
-    pathArcTableCache?.get(refs.positionCurveActor.id) ?? buildCameraPathArcLengthTable(refs.positionCurveActor);
-  pathArcTableCache?.set(refs.positionCurveActor.id, positionSamples);
-  const positionT = remapProgressToCurveT(positionSamples, progress);
-  const position = sampleCurveWorldPoint(refs.positionCurveActor, actors, positionT).position;
+  const keyframes = getCameraPathKeyframes(cameraPathActor, actors);
+  if (keyframes.length <= 0) {
+    return null;
+  }
+  const curveT = resolveCurveTForTime(keyframes, timeSeconds);
+  const position = sampleCurveWorldPoint(refs.positionCurveActor, actors, curveT).position;
 
   if (refs.targetMode === "actor") {
     if (!refs.targetActor) {
@@ -212,10 +345,8 @@ export function sampleCameraPathPoseAtProgress(
   if (!refs.targetCurveActor) {
     return null;
   }
-  const keyframeCount = getCameraPathKeyframeCount(cameraPathActor, actors);
-  const targetProgress = keyframeCount <= 1 ? 0 : Math.max(0, Math.min(1, progress));
   return {
     position,
-    target: sampleCurveWorldPoint(refs.targetCurveActor, actors, targetProgress).position
+    target: sampleCurveWorldPoint(refs.targetCurveActor, actors, curveT).position
   };
 }

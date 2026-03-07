@@ -4,9 +4,10 @@ import type { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js
 import { keyboardCommandRouter } from "@/app/keyboardCommandRouter";
 import type { AppKernel } from "@/app/kernel";
 import type { ActorNode } from "@/core/types";
-import { getEffectiveCurveHandles } from "@/features/curves/handles";
+import { getEffectiveCurveHandlesAt } from "@/features/curves/handles";
 import { setCurveAnchorPosition, setCurveHandlePosition, appendCurvePoint } from "@/features/curves/editing";
 import { curveDataWithOverrides } from "@/features/curves/model";
+import type { CurvePoint } from "@/features/curves/types";
 import type { SceneController } from "@/render/sceneController";
 
 type CurveControlType = "anchor" | "handleIn" | "handleOut";
@@ -25,6 +26,25 @@ interface CurvePointVisual {
   handleOut: any;
   lineIn: any;
   lineOut: any;
+}
+
+function handleLength(handle: [number, number, number]): number {
+  return Math.hypot(handle[0], handle[1], handle[2]);
+}
+
+function shouldShowCurveHandle(
+  point: CurvePoint,
+  handle: [number, number, number],
+  handleKind: "in" | "out"
+): boolean {
+  if (point.mode === "mirrored") {
+    return true;
+  }
+  if (point.mode === "auto") {
+    return handleLength(handle) > 1e-9;
+  }
+  const mode = handleKind === "in" ? (point.handleInMode ?? "normal") : (point.handleOutMode ?? "normal");
+  return mode !== "hard";
 }
 
 function getControlMeta(object: any): CurveControlMeta | null {
@@ -197,7 +217,7 @@ export class CurveEditController {
         continue;
       }
       const anchor = new THREE.Vector3(...point.position);
-      const handles = getEffectiveCurveHandles(point);
+      const handles = getEffectiveCurveHandlesAt(curve, pointIndex);
       const inPos = new THREE.Vector3(
         point.position[0] + handles.handleIn[0],
         point.position[1] + handles.handleIn[1],
@@ -208,8 +228,8 @@ export class CurveEditController {
         point.position[1] + handles.handleOut[1],
         point.position[2] + handles.handleOut[2]
       );
-      const showHandleIn = point.mode === "mirrored" || (point.handleInMode ?? "normal") !== "hard";
-      const showHandleOut = point.mode === "mirrored" || (point.handleOutMode ?? "normal") !== "hard";
+      const showHandleIn = shouldShowCurveHandle(point, handles.handleIn, "in");
+      const showHandleOut = shouldShowCurveHandle(point, handles.handleOut, "out");
 
       const lineIn = new THREE.Line(
         new THREE.BufferGeometry().setFromPoints([anchor.clone(), inPos.clone()]),
@@ -474,7 +494,7 @@ export class CurveEditController {
         continue;
       }
       const anchor = new THREE.Vector3(...point.position);
-      const handles = getEffectiveCurveHandles(point);
+      const handles = getEffectiveCurveHandlesAt(curve, pointIndex);
       const inPos = new THREE.Vector3(
         point.position[0] + handles.handleIn[0],
         point.position[1] + handles.handleIn[1],
@@ -485,8 +505,8 @@ export class CurveEditController {
         point.position[1] + handles.handleOut[1],
         point.position[2] + handles.handleOut[2]
       );
-      const showHandleIn = point.mode === "mirrored" || (point.handleInMode ?? "normal") !== "hard";
-      const showHandleOut = point.mode === "mirrored" || (point.handleOutMode ?? "normal") !== "hard";
+      const showHandleIn = shouldShowCurveHandle(point, handles.handleIn, "in");
+      const showHandleOut = shouldShowCurveHandle(point, handles.handleOut, "out");
       visuals.anchor.position.copy(anchor);
       visuals.handleIn.position.copy(inPos);
       visuals.handleOut.position.copy(outPos);
