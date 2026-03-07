@@ -556,6 +556,17 @@ select {
   font-family: var(--font-mono);
 }
 
+.titlebar-brand-button {
+  min-height: 28px;
+  min-width: 0;
+  padding: 0 10px 0 0;
+  border: 0;
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .titlebar-brand strong {
   font-size: 12px;
   letter-spacing: 0.09em;
@@ -565,6 +576,11 @@ select {
 .titlebar-brand span {
   color: var(--text-muted);
   font-size: 11px;
+}
+
+.titlebar-brand-button:hover .titlebar-brand span,
+.titlebar-brand-button:hover .titlebar-brand strong {
+  color: var(--text);
 }
 
 .titlebar-session {
@@ -2062,6 +2078,68 @@ body.is-scrubbing-number * {
 }
 
 .text-input-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.about-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1210;
+  background: rgba(2, 5, 10, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.about-modal {
+  width: min(560px, 92vw);
+  border: 1px solid var(--line-strong);
+  background: #0a1423;
+  padding: 16px;
+  display: grid;
+  gap: 12px;
+}
+
+.about-modal h3 {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.about-modal-summary {
+  margin: 0;
+  color: var(--accent-2);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.about-modal-grid {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 8px 12px;
+}
+
+.about-modal-grid dt {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.about-modal-grid dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  word-break: break-word;
+}
+
+.about-modal-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;

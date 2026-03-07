@@ -11,6 +11,7 @@ test-results/
 src/**/*.js
 src/**/*.js.map
 logs/
+.simularca-build-info.json
 
 # Local environment and OS files
 .env

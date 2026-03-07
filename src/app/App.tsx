@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
+import { BUILD_INFO, buildInfoSummary } from "@/app/buildInfo";
 import { keyboardCommandRouter } from "@/app/keyboardCommandRouter";
 import {
   buildCameraCycleTargets,
@@ -406,6 +407,7 @@ export function App() {
   );
 
   useEffect(() => {
+    kernel.store.getState().actions.setStatus(buildInfoSummary(BUILD_INFO));
     registerCoreActorDescriptors(kernel);
     setupActorHotReload(kernel);
     const unsubscribe = kernel.hotReloadManager.subscribe((event) => {

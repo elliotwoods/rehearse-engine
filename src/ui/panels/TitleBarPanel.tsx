@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBookmark, faFloppyDisk, faPenToSquare, faPlus, faRotateRight } from "@fortawesome/free-solid-svg-icons";
+import { faBookmark, faCircleInfo, faFloppyDisk, faPenToSquare, faPlus, faRotateRight } from "@fortawesome/free-solid-svg-icons";
+import { BUILD_INFO, formatBuildTimestamp } from "@/app/buildInfo";
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
+import { AboutModal } from "@/ui/components/AboutModal";
 import { WindowControls } from "@/ui/components/WindowControls";
 import appIconUrl from "../../../icon.png";
-import packageJson from "../../../package.json";
 
 const APP_NAME = "Simularca";
-const APP_VERSION = packageJson.version;
 
 interface TitleBarPanelProps {
   requestTextInput(args: {
@@ -38,10 +38,12 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
   const [availableSessions, setAvailableSessions] = useState<string[]>([]);
   const [isSessionMenuOpen, setSessionMenuOpen] = useState(false);
   const [isRenamingSession, setRenamingSession] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
   const [sessionNameDraft, setSessionNameDraft] = useState("");
   const menuRef = useRef<HTMLDivElement | null>(null);
   const sessionRenameInputRef = useRef<HTMLInputElement | null>(null);
   const isReadOnly = state.mode === "web-ro";
+  const buildMeta = `${BUILD_INFO.commitShortSha || "unknown"} | ${formatBuildTimestamp(BUILD_INFO.buildTimestampIso)}`;
 
   const sessionOptions = useMemo(() => {
     if (availableSessions.includes(state.activeSessionName)) {
@@ -130,10 +132,21 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
         <div className="titlebar-app-icon" aria-hidden="true">
           <img src={appIconUrl} alt="" />
         </div>
-        <div className="titlebar-brand">
-          <strong>{APP_NAME}</strong>
-          <span>v{APP_VERSION}</span>
-        </div>
+        <button
+          type="button"
+          className="titlebar-brand-button"
+          title={BUILD_INFO.commitSubject}
+          onClick={() => {
+            setAboutOpen(true);
+          }}
+        >
+          <div className="titlebar-brand">
+            <strong>{APP_NAME}</strong>
+            <span>v{BUILD_INFO.version}</span>
+            <span>{buildMeta}</span>
+          </div>
+          <FontAwesomeIcon icon={faCircleInfo} />
+        </button>
       </div>
 
       <div className="titlebar-center titlebar-interactive">
@@ -306,6 +319,9 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
       <div className="titlebar-right titlebar-interactive">
         <WindowControls />
       </div>
+      <AboutModal open={aboutOpen} onClose={() => setAboutOpen(false)} />
     </div>
   );
 }
+
+

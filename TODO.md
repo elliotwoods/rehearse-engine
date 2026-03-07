@@ -1,3 +1,8 @@
+# Version numbering
+
+Auto-increment version number
+Auto-add build date-time
+
 # Interface
 
 ## Can be improved
