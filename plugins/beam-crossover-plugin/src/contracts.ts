@@ -1,7 +1,7 @@
 import type * as THREE from "three";
 
 export type PrimitiveShape = "sphere" | "cube" | "cylinder";
-export type BeamType = "solid";
+export type BeamType = "solid" | "ghost";
 export type ActorType =
   | "plugin"
   | "empty"
@@ -36,6 +36,9 @@ export interface ActorNode {
 
 export interface AppState {
   actors: Record<string, ActorNode>;
+  camera?: {
+    position: [number, number, number];
+  };
 }
 
 export interface ActorRuntimeStatus {

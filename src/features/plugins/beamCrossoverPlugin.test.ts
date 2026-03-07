@@ -2,7 +2,8 @@ import * as THREE from "three";
 import { describe, expect, test } from "vitest";
 import {
   beamEmitterArrayDescriptor,
-  beamEmitterDescriptor
+  beamEmitterDescriptor,
+  computeGhostAlpha
 } from "../../../plugins/beam-crossover-plugin/src/beamPlugin";
 import {
   buildBeamGeometryWorld,
@@ -16,8 +17,8 @@ describe("beam crossover plugin descriptors", () => {
     expect(beamEmitterArrayDescriptor.spawn?.pluginType).toBe("plugin.beamCrossover.emitterArray");
     expect(beamEmitterArrayDescriptor.schema.params.some((param) => param.key === "emitterCurveId")).toBe(true);
     expect(beamEmitterArrayDescriptor.schema.params.some((param) => param.key === "targetActorId")).toBe(true);
-    const beamAlpha = beamEmitterDescriptor.schema.params.find((param) => param.key === "beamAlpha");
-    expect(beamAlpha?.visibleWhen).toEqual([{ key: "beamType", equals: "solid" }]);
+    const beamType = beamEmitterDescriptor.schema.params.find((param) => param.key === "beamType");
+    expect(beamType?.options).toEqual(["solid", "ghost"]);
   });
 });
 
@@ -96,7 +97,25 @@ describe("beam crossover silhouette math", () => {
     ];
     const geometry = buildBeamGeometryWorld(emitterWorld, contourWorld, 5, new THREE.Matrix4().identity());
     expect(geometry.getAttribute("position").count).toBe(5);
+    expect(geometry.getAttribute("normal")?.count).toBe(5);
     expect(geometry.getIndex()?.count).toBe(12);
+  });
+});
+
+describe("beam crossover ghost alpha", () => {
+  test("returns full alpha when view and normal are parallel", () => {
+    const alpha = computeGhostAlpha(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, 1), 0.6);
+    expect(alpha).toBeCloseTo(0.6, 6);
+  });
+
+  test("returns zero alpha when view and normal are orthogonal", () => {
+    const alpha = computeGhostAlpha(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 1), 0.6);
+    expect(alpha).toBeCloseTo(0, 6);
+  });
+
+  test("scales intermediate ghost alpha by beam alpha", () => {
+    const alpha = computeGhostAlpha(new THREE.Vector3(1, 0, 1), new THREE.Vector3(0, 0, 1), 0.5);
+    expect(alpha).toBeCloseTo(0.5 * (1 - Math.sqrt(0.5)), 6);
   });
 });
 

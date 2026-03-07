@@ -7,6 +7,13 @@ export function incompatibilityReason(actor: ActorNode, engine: RenderEngine): s
   if (engine === "webgpu" && actor.actorType === "gaussian-splat-spark") {
     return "Gaussian Splat (Spark) actor requires WebGL2.";
   }
+  if (
+    engine === "webgpu" &&
+    actor.actorType === "plugin" &&
+    (actor.pluginType === "plugin.beamCrossover.emitter" || actor.pluginType === "plugin.beamCrossover.emitterArray") &&
+    actor.params.beamType === "ghost"
+  ) {
+    return "Beam Crossover ghost mode currently requires WebGL2.";
+  }
   return null;
 }
-

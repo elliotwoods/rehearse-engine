@@ -25,12 +25,16 @@ const DEFAULT_BEAM_COLOR = "#ffffff";
 const DEFAULT_BEAM_ALPHA = 0.1;
 const DEFAULT_ARRAY_COUNT = 32;
 const LATE_RENDER_ORDER = 10_000;
+const GHOST_BEAM_TYPE = "ghost";
+
+type BeamMaterial = THREE.MeshBasicMaterial | THREE.ShaderMaterial;
 
 interface BeamObjectState {
   mesh: THREE.Mesh;
-  material: THREE.MeshBasicMaterial;
+  material: BeamMaterial;
   geometry: THREE.BufferGeometry;
-  lastSignature: string;
+  lastGeometrySignature: string;
+  lastMaterialSignature: string;
 }
 
 interface BeamRuntime {
@@ -39,14 +43,7 @@ interface BeamRuntime {
 
 function createBeamRoot(): THREE.Group {
   const geometry = new THREE.BufferGeometry();
-  const material = new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: DEFAULT_BEAM_ALPHA,
-    blending: THREE.AdditiveBlending,
-    depthWrite: false,
-    side: THREE.DoubleSide
-  });
+  const material = createSolidMaterial();
   const mesh = new THREE.Mesh(geometry, material);
   mesh.name = "beam-crossover-mesh";
   mesh.renderOrder = LATE_RENDER_ORDER;
@@ -59,7 +56,8 @@ function createBeamRoot(): THREE.Group {
     mesh,
     material,
     geometry,
-    lastSignature: ""
+    lastGeometrySignature: "",
+    lastMaterialSignature: ""
   };
   return group;
 }
@@ -81,9 +79,10 @@ function sanitizeColor(value: unknown): string {
 }
 
 function parseBeamParams(actor: ActorNode): BeamParams {
+  const beamType = actor.params.beamType;
   return {
     targetActorId: typeof actor.params.targetActorId === "string" ? actor.params.targetActorId : null,
-    beamType: actor.params.beamType === SOLID_BEAM_TYPE ? SOLID_BEAM_TYPE : SOLID_BEAM_TYPE,
+    beamType: beamType === GHOST_BEAM_TYPE ? GHOST_BEAM_TYPE : SOLID_BEAM_TYPE,
     resolution: Math.max(3, Math.min(1024, Math.floor(Number(actor.params.resolution ?? DEFAULT_RESOLUTION)) || DEFAULT_RESOLUTION)),
     beamLength: Math.max(0, Number(actor.params.beamLength ?? DEFAULT_BEAM_LENGTH) || DEFAULT_BEAM_LENGTH),
     beamColor: sanitizeColor(actor.params.beamColor),
@@ -131,6 +130,7 @@ function buildSingleStatus(actor: ActorNode, runtimeStatus?: ActorRuntimeStatus)
   return [
     { label: "Type", value: "Beam Emitter" },
     { label: "Beam Type", value: params.beamType },
+    { label: "Ghost Shading Active", value: params.beamType === GHOST_BEAM_TYPE },
     { label: "Target Actor", value: runtimeStatus?.values.targetActorName ?? "n/a" },
     { label: "Target Shape", value: runtimeStatus?.values.targetShape ?? "n/a" },
     { label: "Resolution", value: params.resolution },
@@ -152,6 +152,7 @@ function buildArrayStatus(actor: ActorNode, runtimeStatus?: ActorRuntimeStatus):
   return [
     { label: "Type", value: "Beam Emitter Array" },
     { label: "Beam Type", value: params.beamType },
+    { label: "Ghost Shading Active", value: params.beamType === GHOST_BEAM_TYPE },
     { label: "Emitter Curve", value: runtimeStatus?.values.emitterCurveName ?? "n/a" },
     { label: "Target Actor", value: runtimeStatus?.values.targetActorName ?? "n/a" },
     { label: "Target Shape", value: runtimeStatus?.values.targetShape ?? "n/a" },
@@ -169,14 +170,120 @@ function buildArrayStatus(actor: ActorNode, runtimeStatus?: ActorRuntimeStatus):
   ];
 }
 
-function updateMaterial(state: BeamObjectState, params: BeamParams): void {
-  state.material.color.set(params.beamColor);
-  state.material.transparent = true;
-  state.material.opacity = params.beamAlpha;
-  state.material.blending = THREE.AdditiveBlending;
-  state.material.depthWrite = false;
-  state.material.side = THREE.DoubleSide;
-  state.material.needsUpdate = true;
+export function computeGhostAlpha(viewVector: THREE.Vector3, normalVector: THREE.Vector3, alphaScale: number): number {
+  const safeAlpha = Math.max(0, Math.min(1, alphaScale));
+  const view = viewVector.clone();
+  const normal = normalVector.clone();
+  if (view.lengthSq() <= 1e-12 || normal.lengthSq() <= 1e-12) {
+    return 0;
+  }
+  view.normalize();
+  normal.normalize();
+  return safeAlpha * Math.max(0, Math.min(1, 1 - view.cross(normal).length()));
+}
+
+function createSolidMaterial(): THREE.MeshBasicMaterial {
+  const material = new THREE.MeshBasicMaterial({
+    color: 0xffffff,
+    transparent: true,
+    opacity: DEFAULT_BEAM_ALPHA,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide
+  });
+  material.userData.beamMaterialKind = SOLID_BEAM_TYPE;
+  return material;
+}
+
+function createGhostMaterial(): THREE.ShaderMaterial {
+  const material = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    blending: THREE.AdditiveBlending,
+    uniforms: {
+      beamColor: { value: new THREE.Color(DEFAULT_BEAM_COLOR) },
+      beamAlpha: { value: DEFAULT_BEAM_ALPHA }
+    },
+    vertexShader: `
+      varying vec3 vViewPosition;
+      varying vec3 vViewNormal;
+
+      void main() {
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vViewPosition = mvPosition.xyz;
+        vViewNormal = normalize(normalMatrix * normal);
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 beamColor;
+      uniform float beamAlpha;
+      varying vec3 vViewPosition;
+      varying vec3 vViewNormal;
+
+      void main() {
+        vec3 viewDir = normalize(vViewPosition);
+        vec3 normalDir = normalize(vViewNormal);
+        float ghost = clamp(1.0 - length(cross(viewDir, normalDir)), 0.0, 1.0);
+        gl_FragColor = vec4(beamColor, beamAlpha * ghost);
+      }
+    `
+  });
+  material.userData.beamMaterialKind = GHOST_BEAM_TYPE;
+  return material;
+}
+
+type GhostMaterialUniforms = {
+  beamColor: { value: THREE.Color };
+  beamAlpha: { value: number };
+};
+
+function readCameraPosition(state: SceneHookContext["state"]): THREE.Vector3 {
+  const position = state.camera?.position;
+  if (Array.isArray(position) && position.length === 3) {
+    return new THREE.Vector3(position[0] ?? 0, position[1] ?? 0, position[2] ?? 0);
+  }
+  return new THREE.Vector3();
+}
+
+function updateMaterial(state: BeamObjectState, params: BeamParams, _cameraPosition: THREE.Vector3): void {
+  const materialSignature = JSON.stringify({
+    beamType: params.beamType,
+    beamColor: params.beamColor,
+    beamAlpha: params.beamAlpha
+  });
+  if (params.beamType === GHOST_BEAM_TYPE) {
+    if (!(state.material instanceof THREE.ShaderMaterial) || state.material.userData.beamMaterialKind !== GHOST_BEAM_TYPE) {
+      state.material.dispose();
+      state.material = createGhostMaterial();
+      state.mesh.material = state.material;
+    }
+    const material = state.material;
+    const uniforms = material.uniforms as GhostMaterialUniforms;
+    uniforms.beamColor.value.set(params.beamColor);
+    uniforms.beamAlpha.value = params.beamAlpha;
+    material.transparent = true;
+    material.depthWrite = false;
+    material.side = THREE.DoubleSide;
+    material.blending = THREE.AdditiveBlending;
+    material.needsUpdate = materialSignature !== state.lastMaterialSignature;
+  } else {
+    if (!(state.material instanceof THREE.MeshBasicMaterial) || state.material.userData.beamMaterialKind !== SOLID_BEAM_TYPE) {
+      state.material.dispose();
+      state.material = createSolidMaterial();
+      state.mesh.material = state.material;
+    }
+    const material = state.material;
+    material.color.set(params.beamColor);
+    material.transparent = true;
+    material.opacity = params.beamAlpha;
+    material.blending = THREE.AdditiveBlending;
+    material.depthWrite = false;
+    material.side = THREE.DoubleSide;
+    material.needsUpdate = materialSignature !== state.lastMaterialSignature;
+  }
+  state.lastMaterialSignature = materialSignature;
   state.mesh.renderOrder = LATE_RENDER_ORDER;
 }
 
@@ -190,11 +297,12 @@ function getWorldPosition(object: THREE.Object3D): THREE.Vector3 {
   return new THREE.Vector3().setFromMatrixPosition(object.matrixWorld);
 }
 
-function buildSingleSignature(params: BeamParams, emitterObject: THREE.Object3D, targetObject: THREE.Object3D, targetActor: ActorNode): string {
+function buildSingleGeometrySignature(params: BeamParams, emitterObject: THREE.Object3D, targetObject: THREE.Object3D, targetActor: ActorNode): string {
   emitterObject.updateWorldMatrix(true, false);
   targetObject.updateWorldMatrix(true, false);
   return JSON.stringify({
-    params,
+    beamLength: params.beamLength,
+    resolution: params.resolution,
     emitterMatrix: emitterObject.matrixWorld.elements.map((value) => Number(value.toFixed(6))),
     targetMatrix: targetObject.matrixWorld.elements.map((value) => Number(value.toFixed(6))),
     shape: targetActor.params.shape,
@@ -205,10 +313,12 @@ function buildSingleSignature(params: BeamParams, emitterObject: THREE.Object3D,
   });
 }
 
-function buildArraySignature(params: BeamArrayParams, targetObject: THREE.Object3D, targetActor: ActorNode, curveActor: ActorNode): string {
+function buildArrayGeometrySignature(params: BeamArrayParams, targetObject: THREE.Object3D, targetActor: ActorNode, curveActor: ActorNode): string {
   targetObject.updateWorldMatrix(true, false);
   return JSON.stringify({
-    params,
+    beamLength: params.beamLength,
+    resolution: params.resolution,
+    count: params.count,
     targetMatrix: targetObject.matrixWorld.elements.map((value) => Number(value.toFixed(6))),
     shape: targetActor.params.shape,
     cubeSize: targetActor.params.cubeSize,
@@ -263,8 +373,10 @@ function syncSingleEmitter(context: SceneHookContext, root: THREE.Group, state: 
     return;
   }
 
-  const signature = buildSingleSignature(params, root, targetObject, targetActor);
-  if (signature === state.lastSignature) {
+  updateMaterial(state, params, readCameraPosition(context.state));
+
+  const signature = buildSingleGeometrySignature(params, root, targetObject, targetActor);
+  if (signature === state.lastGeometrySignature) {
     return;
   }
 
@@ -297,8 +409,7 @@ function syncSingleEmitter(context: SceneHookContext, root: THREE.Group, state: 
   state.geometry = geometry;
   state.mesh.geometry = geometry;
   state.mesh.visible = true;
-  updateMaterial(state, params);
-  state.lastSignature = signature;
+  state.lastGeometrySignature = signature;
   setStatus(context, {
     targetActorName: targetActor.name,
     targetShape: shape,
@@ -306,6 +417,7 @@ function syncSingleEmitter(context: SceneHookContext, root: THREE.Group, state: 
     triangleCount: silhouette.contourWorld.length,
     emitterPosition: formatVector(emitterWorld),
     targetCenter: formatVector(silhouette.targetCenterWorld),
+    shadingMode: params.beamType,
     renderOrder: LATE_RENDER_ORDER
   });
 }
@@ -346,8 +458,10 @@ function syncEmitterArray(context: SceneHookContext, root: THREE.Group, state: B
     return;
   }
 
-  const signature = buildArraySignature(params, targetObject, targetActor, curveActor);
-  if (signature === state.lastSignature) {
+  updateMaterial(state, params, readCameraPosition(context.state));
+
+  const signature = buildArrayGeometrySignature(params, targetObject, targetActor, curveActor);
+  if (signature === state.lastGeometrySignature) {
     return;
   }
 
@@ -419,8 +533,7 @@ function syncEmitterArray(context: SceneHookContext, root: THREE.Group, state: B
   state.geometry = geometry;
   state.mesh.geometry = geometry;
   state.mesh.visible = true;
-  updateMaterial(state, params);
-  state.lastSignature = signature;
+  state.lastGeometrySignature = signature;
   setStatus(context, {
     emitterCurveName: curveActor.name,
     targetActorName: targetActor.name,
@@ -432,6 +545,7 @@ function syncEmitterArray(context: SceneHookContext, root: THREE.Group, state: B
     curveClosed: curveMetadata.closed,
     curveLutSamples,
     targetCenter: formatVector(targetCenter),
+    shadingMode: params.beamType,
     renderOrder: LATE_RENDER_ORDER
   });
 }
@@ -450,7 +564,7 @@ const sharedBeamParams = [
     key: "beamType",
     label: "Beam Type",
     type: "select",
-    options: [SOLID_BEAM_TYPE],
+    options: [SOLID_BEAM_TYPE, GHOST_BEAM_TYPE],
     defaultValue: SOLID_BEAM_TYPE
   },
   {
@@ -484,8 +598,7 @@ const sharedBeamParams = [
     min: 0,
     max: 1,
     step: 0.01,
-    defaultValue: DEFAULT_BEAM_ALPHA,
-    visibleWhen: [{ key: "beamType", equals: SOLID_BEAM_TYPE }]
+    defaultValue: DEFAULT_BEAM_ALPHA
   }
 ] satisfies Array<Record<string, unknown>>;
 
