@@ -136,14 +136,6 @@ export function sanitizeCurveData(value: unknown, fallback?: CurveData): CurveDa
     return sanitizePoint(entry, fallbackPoint);
   });
 
-  if (points.length < 2) {
-    const seed = fallbackPoints.slice(0, 2).map((point) => sanitizePoint(point, point));
-    while (points.length < 2) {
-      const next = seed[points.length] ?? seed[seed.length - 1] ?? firstDefaultPoint;
-      points.push(sanitizePoint(next, next));
-    }
-  }
-
   return {
     closed: Boolean(source.closed),
     points

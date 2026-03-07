@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getEffectiveCurveHandles } from "@/features/curves/handles";
-import { setCurveHandlePosition, setCurveHandleWeightMode, setCurvePointMode } from "@/features/curves/editing";
+import { removeCurvePoint, setCurveHandlePosition, setCurveHandleWeightMode, setCurvePointMode } from "@/features/curves/editing";
 import { sanitizeCurveData, type CurveData } from "@/features/curves/types";
 
 const curve: CurveData = {
@@ -87,5 +87,23 @@ describe("curve handle modes", () => {
     expect(point?.handleOutMode).toBe("normal");
     expectVecClose(point ? getEffectiveCurveHandles(point).handleIn : undefined, [0, 0, 0]);
     expectVecClose(point ? getEffectiveCurveHandles(point).handleOut : undefined, [1, 0, 0]);
+  });
+
+  it("keeps explicit empty and single-point curves during sanitize", () => {
+    const emptyCurve = sanitizeCurveData({ closed: false, points: [] });
+    const onePointCurve = sanitizeCurveData({
+      closed: false,
+      points: [{ position: [3, 4, 5], handleIn: [0, 0, 0], handleOut: [0, 0, 0], mode: "mirrored" }]
+    });
+    expect(emptyCurve.points).toHaveLength(0);
+    expect(onePointCurve.points).toHaveLength(1);
+    expect(onePointCurve.points[0]?.position).toEqual([3, 4, 5]);
+  });
+
+  it("allows removing curve points down to zero", () => {
+    const afterFirstDelete = removeCurvePoint(curve, 1);
+    const afterSecondDelete = removeCurvePoint(afterFirstDelete, 0);
+    expect(afterFirstDelete.points).toHaveLength(1);
+    expect(afterSecondDelete.points).toHaveLength(0);
   });
 });

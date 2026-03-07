@@ -23,7 +23,8 @@ import { RenderOverlay } from "@/ui/components/RenderOverlay";
 import type { CameraState } from "@/core/types";
 import type { RenderProgress, RenderSettings } from "@/features/render/types";
 import { computeFrameCount, frameProgress, frameSimTime } from "@/features/render/timeline";
-import { solveRenderCamera, type ArcLengthSample } from "@/features/render/cameraSolver";
+import { solveRenderCamera } from "@/features/render/cameraSolver";
+import type { ArcLengthSample } from "@/features/cameraPath/model";
 import { canvasToPngBytes, createRenderExporter } from "@/features/render/exporters";
 import { WebGlViewport } from "@/render/webglRenderer";
 import { WebGpuViewport } from "@/render/webgpuRenderer";
@@ -364,8 +365,7 @@ export function App() {
             kernel.store.getState().state,
             previousCamera,
             progress,
-            settings.cameraPathActorId,
-            settings.cameraTargetActorId,
+            settings.cameraPathId,
             pathArcTableCache
           );
           kernel.store.getState().actions.setCameraState(nextCamera, false);
@@ -633,10 +633,9 @@ export function App() {
         open={renderModalOpen}
         isElectron={Boolean(window.electronAPI)}
         defaults={buildDefaultRenderSettings()}
-        curveActors={Object.values(actors)
-          .filter((actor) => actor.actorType === "curve")
+        cameraPathActors={Object.values(actors)
+          .filter((actor) => actor.actorType === "camera-path")
           .map((actor) => ({ id: actor.id, label: actor.name }))}
-        targetActors={Object.values(actors).map((actor) => ({ id: actor.id, label: actor.name }))}
         onCancel={() => setRenderModalOpen(false)}
         onConfirm={(settings) => {
           void runRender(settings);
@@ -668,8 +667,7 @@ function buildDefaultRenderSettings(): RenderSettings {
     bitrateMbps: 100,
     durationSeconds: 10,
     startTimeMode: "current",
-    cameraPathActorId: "",
-    cameraTargetActorId: "",
+    cameraPathId: "",
     strategy: window.electronAPI ? "pipe" : "temp-folder"
   };
 }

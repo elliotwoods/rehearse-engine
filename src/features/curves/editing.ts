@@ -90,9 +90,6 @@ export function setCurvePointEnabled(curve: CurveData, pointIndex: number, enabl
 
 export function removeCurvePoint(curve: CurveData, pointIndex: number): CurveData {
   const next = cloneCurveData(curve);
-  if (next.points.length <= 2) {
-    return next;
-  }
   if (pointIndex < 0 || pointIndex >= next.points.length) {
     return next;
   }

@@ -2,10 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faArrowsLeftRight,
+  faBackwardStep,
   faCircle,
   faCircleDot,
   faClone,
+  faForwardStep,
+  faPause,
+  faPlay,
   faRotateLeft,
+  faStop,
   faToggleOff,
   faToggleOn,
   faTrashCan,
@@ -35,6 +40,13 @@ import {
   setCurvePointMode
 } from "@/features/curves/editing";
 import { curveDataWithOverrides } from "@/features/curves/model";
+import {
+  getCameraPathKeyframeCount,
+  getCameraPathPreviewDurationSeconds,
+  getCameraPathValidity,
+  resolveCameraPathRefs,
+  sampleCameraPathPoseAtProgress
+} from "@/features/cameraPath/model";
 import { importFileForActorParam } from "@/features/imports/fileParameterImport";
 import { StatsBlock } from "@/ui/components/StatsBlock";
 import type { StatsGroup, StatsRow } from "@/ui/components/StatsBlock";
@@ -489,6 +501,10 @@ export function InspectorPane() {
   const [sceneBackgroundInput, setSceneBackgroundInput] = useState(appState.scene.backgroundColor);
   const [selectedCurveVertex, setSelectedCurveVertex] = useState<{ actorId: string; pointIndex: number } | null>(null);
   const [selectedCurveControl, setSelectedCurveControl] = useState<CurveControlType>("anchor");
+  const [cameraPathPreviewProgress, setCameraPathPreviewProgress] = useState(0);
+  const [cameraPathPreviewPlaying, setCameraPathPreviewPlaying] = useState(false);
+  const cameraPathPlayRafRef = useRef<number | null>(null);
+  const cameraPathPlayStartRef = useRef<{ startedAtMs: number; startedProgress: number } | null>(null);
 
   type InspectorView =
     | { kind: "actor-root" }
@@ -504,6 +520,9 @@ export function InspectorPane() {
     () => () => {
       if (autosaveTimeoutRef.current !== null) {
         window.clearTimeout(autosaveTimeoutRef.current);
+      }
+      if (cameraPathPlayRafRef.current !== null) {
+        window.cancelAnimationFrame(cameraPathPlayRafRef.current);
       }
     },
     []
@@ -601,6 +620,26 @@ export function InspectorPane() {
       publishCurveVertexSelect(singleSelection.id, clampedPointIndex, "anchor");
     }
   }, [publishCurveVertexSelect, selectedCurveVertex, singleSelection]);
+
+  useEffect(() => {
+    if (!singleSelection || singleSelection.actorType !== "camera-path") {
+      setCameraPathPreviewPlaying(false);
+      setCameraPathPreviewProgress(0);
+      cameraPathPlayStartRef.current = null;
+      if (cameraPathPlayRafRef.current !== null) {
+        window.cancelAnimationFrame(cameraPathPlayRafRef.current);
+        cameraPathPlayRafRef.current = null;
+      }
+      return;
+    }
+    setCameraPathPreviewPlaying(false);
+    setCameraPathPreviewProgress((current) => Math.max(0, Math.min(1, current)));
+    cameraPathPlayStartRef.current = null;
+    if (cameraPathPlayRafRef.current !== null) {
+      window.cancelAnimationFrame(cameraPathPlayRafRef.current);
+      cameraPathPlayRafRef.current = null;
+    }
+  }, [singleSelection?.actorType, singleSelection?.id]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setInspectorView({ kind: "actor-root" }); }, [selection.map((s) => s.id).join(",")]);
@@ -1139,6 +1178,83 @@ export function InspectorPane() {
       Math.abs(actor.transform.rotation[1]) <= 1e-9 &&
       Math.abs(actor.transform.rotation[2]) <= 1e-9
   );
+  const cameraPathRefs =
+    singleSelection && singleSelection.actorType === "camera-path"
+      ? resolveCameraPathRefs(singleSelection, actors)
+      : null;
+  const cameraPathValidity =
+    singleSelection && singleSelection.actorType === "camera-path"
+      ? getCameraPathValidity(singleSelection, actors)
+      : null;
+  const cameraPathKeyframeCount =
+    singleSelection && singleSelection.actorType === "camera-path"
+      ? getCameraPathKeyframeCount(singleSelection, actors)
+      : 0;
+
+  const applyCameraPathPreviewPose = useCallback(
+    (actor: ActorNode, progress: number) => {
+      const pose = sampleCameraPathPoseAtProgress(actor, kernel.store.getState().state.actors, progress);
+      if (!pose) {
+        return false;
+      }
+      kernel.store.getState().actions.setCameraState(
+        {
+          position: pose.position,
+          target: pose.target
+        },
+        false
+      );
+      return true;
+    },
+    [kernel]
+  );
+
+  useEffect(() => {
+    if (!singleSelection || singleSelection.actorType !== "camera-path" || !cameraPathPreviewPlaying) {
+      if (cameraPathPlayRafRef.current !== null) {
+        window.cancelAnimationFrame(cameraPathPlayRafRef.current);
+        cameraPathPlayRafRef.current = null;
+      }
+      return;
+    }
+
+    const durationMs = getCameraPathPreviewDurationSeconds(singleSelection) * 1000;
+    const playStart =
+      cameraPathPlayStartRef.current ?? {
+        startedAtMs: performance.now(),
+        startedProgress: cameraPathPreviewProgress
+      };
+    cameraPathPlayStartRef.current = playStart;
+
+    const tick = (nowMs: number) => {
+      if (!cameraPathPlayStartRef.current) {
+        cameraPathPlayRafRef.current = null;
+        return;
+      }
+      const elapsed = nowMs - cameraPathPlayStartRef.current.startedAtMs;
+      const nextProgress =
+        cameraPathPlayStartRef.current.startedProgress +
+        (elapsed / Math.max(1, durationMs)) * (1 - cameraPathPlayStartRef.current.startedProgress);
+      const clamped = Math.max(0, Math.min(1, nextProgress));
+      setCameraPathPreviewProgress(clamped);
+      applyCameraPathPreviewPose(singleSelection, clamped);
+      if (clamped >= 1) {
+        setCameraPathPreviewPlaying(false);
+        cameraPathPlayStartRef.current = null;
+        cameraPathPlayRafRef.current = null;
+        return;
+      }
+      cameraPathPlayRafRef.current = window.requestAnimationFrame(tick);
+    };
+
+    cameraPathPlayRafRef.current = window.requestAnimationFrame(tick);
+    return () => {
+      if (cameraPathPlayRafRef.current !== null) {
+        window.cancelAnimationFrame(cameraPathPlayRafRef.current);
+        cameraPathPlayRafRef.current = null;
+      }
+    };
+  }, [applyCameraPathPreviewPose, cameraPathPreviewPlaying, singleSelection]);
 
   const addCurveVertex = (): void => {
     if (!singleSelection || singleSelection.actorType !== "curve" || readOnly) {
@@ -1162,6 +1278,39 @@ export function InspectorPane() {
     scheduleAutosave();
   };
 
+  const addCameraPathKeyframe = (): void => {
+    if (!singleSelection || singleSelection.actorType !== "camera-path" || readOnly || !cameraPathRefs) {
+      return;
+    }
+    if (!cameraPathRefs.positionCurveActor || !cameraPathRefs.targetCurveActor) {
+      kernel.store.getState().actions.setStatus("Camera path keyframe add is unavailable until both managed curves exist.");
+      return;
+    }
+    const camera = kernel.store.getState().state.camera;
+    const actions = kernel.store.getState().actions;
+    actions.pushHistory("Add camera path keyframe");
+    actions.updateActorParamsNoHistory(cameraPathRefs.positionCurveActor.id, {
+      curveData: appendCurvePoint(curveDataWithOverrides(cameraPathRefs.positionCurveActor), camera.position)
+    });
+    actions.updateActorParamsNoHistory(cameraPathRefs.targetCurveActor.id, {
+      curveData: appendCurvePoint(curveDataWithOverrides(cameraPathRefs.targetCurveActor), camera.target)
+    });
+    scheduleAutosave();
+    kernel.store.getState().actions.setStatus("Camera path keyframe added from current camera.");
+  };
+
+  const applyCameraPathKeyframeIndex = useCallback(
+    (actor: ActorNode, keyframeIndex: number) => {
+      const count = getCameraPathKeyframeCount(actor, kernel.store.getState().state.actors);
+      const clampedIndex = count <= 0 ? 0 : Math.max(0, Math.min(count - 1, keyframeIndex));
+      const progress = count <= 1 ? 0 : clampedIndex / (count - 1);
+      setCameraPathPreviewProgress(progress);
+      cameraPathPlayStartRef.current = null;
+      applyCameraPathPreviewPose(actor, progress);
+    },
+    [applyCameraPathPreviewPose, kernel]
+  );
+
   function handleBack() {
     if (inspectorView.kind === "param-group" && inspectorView.fromComponentId !== null) {
       const comp = components[inspectorView.fromComponentId];
@@ -1170,6 +1319,9 @@ export function InspectorPane() {
       setInspectorView({ kind: "actor-root" });
     }
   }
+
+  const cameraPathCurrentKeyframeIndex =
+    cameraPathKeyframeCount <= 1 ? 0 : Math.round(cameraPathPreviewProgress * (cameraPathKeyframeCount - 1));
 
   return (
     <div className="inspector-pane-root custom-inspector">
@@ -1297,6 +1449,124 @@ export function InspectorPane() {
           </div>
         </div>
       </section>
+      {singleSelection?.actorType === "camera-path" ? (
+        <section className="widget-row">
+          <div className="widget-row-header">
+            <span className="widget-label">Camera Path</span>
+          </div>
+          <div className="camera-path-panel">
+            <div className="camera-path-toolbar">
+              <button
+                type="button"
+                disabled={readOnly || !cameraPathRefs?.positionCurveActor || !cameraPathRefs.targetCurveActor}
+                onClick={addCameraPathKeyframe}
+              >
+                Add Keyframe
+              </button>
+              <button
+                type="button"
+                disabled={!cameraPathValidity?.ok || cameraPathKeyframeCount <= 0}
+                onClick={() => {
+                  if (!singleSelection || singleSelection.actorType !== "camera-path") {
+                    return;
+                  }
+                  setCameraPathPreviewPlaying(false);
+                  applyCameraPathKeyframeIndex(singleSelection, cameraPathCurrentKeyframeIndex - 1);
+                }}
+                title="Previous keyframe"
+              >
+                <FontAwesomeIcon icon={faBackwardStep} />
+              </button>
+              <button
+                type="button"
+                disabled={!cameraPathValidity?.ok || cameraPathKeyframeCount <= 0}
+                onClick={() => {
+                  if (!singleSelection || singleSelection.actorType !== "camera-path") {
+                    return;
+                  }
+                  if (cameraPathPreviewPlaying) {
+                    setCameraPathPreviewPlaying(false);
+                    cameraPathPlayStartRef.current = null;
+                    return;
+                  }
+                  cameraPathPlayStartRef.current = {
+                    startedAtMs: performance.now(),
+                    startedProgress: cameraPathPreviewProgress
+                  };
+                  setCameraPathPreviewPlaying(true);
+                }}
+                title={cameraPathPreviewPlaying ? "Pause preview" : "Play preview"}
+              >
+                <FontAwesomeIcon icon={cameraPathPreviewPlaying ? faPause : faPlay} />
+              </button>
+              <button
+                type="button"
+                disabled={!cameraPathValidity?.ok || cameraPathKeyframeCount <= 0}
+                onClick={() => {
+                  if (!singleSelection || singleSelection.actorType !== "camera-path") {
+                    return;
+                  }
+                  setCameraPathPreviewPlaying(false);
+                  applyCameraPathKeyframeIndex(singleSelection, cameraPathCurrentKeyframeIndex + 1);
+                }}
+                title="Next keyframe"
+              >
+                <FontAwesomeIcon icon={faForwardStep} />
+              </button>
+              <button
+                type="button"
+                disabled={!cameraPathValidity?.ok || cameraPathKeyframeCount <= 0}
+                onClick={() => {
+                  if (!singleSelection || singleSelection.actorType !== "camera-path") {
+                    return;
+                  }
+                  setCameraPathPreviewPlaying(false);
+                  applyCameraPathKeyframeIndex(singleSelection, 0);
+                }}
+                title="Stop and reset"
+              >
+                <FontAwesomeIcon icon={faStop} />
+              </button>
+            </div>
+            <div className="camera-path-summary">
+              <div className="camera-path-summary-row">
+                <span>Preview</span>
+                <span>
+                  {cameraPathKeyframeCount <= 0
+                    ? "No keyframes"
+                    : `Keyframe ${String(cameraPathCurrentKeyframeIndex + 1)} / ${String(cameraPathKeyframeCount)}`}
+                </span>
+              </div>
+              <div className="camera-path-summary-row">
+                <span>Position Curve</span>
+                <span>{cameraPathRefs?.positionCurveActor?.name ?? "Missing"}</span>
+              </div>
+              {cameraPathRefs?.targetMode === "curve" ? (
+                <div className="camera-path-summary-row">
+                  <span>Target Curve</span>
+                  <span>{cameraPathRefs.targetCurveActor?.name ?? "Missing"}</span>
+                </div>
+              ) : null}
+              {cameraPathValidity?.message ? (
+                <div className="camera-path-summary-row is-error">
+                  <span>Status</span>
+                  <span>{cameraPathValidity.message}</span>
+                </div>
+              ) : null}
+              {cameraPathRefs?.targetMode === "actor" ? (
+                <div className="camera-path-summary-row">
+                  <span>Target Actor</span>
+                  <span>{cameraPathRefs.targetActor?.name ?? "Unassigned"}</span>
+                </div>
+              ) : null}
+              <div className="camera-path-summary-row">
+                <span>Preview Duration</span>
+                <span>{getCameraPathPreviewDurationSeconds(singleSelection).toFixed(2)}s</span>
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : null}
       {singleSelection?.actorType === "curve" ? (
         <section
           className="widget-row"
@@ -1435,14 +1705,18 @@ export function InspectorPane() {
                     <button
                       type="button"
                       className="curve-vertex-delete"
-                      disabled={readOnly || allPoints.length <= 2}
+                      disabled={readOnly || allPoints.length <= 0}
                       onClick={(event) => {
                         event.stopPropagation();
                         updateSingleCurve((actor) => removeCurvePoint(curveDataWithOverrides(actor), pointIndex));
-                        const nextIndex = Math.max(0, Math.min(pointIndex, allPoints.length - 2));
-                        publishCurveVertexSelect(singleSelection.id, nextIndex, "anchor");
+                        if (allPoints.length > 1) {
+                          const nextIndex = Math.max(0, Math.min(pointIndex, allPoints.length - 2));
+                          publishCurveVertexSelect(singleSelection.id, nextIndex, "anchor");
+                        } else {
+                          publishCurveVertexSelect(null, null, "anchor");
+                        }
                       }}
-                      title={allPoints.length <= 2 ? "A curve needs at least two vertices." : "Delete vertex"}
+                      title={allPoints.length <= 0 ? "Curve has no vertices." : "Delete vertex"}
                     >
                       <FontAwesomeIcon icon={faTrashCan} />
                     </button>

@@ -240,3 +240,34 @@ export const CURVE_ACTOR_SCHEMA: ParameterSchema = {
   ]
 };
 
+export const CAMERA_PATH_ACTOR_SCHEMA: ParameterSchema = {
+  id: "actor.cameraPath",
+  title: "Camera Path",
+  params: [
+    {
+      key: "targetMode",
+      label: "Target Mode",
+      type: "select",
+      options: ["curve", "actor"],
+      defaultValue: "curve"
+    },
+    {
+      key: "targetActorId",
+      label: "Target Actor",
+      type: "actor-ref",
+      allowSelf: false,
+      visibleWhen: [{ key: "targetMode", equals: "actor" }]
+    },
+    {
+      key: "previewDurationSeconds",
+      label: "Preview Duration",
+      type: "number",
+      min: 0.1,
+      max: 600,
+      step: 0.1,
+      defaultValue: 5,
+      unit: "s"
+    }
+  ]
+};
+

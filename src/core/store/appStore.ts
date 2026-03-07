@@ -54,6 +54,13 @@ export interface AppActions {
     parentActorId?: string | null;
     pluginType?: string;
   }): string;
+  createActorNoHistory(input: {
+    actorType: ActorNode["actorType"];
+    name?: string;
+    parentActorId?: string | null;
+    pluginType?: string;
+    select?: boolean;
+  }): string;
   deleteSelection(): void;
   renameNode(node: SelectionEntry, name: string): void;
   setActorTransform(actorId: string, key: "position" | "rotation" | "scale", value: [number, number, number]): void;
@@ -170,6 +177,49 @@ function removeActorRecursive(state: AppState, actorId: string): void {
   delete state.actors[actorId];
   delete state.actorStatusByActorId[actorId];
   state.selection = state.selection.filter((entry) => entry.id !== actorId);
+}
+
+function insertActor(state: AppState, input: {
+  id: string;
+  actorType: ActorNode["actorType"];
+  name?: string;
+  parentActorId?: string | null;
+  pluginType?: string;
+  select?: boolean;
+}): void {
+  const { id, actorType, parentActorId = null, pluginType, select = true } = input;
+  const uniqueName = uniqueActorName(state.actors, input.name ?? `${actorType} actor`);
+  const newActor: ActorNode = {
+    id,
+    name: uniqueName,
+    enabled: true,
+    kind: "actor",
+    actorType,
+    visibilityMode: "visible",
+    pluginType,
+    parentActorId,
+    childActorIds: [],
+    componentIds: [],
+    transform: {
+      position: [0, 0, 0],
+      rotation: [0, 0, 0],
+      scale: [1, 1, 1]
+    },
+    params: {}
+  };
+
+  state.actors[id] = newActor;
+  if (parentActorId) {
+    state.actors[parentActorId]?.childActorIds.push(id);
+  } else {
+    state.scene.actorIds.push(id);
+  }
+  if (select) {
+    state.selection = [{ kind: "actor", id }];
+  }
+  state.stats.actorCount = Object.keys(state.actors).length;
+  state.stats.actorCountEnabled = Object.values(state.actors).filter((entry) => entry.enabled).length;
+  state.dirty = true;
 }
 
 export function createAppStore(mode: AppMode): AppStoreApi {
@@ -334,40 +384,19 @@ export function createAppStore(mode: AppMode): AppStoreApi {
       },
       createActor({ actorType, name, parentActorId = null, pluginType }) {
         const id = createId("actor");
-        const currentActors = get().state.actors;
-        const uniqueName = uniqueActorName(currentActors, name ?? `${actorType} actor`);
-        const newActor: ActorNode = {
-          id,
-          name: uniqueName,
-          enabled: true,
-          kind: "actor",
-          actorType,
-          visibilityMode: "visible",
-          pluginType,
-          parentActorId,
-          childActorIds: [],
-          componentIds: [],
-          transform: {
-            position: [0, 0, 0],
-            rotation: [0, 0, 0],
-            scale: [1, 1, 1]
-          },
-          params: {}
-        };
-
         withHistory(get, set, "Create actor");
         set({
           state: produce(get().state, (draft) => {
-            draft.actors[id] = newActor;
-            if (parentActorId) {
-              draft.actors[parentActorId]?.childActorIds.push(id);
-            } else {
-              draft.scene.actorIds.push(id);
-            }
-            draft.selection = [{ kind: "actor", id }];
-            draft.stats.actorCount = Object.keys(draft.actors).length;
-            draft.stats.actorCountEnabled = Object.values(draft.actors).filter((entry) => entry.enabled).length;
-            draft.dirty = true;
+            insertActor(draft, { id, actorType, name, parentActorId, pluginType, select: true });
+          })
+        });
+        return id;
+      },
+      createActorNoHistory({ actorType, name, parentActorId = null, pluginType, select = false }) {
+        const id = createId("actor");
+        set({
+          state: produce(get().state, (draft) => {
+            insertActor(draft, { id, actorType, name, parentActorId, pluginType, select });
           })
         });
         return id;

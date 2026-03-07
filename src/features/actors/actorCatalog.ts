@@ -1,5 +1,6 @@
 import type { AppKernel } from "@/app/kernel";
 import type { ActorType } from "@/core/types";
+import { buildSinglePointCurveData } from "@/features/cameraPath/model";
 import { createDefaultCurveData } from "@/features/curves/types";
 
 export interface ActorCreationOption {
@@ -66,6 +67,50 @@ export function createActorFromDescriptor(kernel: AppKernel, descriptorId: strin
   const option = listActorCreationOptions(kernel).find((entry) => entry.descriptorId === descriptorId);
   if (!option) {
     return null;
+  }
+  if (descriptorId === "actor.cameraPath") {
+    const actions = kernel.store.getState().actions;
+    const camera = kernel.store.getState().state.camera;
+    actions.pushHistory("Create actor");
+    const actorId = actions.createActorNoHistory({
+      actorType: option.actorType,
+      pluginType: option.pluginType,
+      name: option.label,
+      select: false
+    });
+    const positionCurveActorId = actions.createActorNoHistory({
+      actorType: "curve",
+      name: "camera position",
+      parentActorId: actorId,
+      select: false
+    });
+    const targetCurveActorId = actions.createActorNoHistory({
+      actorType: "curve",
+      name: "camera target",
+      parentActorId: actorId,
+      select: false
+    });
+    actions.updateActorParamsNoHistory(positionCurveActorId, {
+      closed: false,
+      samplesPerSegment: 24,
+      handleSize: 0.5,
+      curveData: buildSinglePointCurveData(camera.position)
+    });
+    actions.updateActorParamsNoHistory(targetCurveActorId, {
+      closed: false,
+      samplesPerSegment: 24,
+      handleSize: 0.5,
+      curveData: buildSinglePointCurveData(camera.target)
+    });
+    actions.updateActorParamsNoHistory(actorId, {
+      positionCurveActorId,
+      targetCurveActorId,
+      targetMode: "curve",
+      targetActorId: "",
+      previewDurationSeconds: 5
+    });
+    actions.select([{ kind: "actor", id: actorId }]);
+    return actorId;
   }
   const actorId = kernel.store.getState().actions.createActor({
     actorType: option.actorType,

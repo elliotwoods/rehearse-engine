@@ -12,6 +12,7 @@ export type ActorType =
   | "mesh"
   | "primitive"
   | "curve"
+  | "camera-path"
   | "plugin";
 
 export type MaterialColorChannel =

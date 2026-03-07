@@ -9,8 +9,7 @@ interface ActorOption {
 interface RenderSettingsModalProps {
   open: boolean;
   isElectron: boolean;
-  curveActors: ActorOption[];
-  targetActors: ActorOption[];
+  cameraPathActors: ActorOption[];
   defaults: RenderSettings;
   onCancel: () => void;
   onConfirm: (settings: RenderSettings) => void;
@@ -151,27 +150,13 @@ export function RenderSettingsModal(props: RenderSettingsModalProps) {
             </select>
           </label>
           <label>
-            Camera Path (curve)
+            Camera Path
             <select
-              value={draft.cameraPathActorId}
-              onChange={(event) => setDraft((prev) => ({ ...prev, cameraPathActorId: event.target.value }))}
+              value={draft.cameraPathId}
+              onChange={(event) => setDraft((prev) => ({ ...prev, cameraPathId: event.target.value }))}
             >
               <option value="">(none)</option>
-              {props.curveActors.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Camera Target (actor)
-            <select
-              value={draft.cameraTargetActorId}
-              onChange={(event) => setDraft((prev) => ({ ...prev, cameraTargetActorId: event.target.value }))}
-            >
-              <option value="">(none)</option>
-              {props.targetActors.map((entry) => (
+              {props.cameraPathActors.map((entry) => (
                 <option key={entry.id} value={entry.id}>
                   {entry.label}
                 </option>
@@ -210,4 +195,3 @@ export function RenderSettingsModal(props: RenderSettingsModalProps) {
     </div>
   );
 }
-

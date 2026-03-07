@@ -1918,6 +1918,45 @@ body.is-scrubbing-number * {
   justify-content: center;
 }
 
+.camera-path-panel {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+}
+
+.camera-path-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.camera-path-toolbar button {
+  min-height: 30px;
+}
+
+.camera-path-summary {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  background: #0f1b2d;
+  padding: 8px;
+}
+
+.camera-path-summary-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.camera-path-summary-row span:first-child {
+  color: var(--text-muted);
+}
+
+.camera-path-summary-row.is-error span:last-child {
+  color: var(--warning);
+}
+
 .inspector-debug-card {
   border: 1px solid var(--line);
   background: #0d1828;

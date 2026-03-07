@@ -20,6 +20,7 @@ const actorSchema = z.object({
     "mesh",
     "primitive",
     "curve",
+    "camera-path",
     "plugin"
   ]),
   visibilityMode: z.enum(["visible", "hidden", "selected"]).default("visible"),

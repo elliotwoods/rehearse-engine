@@ -512,13 +512,12 @@ export class CurveEditController {
       return false;
     }
     const curve = curveDataWithOverrides(actor);
-    if (curve.points.length <= 2) {
-      this.kernel.store.getState().actions.setStatus("Cannot delete vertex: curve requires at least two vertices.");
+    if (curve.points.length <= 0) {
+      this.kernel.store.getState().actions.setStatus("Cannot delete vertex: curve has no vertices.");
       return true;
     }
     const deletedPointIndex = this.activeControlMeta.pointIndex;
     const nextPoints = curve.points.filter((_, index) => index !== deletedPointIndex);
-    const nextSelectedPointIndex = Math.max(0, Math.min(deletedPointIndex, nextPoints.length - 1));
     this.kernel.store.getState().actions.updateActorParams(actor.id, {
       curveData: {
         ...curve,
@@ -527,12 +526,18 @@ export class CurveEditController {
     });
     this.transformControls.detach();
     this.activeSignature = "";
-    this.activeControlMeta = {
-      actorId: actor.id,
-      pointIndex: nextSelectedPointIndex,
-      controlType: "anchor"
-    };
-    this.emitCurveVertexSelection(actor.id, nextSelectedPointIndex, "anchor");
+    if (nextPoints.length > 0) {
+      const nextSelectedPointIndex = Math.max(0, Math.min(deletedPointIndex, nextPoints.length - 1));
+      this.activeControlMeta = {
+        actorId: actor.id,
+        pointIndex: nextSelectedPointIndex,
+        controlType: "anchor"
+      };
+      this.emitCurveVertexSelection(actor.id, nextSelectedPointIndex, "anchor");
+    } else {
+      this.activeControlMeta = null;
+      this.emitCurveVertexSelection(null, null, "anchor");
+    }
     this.kernel.store.getState().actions.setStatus("Curve vertex deleted.");
     return true;
   };

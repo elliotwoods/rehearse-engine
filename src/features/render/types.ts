@@ -9,8 +9,7 @@ export interface RenderSettings {
   bitrateMbps: number;
   durationSeconds: number;
   startTimeMode: RenderStartTimeMode;
-  cameraPathActorId: string;
-  cameraTargetActorId: string;
+  cameraPathId: string;
   strategy: RenderCaptureStrategy;
 }
 
@@ -19,4 +18,3 @@ export interface RenderProgress {
   frameCount: number;
   message: string;
 }
-
