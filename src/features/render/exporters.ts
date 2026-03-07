@@ -11,7 +11,7 @@ export interface RenderExporter {
 }
 
 interface RenderExportContext {
-  sessionName?: string;
+  projectName?: string;
 }
 
 function padFrame(frameIndex: number): string {
@@ -29,12 +29,12 @@ function bytesToBase64(bytes: Uint8Array): string {
 function sanitizeFolderNameSegment(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    return "Session";
+    return "Project";
   }
   // eslint-disable-next-line no-control-regex
   const sanitized = trimmed.replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/\s+/g, " ").trim();
   const withoutTrailingDots = sanitized.replace(/[. ]+$/g, "");
-  return withoutTrailingDots || "Session";
+  return withoutTrailingDots || "Project";
 }
 
 function formatTimestampForFolderName(date: Date): string {
@@ -47,8 +47,8 @@ function formatTimestampForFolderName(date: Date): string {
   return `${String(year)}-${month}-${day} ${hours}.${minutes}.${seconds}`;
 }
 
-function buildRenderFolderName(sessionName?: string): string {
-  return `${sanitizeFolderNameSegment(sessionName ?? "Session")} - ${formatTimestampForFolderName(new Date())}`;
+function buildRenderFolderName(projectName?: string): string {
+  return `${sanitizeFolderNameSegment(projectName ?? "Project")} - ${formatTimestampForFolderName(new Date())}`;
 }
 
 function buildScript(encoder: string, fps: number, bitrateMbps: number, outputName: string): { sh: string; bat: string } {
@@ -120,7 +120,7 @@ async function createElectronTempExporter(settings: RenderSettings, context?: Re
     fps: settings.fps,
     bitrateMbps: settings.bitrateMbps,
     outputFileName: "render.mp4",
-    frameFolderName: buildRenderFolderName(context?.sessionName)
+    frameFolderName: buildRenderFolderName(context?.projectName)
   });
   let closed = false;
   return {
@@ -158,7 +158,7 @@ async function createWebTempExporter(settings: RenderSettings, context?: RenderE
     throw new Error("This browser does not support direct folder writing for temp renders.");
   }
   const rootDir = await picker();
-  const folderName = buildRenderFolderName(context?.sessionName);
+  const folderName = buildRenderFolderName(context?.projectName);
   const renderDir = await rootDir.getDirectoryHandle(folderName, { create: true });
   let closed = false;
   let frameCount = 0;

@@ -518,7 +518,7 @@ select {
 .titlebar button,
 .titlebar select,
 .titlebar input,
-.titlebar-session-popover {
+.titlebar-project-popover {
   -webkit-app-region: no-drag;
 }
 
@@ -583,17 +583,17 @@ select {
   color: var(--text);
 }
 
-.titlebar-session {
+.titlebar-project {
   position: relative;
 }
 
-.titlebar-session-row {
+.titlebar-project-row {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
 
-.titlebar-session-inline-rename {
+.titlebar-project-inline-rename {
   min-width: 220px;
   display: inline-flex;
   align-items: center;
@@ -604,7 +604,7 @@ select {
   text-transform: none;
 }
 
-.titlebar-session-inline-input {
+.titlebar-project-inline-input {
   min-width: 140px;
   max-width: 280px;
   height: 26px;
@@ -616,19 +616,19 @@ select {
   font-family: var(--font-mono);
 }
 
-.titlebar-session-trigger {
+.titlebar-project-trigger {
   min-width: 220px;
   justify-content: center;
   gap: 6px;
   text-transform: none;
 }
 
-.titlebar-session-trigger em {
+.titlebar-project-trigger em {
   color: var(--warning);
   font-style: normal;
 }
 
-.titlebar-session-save-stale {
+.titlebar-project-save-stale {
   min-width: 30px;
   width: 30px;
   height: 30px;
@@ -638,30 +638,77 @@ select {
   justify-content: center;
 }
 
-.titlebar-session-popover {
+.titlebar-project-popover {
   position: absolute;
   top: calc(100% + 8px);
   left: 50%;
   transform: translateX(-50%);
-  min-width: 280px;
+  min-width: 320px;
   border: 1px solid var(--line-strong);
   background: #0d1828;
   box-shadow: 0 14px 40px rgba(1, 3, 8, 0.56);
   padding: 10px;
   display: grid;
-  gap: 8px;
+  gap: 10px;
   z-index: 2000;
 }
 
-.titlebar-session-popover label {
+.titlebar-project-popover label {
   color: var(--text-muted);
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
 
-.titlebar-session-actions {
+.titlebar-project-section {
+  display: grid;
+  gap: 8px;
+}
+
+.titlebar-project-divider {
+  height: 1px;
+  background: var(--line);
+}
+
+.titlebar-project-snapshot-list {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.titlebar-project-snapshot-item {
+  width: 100%;
+  min-height: 0;
+  padding: 8px 10px;
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  text-align: left;
+  background: #0f1d30;
+}
+
+.titlebar-project-snapshot-item.is-active {
+  border-color: var(--accent);
+  background: #15283f;
+}
+
+.titlebar-project-snapshot-name {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.titlebar-project-snapshot-date {
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.titlebar-project-actions {
   display: inline-flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -2678,7 +2725,7 @@ body.is-scrubbing-number * {
     grid-area: center;
   }
 
-  .titlebar-session-trigger {
+  .titlebar-project-trigger {
     min-width: 180px;
   }
 

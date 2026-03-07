@@ -1,8 +1,8 @@
 import type { AppKernel } from "@/app/kernel";
-import type { SessionAssetRef } from "@/types/ipc";
+import type { ProjectAssetRef } from "@/types/ipc";
 
 export interface HdriImportRequest {
-  sessionName: string;
+  projectName: string;
   sourcePath: string;
   options?: {
     uastc?: boolean;
@@ -11,9 +11,9 @@ export interface HdriImportRequest {
   };
 }
 
-export async function importHdriToKtx2(kernel: AppKernel, request: HdriImportRequest): Promise<SessionAssetRef> {
+export async function importHdriToKtx2(kernel: AppKernel, request: HdriImportRequest): Promise<ProjectAssetRef> {
   const asset = await kernel.storage.transcodeHdriToKtx2({
-    sessionName: request.sessionName,
+    projectName: request.projectName,
     sourcePath: request.sourcePath,
     options: request.options
   });
@@ -25,7 +25,7 @@ export async function importHdriToKtx2(kernel: AppKernel, request: HdriImportReq
       dirty: true
     }
   }));
-  kernel.sessionService.queueAutosave();
+  kernel.projectService.queueAutosave();
   return asset;
 }
 

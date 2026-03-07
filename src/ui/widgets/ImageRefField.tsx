@@ -10,7 +10,7 @@ interface ImageRefFieldProps {
 
 export const ImageRefField: React.FC<ImageRefFieldProps> = ({ value, onChange, label }) => {
   const assets = useAppStore((s) => s.state.assets);
-  const sessionName = useAppStore((s) => s.state.activeSessionName);
+  const projectName = useAppStore((s) => s.state.activeProjectName);
   const kernel = useKernel();
 
   const imageAssets = assets.filter((a) => a.kind === "image").sort((a, b) => a.sourceFileName.localeCompare(b.sourceFileName));
@@ -22,7 +22,7 @@ export const ImageRefField: React.FC<ImageRefFieldProps> = ({ value, onChange, l
       filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif", "bmp", "tiff", "tif"] }]
     });
     if (!sourcePath) return;
-    const asset = await window.electronAPI.importAsset({ sessionName, sourcePath, kind: "image" });
+    const asset = await window.electronAPI.importAsset({ projectName, sourcePath, kind: "image" });
     kernel.store.getState().actions.addAssets([asset]);
     onChange(asset.id);
   };

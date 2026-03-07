@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createInitialState } from "@/core/defaults";
-import { estimateSessionPayloadBytes } from "@/core/session/sessionSize";
-import { buildSessionManifest } from "@/core/session/sessionManifest";
-import { serializeSession } from "@/core/session/sessionSchema";
+import { estimateProjectPayloadBytes } from "@/core/project/projectSize";
+import { buildProjectSnapshotManifest } from "@/core/project/projectSnapshotManifest";
+import { serializeProjectSnapshot } from "@/core/project/projectSnapshotSchema";
 
-describe("session payload size estimator", () => {
+describe("project payload size estimator", () => {
   it("matches serialized payload byte size", () => {
     const state = createInitialState("electron-rw", "demo");
     state.actors.actor_1 = {
@@ -25,8 +25,8 @@ describe("session payload size estimator", () => {
       params: {}
     };
 
-    const estimated = estimateSessionPayloadBytes(state, "electron-rw");
-    const payload = serializeSession(buildSessionManifest(state, "electron-rw"));
+    const estimated = estimateProjectPayloadBytes(state, "electron-rw");
+    const payload = serializeProjectSnapshot(buildProjectSnapshotManifest(state, "electron-rw"));
     const actual = new Blob([payload]).size;
 
     expect(estimated).toBe(actual);

@@ -463,7 +463,7 @@ export function InspectorPane() {
   const assets = appState.assets;
   const actorStatusByActorId = appState.actorStatusByActorId;
   const mode = appState.mode;
-  const sessionName = appState.activeSessionName;
+  const projectName = appState.activeProjectName;
   const autosaveTimeoutRef = useRef<number | null>(null);
 
   const actorDescriptors = kernel.descriptorRegistry.listByKind("actor");
@@ -548,7 +548,7 @@ export function InspectorPane() {
       window.clearTimeout(autosaveTimeoutRef.current);
     }
     autosaveTimeoutRef.current = window.setTimeout(() => {
-      kernel.sessionService.queueAutosave();
+      kernel.projectService.queueAutosave();
       autosaveTimeoutRef.current = null;
     }, 120);
   };
@@ -777,8 +777,8 @@ export function InspectorPane() {
       { label: "Heap (MB)", value: Number.isFinite(appState.stats.heapMb) ? appState.stats.heapMb.toFixed(1) : "0.0" },
       { label: "Actor Count", value: Math.max(0, Math.floor(appState.stats.actorCount)).toLocaleString() },
       { label: "Enabled Actors", value: Math.max(0, Math.floor(appState.stats.actorCountEnabled)).toLocaleString() },
-      { label: "Session Size", value: `${Math.max(0, Math.floor(appState.stats.sessionFileBytes)).toLocaleString()} B` },
-      { label: "Saved Size", value: `${Math.max(0, Math.floor(appState.stats.sessionFileBytesSaved)).toLocaleString()} B` }
+      { label: "Project Size", value: `${Math.max(0, Math.floor(appState.stats.projectFileBytes)).toLocaleString()} B` },
+      { label: "Saved Size", value: `${Math.max(0, Math.floor(appState.stats.projectFileBytesSaved)).toLocaleString()} B` }
     ];
     return (
       <div className="inspector-pane-root custom-inspector">
@@ -2443,7 +2443,7 @@ export function InspectorPane() {
                     }
 
                     const imported = await importFileForActorParam(kernel, {
-                      sessionName,
+                      projectName,
                       sourcePath,
                       definition
                     });

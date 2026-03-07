@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { AppKernel } from "@/app/kernel";
-import { estimateSessionPayloadBytes } from "@/core/session/sessionSize";
+import { estimateProjectPayloadBytes } from "@/core/project/projectSize";
 import { CurveEditController } from "@/render/curveEditController";
 import { incompatibilityReason } from "@/render/engineCompatibility";
 import { SceneController } from "@/render/sceneController";
@@ -417,10 +417,10 @@ export class WebGlViewport {
         cameraDistance: this.activeCamera.position.distanceTo(this.controls.target),
         cameraControlsEnabled: Boolean((this.controls as any).enabled),
         cameraZoomEnabled: this.isWheelZoomEnabled(),
-        sessionFileBytes:
-          currentStats.sessionFileBytesSaved > 0 && !this.kernel.store.getState().state.dirty
-            ? currentStats.sessionFileBytesSaved
-            : currentStats.sessionFileBytes
+        projectFileBytes:
+          currentStats.projectFileBytesSaved > 0 && !this.kernel.store.getState().state.dirty
+            ? currentStats.projectFileBytesSaved
+            : currentStats.projectFileBytes
       });
     }
 
@@ -430,14 +430,14 @@ export class WebGlViewport {
       const resourceBytes = this.estimateResourceBytes();
       const heapBytes = this.getHeapBytes();
       const memory = summarizeMemory(heapBytes, resourceBytes);
-      const estimatedSessionBytes = state.dirty
-        ? estimateSessionPayloadBytes(state, state.mode)
-        : state.stats.sessionFileBytesSaved;
+      const estimatedProjectBytes = state.dirty
+        ? estimateProjectPayloadBytes(state, state.mode)
+        : state.stats.projectFileBytesSaved;
       this.kernel.store.getState().actions.setStats({
         memoryMb: memory.memoryMb,
         heapMb: memory.heapMb,
         resourceMb: memory.resourceMb,
-        sessionFileBytes: estimatedSessionBytes
+        projectFileBytes: estimatedProjectBytes
       });
     }
   }

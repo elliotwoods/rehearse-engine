@@ -1,4 +1,4 @@
 {
-  "defaultSessionName": "demo"
+  "defaultProjectName": "demo",
+  "defaultSnapshotName": "main"
 }
-

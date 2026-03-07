@@ -1,42 +1,45 @@
-import type { DaeImportResult, DefaultSessionPointer, SessionAssetRef } from "@/types/ipc";
+import type { DaeImportResult, DefaultProjectPointer, ProjectAssetRef, ProjectSnapshotListEntry } from "@/types/ipc";
 
 export interface StorageAdapter {
   readonly mode: "electron-rw" | "web-ro";
   readonly isReadOnly: boolean;
-  listSessions(): Promise<string[]>;
-  loadDefaults(): Promise<DefaultSessionPointer>;
-  saveDefaults(pointer: DefaultSessionPointer): Promise<void>;
-  loadSession(sessionName: string): Promise<string>;
-  saveSession(sessionName: string, payload: string): Promise<void>;
-  cloneSession(previousName: string, nextName: string): Promise<void>;
-  renameSession(previousName: string, nextName: string): Promise<void>;
+  listProjects(): Promise<string[]>;
+  listSnapshots(projectName: string): Promise<ProjectSnapshotListEntry[]>;
+  loadDefaults(): Promise<DefaultProjectPointer>;
+  saveDefaults(pointer: DefaultProjectPointer): Promise<void>;
+  loadProjectSnapshot(projectName: string, snapshotName: string): Promise<string>;
+  saveProjectSnapshot(projectName: string, snapshotName: string, payload: string): Promise<void>;
+  cloneProject(previousName: string, nextName: string): Promise<void>;
+  renameProject(previousName: string, nextName: string): Promise<void>;
+  duplicateSnapshot(projectName: string, previousName: string, nextName: string): Promise<void>;
+  renameSnapshot(projectName: string, previousName: string, nextName: string): Promise<void>;
+  deleteSnapshot(projectName: string, snapshotName: string): Promise<void>;
   importAsset(args: {
-    sessionName: string;
+    projectName: string;
     sourcePath: string;
-    kind: SessionAssetRef["kind"];
-  }): Promise<SessionAssetRef>;
-  importDae(args: { sessionName: string; sourcePath: string }): Promise<DaeImportResult>;
+    kind: ProjectAssetRef["kind"];
+  }): Promise<ProjectAssetRef>;
+  importDae(args: { projectName: string; sourcePath: string }): Promise<DaeImportResult>;
   importGaussianSplat(args: {
-    sessionName: string;
+    projectName: string;
     sourcePath: string;
-  }): Promise<SessionAssetRef>;
+  }): Promise<ProjectAssetRef>;
   convertGaussianAsset(args: {
-    sessionName: string;
+    projectName: string;
     assetId: string;
     relativePath: string;
     sourceFileName: string;
-  }): Promise<SessionAssetRef>;
+  }): Promise<ProjectAssetRef>;
   transcodeHdriToKtx2(args: {
-    sessionName: string;
+    projectName: string;
     sourcePath: string;
     options?: {
       uastc?: boolean;
       zstdLevel?: number;
       generateMipmaps?: boolean;
     };
-  }): Promise<SessionAssetRef>;
-  deleteAsset(args: { sessionName: string; relativePath: string }): Promise<void>;
-  resolveAssetPath(args: { sessionName: string; relativePath: string }): Promise<string>;
-  readAssetBytes(args: { sessionName: string; relativePath: string }): Promise<Uint8Array>;
+  }): Promise<ProjectAssetRef>;
+  deleteAsset(args: { projectName: string; relativePath: string }): Promise<void>;
+  resolveAssetPath(args: { projectName: string; relativePath: string }): Promise<string>;
+  readAssetBytes(args: { projectName: string; relativePath: string }): Promise<Uint8Array>;
 }
-

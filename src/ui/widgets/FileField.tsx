@@ -1,6 +1,6 @@
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faCircleInfo, faFolderOpen, faFile, faRotateRight } from "@fortawesome/free-solid-svg-icons";
-import type { SessionAssetRef } from "@/types/ipc";
+import type { ProjectAssetRef } from "@/types/ipc";
 import { InspectorFieldRow } from "@/ui/widgets/InspectorFieldRow";
 
 interface FileFieldProps {
@@ -8,7 +8,7 @@ interface FileFieldProps {
   description?: string;
   value: string;
   mixed?: boolean;
-  asset?: SessionAssetRef;
+  asset?: ProjectAssetRef;
   disabled?: boolean;
   showReset?: boolean;
   onReset?: () => void;
@@ -30,12 +30,12 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(unitIndex === 0 ? 0 : 2)} ${units[unitIndex]}`;
 }
 
-function buildAssetTooltip(asset?: SessionAssetRef, mixed?: boolean, value?: string): string {
+function buildAssetTooltip(asset?: ProjectAssetRef, mixed?: boolean, value?: string): string {
   if (mixed) {
     return "Mixed assets in selection";
   }
   if (!asset && value) {
-    return `Asset id: ${value}\nAsset record not found in current session.`;
+    return `Asset id: ${value}\nAsset record not found in current project.`;
   }
   if (!asset) {
     return "No file selected";

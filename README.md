@@ -43,10 +43,11 @@ Note:
 - Web build (read-only): `npm run build`
 - Electron TS compile: `npm run build:electron`
 
-## Session Paths
+## Project Paths
 - `savedata/defaults.json`
-- `savedata/<sessionName>/session.json`
-- `savedata/<sessionName>/assets/...`
+- `savedata/<projectName>/snapshots/<snapshotName>.json`
+- `savedata/<projectName>/assets/...`
+- legacy compatibility: `savedata/<projectName>/session.json` is still read as the `main` snapshot
 
 ## HDRI Transcoding Requirement
 HDRI import uses `toktx` for KTX2 generation. Ensure `toktx` is installed and on your `PATH`.
@@ -54,7 +55,7 @@ For runtime KTX2 decode, place basis transcoder files in `public/basis/` (e.g. `
 
 ## Notes
 - Web mode (`public/sessions/...`) is read-only and intended for future Vercel deploys.
-- Gaussian splat actor renders in-scene from `splatbin-v1` session assets.
+- Gaussian splat actor renders in-scene from `splatbin-v1` project assets.
 - Plugin sample package: `plugins/example-wave-plugin`.
 - Plugin template package: `plugins/template-artwork-actor-plugin`.
 - Local external plugin workspace (gitignored): `plugins-local/`.
@@ -69,4 +70,5 @@ For runtime KTX2 decode, place basis transcoder files in `public/basis/` (e.g. `
   - If a plugin does not appear in the `+` menu, check the Plugins dialog and status message for the first load failure reason.
 
 ## Gaussian Asset Migration
-- Legacy sessions referencing raw `.ply` Gaussian assets are auto-converted to `splatbin-v1` when loaded in Electron mode.
+- Legacy project snapshots referencing raw `.ply` Gaussian assets are auto-converted to `splatbin-v1` when loaded in Electron mode.
+- Legacy single-manifest session folders are treated as projects whose `session.json` is the `main` snapshot.

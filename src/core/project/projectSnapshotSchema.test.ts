@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { parseSession, serializeSession } from "@/core/session/sessionSchema";
+import { parseProjectSnapshot, serializeProjectSnapshot } from "@/core/project/projectSnapshotSchema";
 import { createInitialState } from "@/core/defaults";
-import { SESSION_SCHEMA_VERSION } from "@/core/types";
+import { PROJECT_SCHEMA_VERSION } from "@/core/types";
 import { createId } from "@/core/ids";
 
-describe("session schema", () => {
-  it("serializes and parses a session payload", () => {
-    const state = createInitialState("electron-rw", "demo");
+describe("project snapshot schema", () => {
+  it("serializes and parses a project snapshot payload", () => {
+    const state = createInitialState("electron-rw", "demo", "main");
     const curveActorId = createId("actor");
     state.actors[curveActorId] = {
       id: curveActorId,
@@ -47,10 +47,11 @@ describe("session schema", () => {
     };
     state.scene.actorIds.push(curveActorId);
 
-    const payload = serializeSession({
-      schemaVersion: SESSION_SCHEMA_VERSION,
+    const payload = serializeProjectSnapshot({
+      schemaVersion: PROJECT_SCHEMA_VERSION,
       appMode: "electron-rw",
-      sessionName: state.activeSessionName,
+      projectName: state.activeProjectName,
+      snapshotName: state.activeSnapshotName,
       createdAtIso: "2026-03-02T00:00:00.000Z",
       updatedAtIso: "2026-03-02T00:00:00.000Z",
       scene: state.scene,
@@ -63,9 +64,10 @@ describe("session schema", () => {
       assets: state.assets
     });
 
-    const parsed = parseSession(payload);
-    expect(parsed.sessionName).toBe("demo");
-    expect(parsed.schemaVersion).toBe(SESSION_SCHEMA_VERSION);
+    const parsed = parseProjectSnapshot(payload);
+    expect(parsed.projectName).toBe("demo");
+    expect(parsed.snapshotName).toBe("main");
+    expect(parsed.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
     expect(parsed.actors[curveActorId]?.actorType).toBe("curve");
     expect(parsed.actors[curveActorId]?.params.curveData).toBeTruthy();
   });

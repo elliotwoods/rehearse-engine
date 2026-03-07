@@ -1,6 +1,6 @@
-import type { AppMode, HdriTranscodeOptions, SessionAssetRef } from "@/types/ipc";
+import type { AppMode, HdriTranscodeOptions, ProjectAssetRef } from "@/types/ipc";
 
-export const SESSION_SCHEMA_VERSION = 2;
+export const PROJECT_SCHEMA_VERSION = 3;
 
 export type SceneNodeKind = "scene" | "actor" | "component";
 export type RenderEngine = "webgl2" | "webgpu";
@@ -119,7 +119,7 @@ export interface MaterialSlotsParameterDefinition extends ParameterDefinitionBas
 
 export interface FileParameterImportAsset {
   mode: "import-asset";
-  kind: SessionAssetRef["kind"];
+  kind: ProjectAssetRef["kind"];
 }
 
 export interface FileParameterTranscodeHdri {
@@ -218,10 +218,11 @@ export interface SelectionEntry {
   id: string;
 }
 
-export interface SessionManifest {
+export interface ProjectSnapshotManifest {
   schemaVersion: number;
   appMode: AppMode;
-  sessionName: string;
+  projectName: string;
+  snapshotName: string;
   createdAtIso: string;
   updatedAtIso: string;
   scene: SceneState;
@@ -231,7 +232,7 @@ export interface SessionManifest {
   cameraBookmarks: CameraBookmark[];
   time: TimeState;
   materials: Record<string, Material>;
-  assets: SessionAssetRef[];
+  assets: ProjectAssetRef[];
 }
 
 export interface SceneStats {
@@ -247,8 +248,8 @@ export interface SceneStats {
   resourceMb: number;
   actorCount: number;
   actorCountEnabled: number;
-  sessionFileBytes: number;
-  sessionFileBytesSaved: number;
+  projectFileBytes: number;
+  projectFileBytesSaved: number;
   cameraDistance: number;
   cameraControlsEnabled: boolean;
   cameraZoomEnabled: boolean;
@@ -290,7 +291,8 @@ export type ConsoleEntry = ConsoleLogEntry | ConsoleCommandEntry;
 
 export interface AppState {
   mode: AppMode;
-  activeSessionName: string;
+  activeProjectName: string;
+  activeSnapshotName: string;
   scene: SceneState;
   actors: Record<string, ActorNode>;
   components: Record<string, ComponentNode>;
@@ -298,7 +300,7 @@ export interface AppState {
   cameraBookmarks: CameraBookmark[];
   time: TimeState;
   materials: Record<string, Material>;
-  assets: SessionAssetRef[];
+  assets: ProjectAssetRef[];
   selection: SelectionEntry[];
   stats: SceneStats;
   dirty: boolean;

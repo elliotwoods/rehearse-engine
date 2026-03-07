@@ -1,5 +1,5 @@
 import { createAppStore } from "@/core/store/appStore";
-import { SessionService } from "@/core/session/sessionService";
+import { ProjectService } from "@/core/project/projectService";
 import { createStorageAdapter } from "@/features/storage";
 import { DescriptorRegistry } from "@/core/hotReload/descriptorRegistry";
 import { HotReloadManager } from "@/core/hotReload/hotReloadManager";
@@ -9,7 +9,7 @@ import { SimulationClock } from "@/core/simulation/clock";
 export interface AppKernel {
   store: ReturnType<typeof createAppStore>;
   storage: ReturnType<typeof createStorageAdapter>;
-  sessionService: SessionService;
+  projectService: ProjectService;
   descriptorRegistry: DescriptorRegistry;
   hotReloadManager: HotReloadManager;
   pluginApi: ReturnType<typeof createPluginApi>;
@@ -22,13 +22,13 @@ function createKernelInternal(): AppKernel {
   const descriptorRegistry = new DescriptorRegistry();
   const hotReloadManager = new HotReloadManager(descriptorRegistry, store);
   const pluginApi = createPluginApi(descriptorRegistry);
-  const sessionService = new SessionService(storage, store);
+  const projectService = new ProjectService(storage, store);
   const clock = new SimulationClock(1 / 60);
 
   return {
     store,
     storage,
-    sessionService,
+    projectService,
     descriptorRegistry,
     hotReloadManager,
     pluginApi,

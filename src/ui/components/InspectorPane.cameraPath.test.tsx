@@ -12,7 +12,7 @@ function createKernelStub(): AppKernel {
   return {
     store,
     storage: {} as AppKernel["storage"],
-    sessionService: { queueAutosave() {} } as AppKernel["sessionService"],
+    projectService: { queueAutosave() {} } as AppKernel["projectService"],
     hotReloadManager: {} as AppKernel["hotReloadManager"],
     pluginApi: {
       listPlugins: () => []

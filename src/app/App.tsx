@@ -87,7 +87,8 @@ export function App() {
   const renderHostElRef = useRef<HTMLDivElement | null>(null);
   const [mainViewportSuspended, setMainViewportSuspended] = useState(false);
   const renderCancelRequestedRef = useRef(false);
-  const activeSessionName = useAppStore((store) => store.state.activeSessionName);
+  const activeProjectName = useAppStore((store) => store.state.activeProjectName);
+  const activeSnapshotName = useAppStore((store) => store.state.activeSnapshotName);
   const mode = useAppStore((store) => store.state.mode);
   const sceneRenderEngine = useAppStore((store) => store.state.scene.renderEngine);
   const sceneAntialiasing = useAppStore((store) => store.state.scene.antialiasing);
@@ -139,14 +140,14 @@ export function App() {
           descriptorId: input.descriptorId,
           sourcePath: input.sourcePath,
           fileName: input.fileName,
-          sessionName: activeSessionName
+          projectName: activeProjectName
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown file import error";
         kernel.store.getState().actions.setStatus(`Unable to import ${input.fileName}: ${message}`);
       }
     },
-    [activeSessionName, kernel]
+    [activeProjectName, kernel]
   );
 
   const handleDragEnter = useCallback(
@@ -345,7 +346,7 @@ export function App() {
         const frameCount = computeFrameCount(settings.durationSeconds, settings.fps);
         const startTime = settings.startTimeMode === "zero" ? 0 : previousTime.elapsedSimSeconds;
         const writeExporter = await createRenderExporter(settings, {
-          sessionName: activeSessionName
+          projectName: activeProjectName
         });
         exporter = writeExporter;
         kernel.store.getState().actions.setTimeRunning(false);
@@ -398,7 +399,7 @@ export function App() {
         setRenderProgress(null);
       }
     },
-    [activeSessionName, kernel, sceneAntialiasing, sceneRenderEngine]
+    [activeProjectName, kernel, sceneAntialiasing, sceneRenderEngine]
   );
 
   useEffect(() => {
@@ -424,7 +425,7 @@ export function App() {
           kernel.store.getState().actions.setStatus(`Plugin auto-load failed: ${message}`);
         }
       }
-      await kernel.sessionService.loadDefaultSession();
+      await kernel.projectService.loadDefaultProject();
     })();
     return () => {
       unsubscribe();
@@ -516,18 +517,18 @@ export function App() {
         event.preventDefault();
         if (event.shiftKey) {
           void requestTextInput({
-            title: "Save Session As",
-            label: "Session name",
-            initialValue: activeSessionName,
+            title: "Save Snapshot As",
+            label: "Snapshot name",
+            initialValue: activeSnapshotName,
             confirmLabel: "Save"
           }).then((nextName) => {
             if (nextName) {
-              void kernel.sessionService.saveAs(nextName);
+              void kernel.projectService.saveSnapshotAs(nextName);
             }
           });
           return;
         }
-        void kernel.sessionService.saveSession();
+        void kernel.projectService.saveProject();
         return;
       }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
@@ -544,7 +545,7 @@ export function App() {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [activeSessionName, cycleCameraByTab, kernel, requestTextInput, stopCameraTween]);
+  }, [activeSnapshotName, cycleCameraByTab, kernel, requestTextInput, stopCameraTween]);
 
   const topBar = useMemo(
     () => (

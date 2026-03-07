@@ -129,14 +129,18 @@ const METHOD_DOCS: ConsoleMethodDoc[] = [
   { path: "component.disable", signature: "component.disable(target)", description: "Disable components.", examples: ["component.disable('@selected')"] },
   { path: "component.params.get", signature: "component.params.get(target, key?)", description: "Get component params.", examples: ["component.params.get('@selected')"] },
   { path: "component.params.set", signature: "component.params.set(target, patch)", description: "Set component params.", examples: ["component.params.set('@selected', { foo: 1 })"] },
-  { path: "session.list", signature: "session.list()", description: "List sessions.", examples: ["session.list()"] },
-  { path: "session.status", signature: "session.status()", description: "Get current session status.", examples: ["session.status()"] },
-  { path: "session.new", signature: "session.new(name)", description: "Create and load a new session.", examples: ["session.new('Sandbox')"] },
-  { path: "session.load", signature: "session.load(name)", description: "Load a session.", examples: ["session.load('demo')"] },
-  { path: "session.reload", signature: "session.reload()", description: "Reload active session.", examples: ["session.reload()"] },
-  { path: "session.save", signature: "session.save()", description: "Save active session.", examples: ["session.save()"] },
-  { path: "session.saveAs", signature: "session.saveAs(name)", description: "Save as new session name.", examples: ["session.saveAs('backup')"] },
-  { path: "session.rename", signature: "session.rename(nextName)", description: "Rename active session.", examples: ["session.rename('Project A')"] },
+  { path: "project.list", signature: "project.list()", description: "List projects.", examples: ["project.list()"] },
+  { path: "project.status", signature: "project.status()", description: "Get current project status.", examples: ["project.status()"] },
+  { path: "project.new", signature: "project.new(name)", description: "Create and load a new project.", examples: ["project.new('Sandbox')"] },
+  { path: "project.load", signature: "project.load(name, snapshot?)", description: "Load a project snapshot.", examples: ["project.load('demo', 'main')"] },
+  { path: "project.reload", signature: "project.reload()", description: "Reload active project snapshot.", examples: ["project.reload()"] },
+  { path: "project.save", signature: "project.save()", description: "Save active project snapshot.", examples: ["project.save()"] },
+  { path: "project.rename", signature: "project.rename(nextName)", description: "Rename active project.", examples: ["project.rename('Project A')"] },
+  { path: "project.snapshots.list", signature: "project.snapshots.list()", description: "List snapshots in the active project.", examples: ["project.snapshots.list()"] },
+  { path: "project.snapshots.saveAs", signature: "project.snapshots.saveAs(name)", description: "Save current state as a named snapshot.", examples: ["project.snapshots.saveAs('lighting-pass')"] },
+  { path: "project.snapshots.rename", signature: "project.snapshots.rename(nextName)", description: "Rename active snapshot.", examples: ["project.snapshots.rename('draft-2')"] },
+  { path: "project.snapshots.duplicate", signature: "project.snapshots.duplicate(name)", description: "Duplicate active snapshot.", examples: ["project.snapshots.duplicate('backup')"] },
+  { path: "project.snapshots.delete", signature: "project.snapshots.delete(name?)", description: "Delete a snapshot.", examples: ["project.snapshots.delete('backup')"] },
   { path: "time.play", signature: "time.play()", description: "Start simulation.", examples: ["time.play()"] },
   { path: "time.pause", signature: "time.pause()", description: "Pause simulation.", examples: ["time.pause()"] },
   { path: "time.toggle", signature: "time.toggle()", description: "Toggle simulation.", examples: ["time.toggle()"] },
@@ -623,47 +627,83 @@ function buildRuntimeApi(kernel: AppKernel) {
     scene,
     actor,
     component,
-    session: {
+    project: {
       list() {
-        return kernel.sessionService.listSessions();
+        return kernel.projectService.listProjects();
       },
       status() {
         const state = kernel.store.getState().state;
         return {
           mode: state.mode,
-          activeSessionName: state.activeSessionName,
+          activeProjectName: state.activeProjectName,
+          activeSnapshotName: state.activeSnapshotName,
           dirty: state.dirty,
           actorCount: Object.keys(state.actors).length
         };
       },
       async new(name: string) {
         assertWritable(kernel);
-        await kernel.sessionService.createNewSession(name);
-        return { activeSessionName: kernel.store.getState().state.activeSessionName };
+        await kernel.projectService.createNewProject(name);
+        return {
+          activeProjectName: kernel.store.getState().state.activeProjectName,
+          activeSnapshotName: kernel.store.getState().state.activeSnapshotName
+        };
       },
-      async load(name: string) {
-        await kernel.sessionService.loadSession(name);
-        return { activeSessionName: kernel.store.getState().state.activeSessionName };
+      async load(name: string, snapshot = "main") {
+        await kernel.projectService.loadProject(name, snapshot);
+        return {
+          activeProjectName: kernel.store.getState().state.activeProjectName,
+          activeSnapshotName: kernel.store.getState().state.activeSnapshotName
+        };
       },
       async reload() {
-        await kernel.sessionService.loadSession(kernel.store.getState().state.activeSessionName);
-        return { activeSessionName: kernel.store.getState().state.activeSessionName };
+        const state = kernel.store.getState().state;
+        await kernel.projectService.loadProject(state.activeProjectName, state.activeSnapshotName);
+        return {
+          activeProjectName: kernel.store.getState().state.activeProjectName,
+          activeSnapshotName: kernel.store.getState().state.activeSnapshotName
+        };
       },
       async save() {
         assertWritable(kernel);
-        await kernel.sessionService.saveSession();
+        await kernel.projectService.saveProject();
         return { saved: true };
-      },
-      async saveAs(name: string) {
-        assertWritable(kernel);
-        await kernel.sessionService.saveAs(name);
-        return { activeSessionName: kernel.store.getState().state.activeSessionName };
       },
       async rename(nextName: string) {
         assertWritable(kernel);
-        const current = kernel.store.getState().state.activeSessionName;
-        await kernel.sessionService.renameSession(current, nextName);
-        return { activeSessionName: kernel.store.getState().state.activeSessionName };
+        const current = kernel.store.getState().state.activeProjectName;
+        await kernel.projectService.renameProject(current, nextName);
+        return {
+          activeProjectName: kernel.store.getState().state.activeProjectName,
+          activeSnapshotName: kernel.store.getState().state.activeSnapshotName
+        };
+      },
+      snapshots: {
+        list() {
+          return kernel.projectService.listSnapshots();
+        },
+        async saveAs(name: string) {
+          assertWritable(kernel);
+          await kernel.projectService.saveSnapshotAs(name);
+          return { activeSnapshotName: kernel.store.getState().state.activeSnapshotName };
+        },
+        async rename(nextName: string) {
+          assertWritable(kernel);
+          const current = kernel.store.getState().state.activeSnapshotName;
+          await kernel.projectService.renameSnapshot(current, nextName);
+          return { activeSnapshotName: kernel.store.getState().state.activeSnapshotName };
+        },
+        async duplicate(name: string) {
+          assertWritable(kernel);
+          const current = kernel.store.getState().state.activeSnapshotName;
+          await kernel.projectService.duplicateSnapshot(current, name);
+          return { duplicated: name };
+        },
+        async delete(name?: string) {
+          assertWritable(kernel);
+          await kernel.projectService.deleteSnapshot(name ?? kernel.store.getState().state.activeSnapshotName);
+          return { activeSnapshotName: kernel.store.getState().state.activeSnapshotName };
+        }
       }
     },
     time: {
@@ -831,7 +871,7 @@ export async function executeConsoleSource(kernel: AppKernel, source: string): P
     try {
       const expressionFn = new AsyncFunction(
         "api",
-        `'use strict'; const { help, scene, actor, component, session, camera, time, app, window, plugin } = api; return await (${source});`
+        `'use strict'; const { help, scene, actor, component, project, camera, time, app, window, plugin } = api; return await (${source});`
       );
       result = await expressionFn(api);
     } catch (error) {
@@ -841,7 +881,7 @@ export async function executeConsoleSource(kernel: AppKernel, source: string): P
       }
       const statementFn = new AsyncFunction(
         "api",
-        `'use strict'; const { help, scene, actor, component, session, camera, time, app, window, plugin } = api; return await (async () => {\n${source}\n})();`
+        `'use strict'; const { help, scene, actor, component, project, camera, time, app, window, plugin } = api; return await (async () => {\n${source}\n})();`
       );
       result = await statementFn(api);
     }

@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { WebGPURenderer } from "three/webgpu";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import type { AppKernel } from "@/app/kernel";
-import { estimateSessionPayloadBytes } from "@/core/session/sessionSize";
+import { estimateProjectPayloadBytes } from "@/core/project/projectSize";
 import { SceneController } from "./sceneController";
 import { incompatibilityReason } from "./engineCompatibility";
 import { clearSplatQueryProvider, registerSplatQueryProvider } from "./splatQueryRegistry";
@@ -391,9 +391,9 @@ export class WebGpuViewport {
         cameraDistance: this.activeCamera.position.distanceTo(this.controls.target),
         cameraControlsEnabled: Boolean((this.controls as any).enabled),
         cameraZoomEnabled: this.isWheelZoomEnabled(),
-        sessionFileBytes: currentStats.sessionFileBytesSaved > 0 && !this.kernel.store.getState().state.dirty
-          ? currentStats.sessionFileBytesSaved
-          : currentStats.sessionFileBytes
+        projectFileBytes: currentStats.projectFileBytesSaved > 0 && !this.kernel.store.getState().state.dirty
+          ? currentStats.projectFileBytesSaved
+          : currentStats.projectFileBytes
       });
     }
 
@@ -403,14 +403,14 @@ export class WebGpuViewport {
       const resourceBytes = this.estimateResourceBytes();
       const heapBytes = this.getHeapBytes();
       const memory = summarizeMemory(heapBytes, resourceBytes);
-      const estimatedSessionBytes = state.dirty
-        ? estimateSessionPayloadBytes(state, state.mode)
-        : state.stats.sessionFileBytesSaved;
+      const estimatedProjectBytes = state.dirty
+        ? estimateProjectPayloadBytes(state, state.mode)
+        : state.stats.projectFileBytesSaved;
       this.kernel.store.getState().actions.setStats({
         memoryMb: memory.memoryMb,
         heapMb: memory.heapMb,
         resourceMb: memory.resourceMb,
-        sessionFileBytes: estimatedSessionBytes
+        projectFileBytes: estimatedProjectBytes
       });
     }
   }
@@ -554,7 +554,7 @@ export class WebGpuViewport {
       return;
     }
 
-    // Camera navigation should mark the session as stale so Save captures the current viewpoint.
+    // Camera navigation should mark the project as stale so Save captures the current viewpoint.
     this.kernel.store.getState().actions.setCameraState(cameraUpdate, true);
     this.lastAppliedCameraSignature = JSON.stringify({
       ...currentCamera,

@@ -5,7 +5,14 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import type { DefaultSessionPointer, DaeImportResult, FileDialogFilter, HdriTranscodeOptions, SessionAssetRef } from "../src/types/ipc";
+import type {
+  DefaultProjectPointer,
+  DaeImportResult,
+  FileDialogFilter,
+  HdriTranscodeOptions,
+  ProjectAssetRef,
+  ProjectSnapshotListEntry
+} from "../src/types/ipc";
 import { createSplatBinaryV1 } from "./splatBinaryFormat.js";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".svg"]);
@@ -18,7 +25,8 @@ const FALLBACK_IMAGE_PNG = Buffer.from(
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const IS_DEV = Boolean(DEV_SERVER_URL);
 const DEFAULTS_FILE_NAME = "defaults.json";
-const SESSION_FILE_NAME = "session.json";
+const LEGACY_PROJECT_FILE_NAME = "session.json";
+const SNAPSHOT_DIRECTORY_NAME = "snapshots";
 const RUNTIME_LOG_FILE_NAME = "electron-runtime.log";
 const WINDOW_STATE_FILE_NAME = "window-state.json";
 const ASSET_PROTOCOL = "simularcaasset";
@@ -103,8 +111,8 @@ function getSaveDataRoot(): string {
   return path.join(getRepoRoot(), "savedata");
 }
 
-function getSessionDirectory(sessionName: string): string {
-  return path.join(getSaveDataRoot(), sessionName);
+function getProjectDirectory(projectName: string): string {
+  return path.join(getSaveDataRoot(), projectName);
 }
 
 interface PersistedWindowState {
@@ -186,12 +194,42 @@ function persistWindowState(state: PersistedWindowState): void {
   }
 }
 
-function getSessionFile(sessionName: string): string {
-  return path.join(getSessionDirectory(sessionName), SESSION_FILE_NAME);
+function getLegacyProjectFile(projectName: string): string {
+  return path.join(getProjectDirectory(projectName), LEGACY_PROJECT_FILE_NAME);
 }
 
-function getAssetDirectory(sessionName: string, kind: SessionAssetRef["kind"]): string {
-  return path.join(getSessionDirectory(sessionName), "assets", kind);
+function getSnapshotDirectory(projectName: string): string {
+  return path.join(getProjectDirectory(projectName), SNAPSHOT_DIRECTORY_NAME);
+}
+
+function getSnapshotFile(projectName: string, snapshotName: string): string {
+  return path.join(getSnapshotDirectory(projectName), `${snapshotName}.json`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+async function readSnapshotUpdatedAtIso(filePath: string): Promise<string | null> {
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (isRecord(parsed) && typeof parsed.updatedAtIso === "string" && parsed.updatedAtIso.trim().length > 0) {
+      return parsed.updatedAtIso;
+    }
+  } catch {
+    // Fall back to file metadata below.
+  }
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.mtime.toISOString();
+  } catch {
+    return null;
+  }
+}
+
+function getAssetDirectory(projectName: string, kind: ProjectAssetRef["kind"]): string {
+  return path.join(getProjectDirectory(projectName), "assets", kind);
 }
 
 async function discoverLocalPlugins(): Promise<Array<{ modulePath: string; sourceGroup: "plugins-local" | "plugins" }>> {
@@ -251,15 +289,15 @@ async function registerAssetProtocol(): Promise<void> {
   protocol.handle(ASSET_PROTOCOL, async (request) => {
     try {
       const parsed = new URL(request.url);
-      const sessionName = decodeURIComponent(parsed.hostname);
+      const projectName = decodeURIComponent(parsed.hostname);
       const relativeParts = parsed.pathname
         .split("/")
         .filter((part) => part.length > 0)
         .map((part) => decodeURIComponent(part));
       const relativePath = relativeParts.join("/");
-      const sessionRoot = path.resolve(getSessionDirectory(sessionName));
-      const targetPath = path.resolve(sessionRoot, relativePath);
-      if (!targetPath.startsWith(sessionRoot)) {
+      const projectRoot = path.resolve(getProjectDirectory(projectName));
+      const targetPath = path.resolve(projectRoot, relativePath);
+      if (!targetPath.startsWith(projectRoot)) {
         return new Response("Invalid asset path", { status: 400 });
       }
       // Stream the file directly using Chromium's native file loader —
@@ -305,17 +343,30 @@ async function registerAssetProtocol(): Promise<void> {
   });
 }
 
-async function ensureSessionDirectory(sessionName: string): Promise<void> {
-  await fs.mkdir(getSessionDirectory(sessionName), { recursive: true });
-  await fs.mkdir(path.join(getSessionDirectory(sessionName), "assets"), { recursive: true });
+async function ensureProjectDirectory(projectName: string): Promise<void> {
+  await fs.mkdir(getProjectDirectory(projectName), { recursive: true });
+  await fs.mkdir(path.join(getProjectDirectory(projectName), "assets"), { recursive: true });
+  await fs.mkdir(getSnapshotDirectory(projectName), { recursive: true });
 }
 
 async function ensureDefaultsFile(): Promise<void> {
   const defaultsPath = path.join(getSaveDataRoot(), DEFAULTS_FILE_NAME);
   try {
-    await fs.access(defaultsPath);
+    const raw = await fs.readFile(defaultsPath, "utf8");
+    const parsed = JSON.parse(raw) as Partial<DefaultProjectPointer> & { defaultSessionName?: string };
+    const next: DefaultProjectPointer = {
+      defaultProjectName: parsed.defaultProjectName ?? parsed.defaultSessionName ?? "demo",
+      defaultSnapshotName: parsed.defaultSnapshotName ?? "main"
+    };
+    if (
+      parsed.defaultProjectName !== next.defaultProjectName ||
+      parsed.defaultSnapshotName !== next.defaultSnapshotName ||
+      "defaultSessionName" in parsed
+    ) {
+      await fs.writeFile(defaultsPath, JSON.stringify(next, null, 2), "utf8");
+    }
   } catch {
-    const defaults: DefaultSessionPointer = { defaultSessionName: "demo" };
+    const defaults: DefaultProjectPointer = { defaultProjectName: "demo", defaultSnapshotName: "main" };
     await fs.mkdir(getSaveDataRoot(), { recursive: true });
     await fs.writeFile(defaultsPath, JSON.stringify(defaults, null, 2), "utf8");
   }
@@ -961,7 +1012,7 @@ function registerIpcHandlers(): void {
     }
   );
 
-  ipcMain.handle("sessions:list", async () => {
+  ipcMain.handle("projects:list", async () => {
     await fs.mkdir(getSaveDataRoot(), { recursive: true });
     const entries = await fs.readdir(getSaveDataRoot(), { withFileTypes: true });
     return entries
@@ -973,31 +1024,80 @@ function registerIpcHandlers(): void {
   ipcMain.handle("defaults:load", async () => {
     await ensureDefaultsFile();
     const raw = await fs.readFile(path.join(getSaveDataRoot(), DEFAULTS_FILE_NAME), "utf8");
-    return JSON.parse(raw) as DefaultSessionPointer;
+    return JSON.parse(raw) as DefaultProjectPointer;
   });
 
-  ipcMain.handle("defaults:save", async (_event, pointer: DefaultSessionPointer) => {
+  ipcMain.handle("defaults:save", async (_event, pointer: DefaultProjectPointer) => {
     await fs.mkdir(getSaveDataRoot(), { recursive: true });
     await fs.writeFile(path.join(getSaveDataRoot(), DEFAULTS_FILE_NAME), JSON.stringify(pointer, null, 2), "utf8");
   });
 
-  ipcMain.handle("session:load", async (_event, sessionName: string) => {
-    await ensureSessionDirectory(sessionName);
-    const sessionFile = getSessionFile(sessionName);
+  ipcMain.handle("snapshots:list", async (_event, projectName: string): Promise<ProjectSnapshotListEntry[]> => {
+    await ensureProjectDirectory(projectName);
+    const entries = await fs.readdir(getSnapshotDirectory(projectName), { withFileTypes: true }).catch(() => []);
+    const snapshotFiles = entries
+      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".json"))
+      .map((entry) => ({
+        name: entry.name.replace(/\.json$/i, ""),
+        filePath: path.join(getSnapshotDirectory(projectName), entry.name)
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const snapshots = await Promise.all(
+      snapshotFiles.map(async (entry) => ({
+        name: entry.name,
+        updatedAtIso: await readSnapshotUpdatedAtIso(entry.filePath)
+      }))
+    );
+    const legacyMainFile = getLegacyProjectFile(projectName);
     try {
-      await fs.access(sessionFile);
+      await fs.access(legacyMainFile);
+      if (!snapshots.some((entry) => entry.name === "main")) {
+        snapshots.unshift({
+          name: "main",
+          updatedAtIso: await readSnapshotUpdatedAtIso(legacyMainFile)
+        });
+      }
     } catch {
-      await fs.writeFile(sessionFile, "{}", "utf8");
+      // Ignore absent legacy main snapshot.
     }
-    return fs.readFile(sessionFile, "utf8");
+    if (snapshots.length === 0) {
+      return [{ name: "main", updatedAtIso: null }];
+    }
+    return snapshots.sort((a, b) => a.name.localeCompare(b.name));
   });
 
-  ipcMain.handle("session:save", async (_event, sessionName: string, payload: string) => {
-    await ensureSessionDirectory(sessionName);
-    await fs.writeFile(getSessionFile(sessionName), payload, "utf8");
+  ipcMain.handle("project:load-snapshot", async (_event, args: { projectName: string; snapshotName: string }) => {
+    await ensureProjectDirectory(args.projectName);
+    const snapshotFile = getSnapshotFile(args.projectName, args.snapshotName);
+    try {
+      await fs.access(snapshotFile);
+      return await fs.readFile(snapshotFile, "utf8");
+    } catch {
+      if (args.snapshotName === "main") {
+        const legacyFile = getLegacyProjectFile(args.projectName);
+        try {
+          await fs.access(legacyFile);
+          return await fs.readFile(legacyFile, "utf8");
+        } catch {
+          await fs.writeFile(snapshotFile, "{}", "utf8");
+          await fs.writeFile(legacyFile, "{}", "utf8");
+        }
+      } else {
+        await fs.writeFile(snapshotFile, "{}", "utf8");
+      }
+    }
+    return await fs.readFile(snapshotFile, "utf8");
+  });
+
+  ipcMain.handle("project:save-snapshot", async (_event, args: { projectName: string; snapshotName: string; payload: string }) => {
+    await ensureProjectDirectory(args.projectName);
+    await fs.writeFile(getSnapshotFile(args.projectName, args.snapshotName), args.payload, "utf8");
+    if (args.snapshotName === "main") {
+      await fs.writeFile(getLegacyProjectFile(args.projectName), args.payload, "utf8");
+    }
   });
   ipcMain.handle(
-    "session:clone",
+    "project:clone",
     async (
       _event,
       args: {
@@ -1008,12 +1108,12 @@ function registerIpcHandlers(): void {
       if (args.previousName === args.nextName) {
         return;
       }
-      const fromDir = getSessionDirectory(args.previousName);
-      const toDir = getSessionDirectory(args.nextName);
-      await ensureSessionDirectory(args.previousName);
+      const fromDir = getProjectDirectory(args.previousName);
+      const toDir = getProjectDirectory(args.nextName);
+      await ensureProjectDirectory(args.previousName);
       try {
         await fs.access(toDir);
-        throw new Error(`Session "${args.nextName}" already exists.`);
+        throw new Error(`Project "${args.nextName}" already exists.`);
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code && code !== "ENOENT") {
@@ -1028,7 +1128,7 @@ function registerIpcHandlers(): void {
     }
   );
   ipcMain.handle(
-    "session:rename",
+    "project:rename",
     async (
       _event,
       args: {
@@ -1036,14 +1136,14 @@ function registerIpcHandlers(): void {
         nextName: string;
       }
     ) => {
-      const fromDir = getSessionDirectory(args.previousName);
-      const toDir = getSessionDirectory(args.nextName);
+      const fromDir = getProjectDirectory(args.previousName);
+      const toDir = getProjectDirectory(args.nextName);
       if (args.previousName === args.nextName) {
         return;
       }
       try {
         await fs.access(toDir);
-        throw new Error(`Session "${args.nextName}" already exists.`);
+        throw new Error(`Project "${args.nextName}" already exists.`);
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code && code !== "ENOENT") {
@@ -1069,7 +1169,7 @@ function registerIpcHandlers(): void {
             force: true
           });
         } catch (cleanupError) {
-          void writeRuntimeLog("session:rename", "Unable to remove old session directory after fallback copy", {
+          void writeRuntimeLog("project:rename", "Unable to remove old project directory after fallback copy", {
             previousName: args.previousName,
             nextName: args.nextName,
             cleanupError
@@ -1079,11 +1179,11 @@ function registerIpcHandlers(): void {
       const defaultsPath = path.join(getSaveDataRoot(), DEFAULTS_FILE_NAME);
       try {
         const raw = await fs.readFile(defaultsPath, "utf8");
-        const current = JSON.parse(raw) as DefaultSessionPointer;
-        if (current.defaultSessionName === args.previousName) {
+        const current = JSON.parse(raw) as DefaultProjectPointer;
+        if (current.defaultProjectName === args.previousName) {
           await fs.writeFile(
             defaultsPath,
-            JSON.stringify({ defaultSessionName: args.nextName } satisfies DefaultSessionPointer, null, 2),
+            JSON.stringify({ ...current, defaultProjectName: args.nextName } satisfies DefaultProjectPointer, null, 2),
             "utf8"
           );
         }
@@ -1092,29 +1192,55 @@ function registerIpcHandlers(): void {
       }
     }
   );
+  ipcMain.handle("snapshot:duplicate", async (_event, args: { projectName: string; previousName: string; nextName: string }) => {
+    await ensureProjectDirectory(args.projectName);
+    const fromFile = getSnapshotFile(args.projectName, args.previousName);
+    const toFile = getSnapshotFile(args.projectName, args.nextName);
+    await fs.copyFile(fromFile, toFile);
+  });
+  ipcMain.handle("snapshot:rename", async (_event, args: { projectName: string; previousName: string; nextName: string }) => {
+    await ensureProjectDirectory(args.projectName);
+    const fromFile = getSnapshotFile(args.projectName, args.previousName);
+    const toFile = getSnapshotFile(args.projectName, args.nextName);
+    await fs.rename(fromFile, toFile);
+    if (args.previousName === "main") {
+      try {
+        await fs.rm(getLegacyProjectFile(args.projectName), { force: true });
+      } catch {
+        // Ignore missing legacy mirror.
+      }
+    }
+  });
+  ipcMain.handle("snapshot:delete", async (_event, args: { projectName: string; snapshotName: string }) => {
+    await ensureProjectDirectory(args.projectName);
+    await fs.rm(getSnapshotFile(args.projectName, args.snapshotName), { force: true });
+    if (args.snapshotName === "main") {
+      await fs.rm(getLegacyProjectFile(args.projectName), { force: true });
+    }
+  });
 
   ipcMain.handle(
     "asset:import",
     async (
       _event,
       args: {
-        sessionName: string;
+        projectName: string;
         sourcePath: string;
-        kind: SessionAssetRef["kind"];
+        kind: ProjectAssetRef["kind"];
       }
     ) => {
-      await ensureSessionDirectory(args.sessionName);
+      await ensureProjectDirectory(args.projectName);
       const sourceFileName = path.basename(args.sourcePath);
       const extension = path.extname(sourceFileName);
       const targetName = `${Date.now()}-${randomUUID()}${extension}`;
-      const assetDirectory = getAssetDirectory(args.sessionName, args.kind);
+      const assetDirectory = getAssetDirectory(args.projectName, args.kind);
       await fs.mkdir(assetDirectory, { recursive: true });
       const targetPath = path.join(assetDirectory, targetName);
       await fs.copyFile(args.sourcePath, targetPath);
       const stat = await fs.stat(targetPath);
-      const relativePath = path.relative(getSessionDirectory(args.sessionName), targetPath).replaceAll("\\", "/");
+      const relativePath = path.relative(getProjectDirectory(args.projectName), targetPath).replaceAll("\\", "/");
 
-      const assetRef: SessionAssetRef = {
+      const assetRef: ProjectAssetRef = {
         id: randomUUID(),
         kind: args.kind,
         encoding: "raw",
@@ -1131,33 +1257,33 @@ function registerIpcHandlers(): void {
     async (
       _event,
       args: {
-        sessionName: string;
+        projectName: string;
         sourcePath: string;
       }
     ): Promise<DaeImportResult> => {
-      await ensureSessionDirectory(args.sessionName);
+      await ensureProjectDirectory(args.projectName);
 
       // 1. Read the .dae source (needed for both XML patching and image extraction)
       const sourceFileName = path.basename(args.sourcePath);
       const extension = path.extname(sourceFileName);
       const daeTargetName = `${Date.now()}-${randomUUID()}${extension}`;
-      const genericDir = getAssetDirectory(args.sessionName, "generic");
+      const genericDir = getAssetDirectory(args.projectName, "generic");
       await fs.mkdir(genericDir, { recursive: true });
       const daeTargetPath = path.join(genericDir, daeTargetName);
       // Read source text first; we will patch and write it rather than copying
       const daeSourceText = await fs.readFile(args.sourcePath, "utf8");
-      const daeRelPath = path.relative(getSessionDirectory(args.sessionName), daeTargetPath).replaceAll("\\", "/");
+      const daeRelPath = path.relative(getProjectDirectory(args.projectName), daeTargetPath).replaceAll("\\", "/");
       // daeAsset is built after patching and writing so byteSize reflects the written file
 
       // 2. Parse DAE XML for texture references and material definitions
       const daeText = daeSourceText;
       const sourceDir = path.dirname(args.sourcePath);
-      const imageDir = getAssetDirectory(args.sessionName, "image");
+      const imageDir = getAssetDirectory(args.projectName, "image");
       await fs.mkdir(imageDir, { recursive: true });
 
       // Extract image paths from <init_from> elements
       const initFromMatches = [...daeText.matchAll(/<init_from>\s*([^<]+?)\s*<\/init_from>/g)];
-      const imageAssets: SessionAssetRef[] = [];
+      const imageAssets: ProjectAssetRef[] = [];
       const imageIdBySourceName = new Map<string, string>(); // source filename -> asset id
       const imgTargetNameBySourceName = new Map<string, string>(); // source filename -> target filename (for path rewriting)
 
@@ -1174,8 +1300,8 @@ function registerIpcHandlers(): void {
           const imgTargetPath = path.join(imageDir, imgTargetName);
           await fs.copyFile(imgPath, imgTargetPath);
           const imgStat = await fs.stat(imgTargetPath);
-          const imgRelPath = path.relative(getSessionDirectory(args.sessionName), imgTargetPath).replaceAll("\\", "/");
-          const imgAsset: SessionAssetRef = {
+          const imgRelPath = path.relative(getProjectDirectory(args.projectName), imgTargetPath).replaceAll("\\", "/");
+          const imgAsset: ProjectAssetRef = {
             id: randomUUID(),
             kind: "image",
             encoding: "raw",
@@ -1207,7 +1333,7 @@ function registerIpcHandlers(): void {
       }
       await fs.writeFile(daeTargetPath, patchedDaeText, "utf8");
       const daeStat = await fs.stat(daeTargetPath);
-      const daeAsset: SessionAssetRef = {
+      const daeAsset: ProjectAssetRef = {
         id: randomUUID(),
         kind: "generic",
         encoding: "raw",
@@ -1334,22 +1460,22 @@ function registerIpcHandlers(): void {
     async (
       _event,
       args: {
-        sessionName: string;
+        projectName: string;
         sourcePath: string;
       }
     ) => {
-      await ensureSessionDirectory(args.sessionName);
+      await ensureProjectDirectory(args.projectName);
       const sourceFileName = path.basename(args.sourcePath);
       const payload = Uint8Array.from(await fs.readFile(args.sourcePath));
       const binary = createSplatBinaryV1(payload, "ply");
       const targetName = `${Date.now()}-${randomUUID()}.splatbin`;
-      const assetDirectory = getAssetDirectory(args.sessionName, "gaussian-splat");
+      const assetDirectory = getAssetDirectory(args.projectName, "gaussian-splat");
       await fs.mkdir(assetDirectory, { recursive: true });
       const targetPath = path.join(assetDirectory, targetName);
       await fs.writeFile(targetPath, binary);
       const stat = await fs.stat(targetPath);
-      const relativePath = path.relative(getSessionDirectory(args.sessionName), targetPath).replaceAll("\\", "/");
-      const assetRef: SessionAssetRef = {
+      const relativePath = path.relative(getProjectDirectory(args.projectName), targetPath).replaceAll("\\", "/");
+      const assetRef: ProjectAssetRef = {
         id: randomUUID(),
         kind: "gaussian-splat",
         encoding: "splatbin-v1",
@@ -1366,27 +1492,27 @@ function registerIpcHandlers(): void {
     async (
       _event,
       args: {
-        sessionName: string;
+        projectName: string;
         assetId: string;
         relativePath: string;
         sourceFileName: string;
       }
     ) => {
-      await ensureSessionDirectory(args.sessionName);
-      const sessionRoot = path.resolve(getSessionDirectory(args.sessionName));
-      const sourcePath = path.resolve(sessionRoot, args.relativePath);
-      if (!sourcePath.startsWith(sessionRoot)) {
+      await ensureProjectDirectory(args.projectName);
+      const projectRoot = path.resolve(getProjectDirectory(args.projectName));
+      const sourcePath = path.resolve(projectRoot, args.relativePath);
+      if (!sourcePath.startsWith(projectRoot)) {
         throw new Error("Invalid asset path");
       }
       const payload = Uint8Array.from(await fs.readFile(sourcePath));
       const binary = createSplatBinaryV1(payload, "ply");
       const targetName = `${Date.now()}-${randomUUID()}.splatbin`;
-      const assetDirectory = getAssetDirectory(args.sessionName, "gaussian-splat");
+      const assetDirectory = getAssetDirectory(args.projectName, "gaussian-splat");
       await fs.mkdir(assetDirectory, { recursive: true });
       const targetPath = path.join(assetDirectory, targetName);
       await fs.writeFile(targetPath, binary);
       const stat = await fs.stat(targetPath);
-      const relativePath = path.relative(getSessionDirectory(args.sessionName), targetPath).replaceAll("\\", "/");
+      const relativePath = path.relative(getProjectDirectory(args.projectName), targetPath).replaceAll("\\", "/");
       return {
         id: args.assetId,
         kind: "gaussian-splat",
@@ -1394,7 +1520,7 @@ function registerIpcHandlers(): void {
         relativePath,
         sourceFileName: args.sourceFileName,
         byteSize: stat.size
-      } satisfies SessionAssetRef;
+      } satisfies ProjectAssetRef;
     }
   );
 
@@ -1403,13 +1529,13 @@ function registerIpcHandlers(): void {
     async (
       _event,
       args: {
-        sessionName: string;
+        projectName: string;
         sourcePath: string;
         options?: HdriTranscodeOptions;
       }
     ) => {
-      await ensureSessionDirectory(args.sessionName);
-      const assetDirectory = getAssetDirectory(args.sessionName, "hdri");
+      await ensureProjectDirectory(args.projectName);
+      const assetDirectory = getAssetDirectory(args.projectName, "hdri");
       await fs.mkdir(assetDirectory, { recursive: true });
       const targetName = `${Date.now()}-${randomUUID()}.ktx2`;
       const targetPath = path.join(assetDirectory, targetName);
@@ -1419,9 +1545,9 @@ function registerIpcHandlers(): void {
         options: args.options
       });
       const stat = await fs.stat(targetPath);
-      const relativePath = path.relative(getSessionDirectory(args.sessionName), targetPath).replaceAll("\\", "/");
+      const relativePath = path.relative(getProjectDirectory(args.projectName), targetPath).replaceAll("\\", "/");
       const sourceFileName = path.basename(args.sourcePath);
-      const assetRef: SessionAssetRef = {
+      const assetRef: ProjectAssetRef = {
         id: randomUUID(),
         kind: "hdri",
         encoding: "ktx2",
@@ -1438,11 +1564,11 @@ function registerIpcHandlers(): void {
     async (
       _event,
       args: {
-        sessionName: string;
+        projectName: string;
         relativePath: string;
       }
     ) => {
-      const absolute = path.resolve(getSessionDirectory(args.sessionName), args.relativePath);
+      const absolute = path.resolve(getProjectDirectory(args.projectName), args.relativePath);
       await fs.rm(absolute, { force: true });
     }
   );
@@ -1452,11 +1578,11 @@ function registerIpcHandlers(): void {
     async (
       _event,
       args: {
-        sessionName: string;
+        projectName: string;
         relativePath: string;
       }
     ) => {
-      const encodedSession = encodeURIComponent(args.sessionName);
+      const encodedSession = encodeURIComponent(args.projectName);
       const encodedPath = args.relativePath
         .split("/")
         .filter((part) => part.length > 0)
@@ -1471,13 +1597,13 @@ function registerIpcHandlers(): void {
     async (
       _event,
       args: {
-        sessionName: string;
+        projectName: string;
         relativePath: string;
       }
     ) => {
-      const sessionRoot = path.resolve(getSessionDirectory(args.sessionName));
-      const absolutePath = path.resolve(sessionRoot, args.relativePath);
-      if (!absolutePath.startsWith(sessionRoot)) {
+      const projectRoot = path.resolve(getProjectDirectory(args.projectName));
+      const absolutePath = path.resolve(projectRoot, args.relativePath);
+      if (!absolutePath.startsWith(projectRoot)) {
         throw new Error("Invalid asset path");
       }
       const bytes = await fs.readFile(absolutePath);

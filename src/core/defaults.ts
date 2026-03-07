@@ -178,11 +178,12 @@ export function createDefaultScene(): {
   };
 }
 
-export function createInitialState(mode: AppState["mode"], sessionName = "demo"): AppState {
+export function createInitialState(mode: AppState["mode"], projectName = "demo", snapshotName = "main"): AppState {
   const defaults = createDefaultScene();
   return {
     mode,
-    activeSessionName: sessionName,
+    activeProjectName: projectName,
+    activeSnapshotName: snapshotName,
     scene: defaults.scene,
     actors: defaults.actors,
     components: {},
@@ -205,8 +206,8 @@ export function createInitialState(mode: AppState["mode"], sessionName = "demo")
       resourceMb: 0,
       actorCount: 0,
       actorCountEnabled: 0,
-      sessionFileBytes: 0,
-      sessionFileBytesSaved: 0,
+      projectFileBytes: 0,
+      projectFileBytesSaved: 0,
       cameraDistance: 0,
       cameraControlsEnabled: true,
       cameraZoomEnabled: true

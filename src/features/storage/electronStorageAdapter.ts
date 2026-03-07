@@ -8,13 +8,20 @@ export function createElectronStorageAdapter(): StorageAdapter {
   return {
     mode: "electron-rw",
     isReadOnly: false,
-    listSessions: () => window.electronAPI!.listSessions(),
+    listProjects: () => window.electronAPI!.listProjects(),
+    listSnapshots: (projectName) => window.electronAPI!.listSnapshots(projectName),
     loadDefaults: () => window.electronAPI!.loadDefaults(),
     saveDefaults: (pointer) => window.electronAPI!.saveDefaults(pointer),
-    loadSession: (sessionName) => window.electronAPI!.loadSession(sessionName),
-    saveSession: (sessionName, payload) => window.electronAPI!.saveSession(sessionName, payload),
-    cloneSession: (previousName, nextName) => window.electronAPI!.cloneSession({ previousName, nextName }),
-    renameSession: (previousName, nextName) => window.electronAPI!.renameSession({ previousName, nextName }),
+    loadProjectSnapshot: (projectName, snapshotName) => window.electronAPI!.loadProjectSnapshot({ projectName, snapshotName }),
+    saveProjectSnapshot: (projectName, snapshotName, payload) =>
+      window.electronAPI!.saveProjectSnapshot({ projectName, snapshotName, payload }),
+    cloneProject: (previousName, nextName) => window.electronAPI!.cloneProject({ previousName, nextName }),
+    renameProject: (previousName, nextName) => window.electronAPI!.renameProject({ previousName, nextName }),
+    duplicateSnapshot: (projectName, previousName, nextName) =>
+      window.electronAPI!.duplicateSnapshot({ projectName, previousName, nextName }),
+    renameSnapshot: (projectName, previousName, nextName) =>
+      window.electronAPI!.renameSnapshot({ projectName, previousName, nextName }),
+    deleteSnapshot: (projectName, snapshotName) => window.electronAPI!.deleteSnapshot({ projectName, snapshotName }),
     importAsset: (args) => window.electronAPI!.importAsset(args),
     importDae: (args) => window.electronAPI!.importDae(args),
     importGaussianSplat: (args) => window.electronAPI!.importGaussianSplat(args),
@@ -25,4 +32,3 @@ export function createElectronStorageAdapter(): StorageAdapter {
     readAssetBytes: (args) => window.electronAPI!.readAssetBytes(args)
   };
 }
-

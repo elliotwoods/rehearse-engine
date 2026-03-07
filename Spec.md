@@ -5,8 +5,8 @@ Build a pre-visualization simulation environment for kinetic artworks with a lar
 
 ## 2. Runtime and Deployment
 - Runtime: `Electron + Vite + React + TypeScript`.
-- Local desktop mode: read/write session filesystem.
-- Web deploy mode (future Vercel): read-only, fixed bundled session.
+- Local desktop mode: read/write project filesystem.
+- Web deploy mode (future Vercel): read-only, fixed bundled project.
 - No Next.js required.
 
 ## 3. Core Tech Stack
@@ -36,7 +36,7 @@ Build a pre-visualization simulation environment for kinetic artworks with a lar
 ### 6.2 Transform Model
 - Actors use TRS (`position`, `rotation`, `scale`) with parent-child hierarchy.
 
-### 6.3 Session Manifest
+### 6.3 Project Snapshot Manifest
 - JSON primary format with `schemaVersion`.
 - Includes:
   - scene graph (actors/components/params)
@@ -44,15 +44,16 @@ Build a pre-visualization simulation environment for kinetic artworks with a lar
   - simulation time state
   - asset references
 
-### 6.4 Session Filesystem
+### 6.4 Project Filesystem
 - Default pointer: `savedata/defaults.json`.
-- Session data: `savedata/<sessionName>/session.json`.
-- Session assets: `savedata/<sessionName>/assets/...`.
-- Paths in session data are relative to session directory for portability.
+- Snapshot data: `savedata/<projectName>/snapshots/<snapshotName>.json`.
+- Project assets: `savedata/<projectName>/assets/...`.
+- Paths in snapshot data are relative to project directory for portability.
+- Legacy compatibility: `savedata/<projectName>/session.json` is treated as snapshot `main`.
 
 ## 7. UI Layout
 - Top panel:
-  - session management (load/save/save as)
+  - project and snapshot management (load/save/save snapshot as/set default)
   - camera controls (preset views + bookmarks)
   - simulation time controls (play/pause/step/speed presets)
   - edit controls (undo/redo)
@@ -86,7 +87,7 @@ Build a pre-visualization simulation environment for kinetic artworks with a lar
 
 ## 10. Camera
 - Presets: perspective, isometric (interactive orthographic), top, left, front, back.
-- Default pose and named bookmarks stored per session.
+- Default pose and named bookmarks stored per project snapshot.
 
 ## 11. Actor Types (Phase 1)
 - `Empty` actor (grouping/transform parent).
@@ -96,17 +97,17 @@ Build a pre-visualization simulation environment for kinetic artworks with a lar
 - `Gaussian Splat` actor:
   - `.ply` import
   - import-time conversion to native `splatbin-v1` asset format
-  - copy into session assets
+  - copy into project assets
   - in-scene native renderer path with scene depth integration
 - `Mesh` actor:
   - local import (`.glb`, `.gltf`, `.fbx`, `.dae`, `.obj`)
-  - copy into session assets
+  - copy into project assets
   - runtime loading via format-specific Three.js loaders
 - `Plugin` actor:
   - formal API registration with stub runtime in phase 1.
 
 ## 12. Asset Pipelines
-- Imported files are copied into managed session asset folders.
+- Imported files are copied into managed project asset folders.
 - Deleting actors/assets removes managed references/files.
 - Environment import:
   - popup/options
@@ -124,7 +125,7 @@ Build a pre-visualization simulation environment for kinetic artworks with a lar
   - inspector schema/UI
   - major renderer-side systems
 - Preserve on hot update:
-  - current scene/session state
+  - current scene/project snapshot state
   - camera
   - selection
   - undo/redo history
@@ -147,8 +148,8 @@ Build a pre-visualization simulation environment for kinetic artworks with a lar
 ## 14. Keyboard Shortcuts
 - `Space`: play/pause
 - `Delete`: delete selection
-- `Ctrl/Cmd + S`: save
-- `Ctrl/Cmd + Shift + S`: save as
+- `Ctrl/Cmd + S`: save project
+- `Ctrl/Cmd + Shift + S`: save snapshot as
 - `Ctrl/Cmd + Z`: undo
 - `Ctrl/Cmd + Shift + Z`: redo
 - `?`: toggle keyboard map popup

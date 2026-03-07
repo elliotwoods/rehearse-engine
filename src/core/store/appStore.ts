@@ -19,7 +19,7 @@ import type {
   SelectionEntry,
   TimeSpeedPreset
 } from "@/core/types";
-import type { AppMode, SessionAssetRef } from "@/types/ipc";
+import type { AppMode, ProjectAssetRef } from "@/types/ipc";
 
 export interface HistoryEntry {
   label: string;
@@ -38,7 +38,8 @@ export interface AppActions {
   pushHistory(label: string): void;
   undo(): void;
   redo(): void;
-  setSessionName(name: string): void;
+  setProjectName(name: string): void;
+  setSnapshotName(name: string): void;
   setSceneBackgroundColor(color: string): void;
   setSceneRenderSettings(
     settings: Partial<{
@@ -85,7 +86,7 @@ export interface AppActions {
   setActorStatus(actorId: string, status: AppState["actorStatusByActorId"][string] | null): void;
   createMaterial(input?: Partial<Material>): string;
   createMaterialFromDef(def: Omit<Material, "id">): string;
-  addAssets(assets: SessionAssetRef[]): void;
+  addAssets(assets: ProjectAssetRef[]): void;
   updateMaterial(materialId: string, partial: Partial<Omit<Material, "id">>): void;
   deleteMaterial(materialId: string): void;
 }
@@ -345,10 +346,18 @@ export function createAppStore(mode: AppMode): AppStoreApi {
           state: cloneState(next.snapshot)
         });
       },
-      setSessionName(name) {
+      setProjectName(name) {
         set({
           state: produce(get().state, (draft) => {
-            draft.activeSessionName = name;
+            draft.activeProjectName = name;
+            draft.dirty = true;
+          })
+        });
+      },
+      setSnapshotName(name) {
+        set({
+          state: produce(get().state, (draft) => {
+            draft.activeSnapshotName = name;
             draft.dirty = true;
           })
         });

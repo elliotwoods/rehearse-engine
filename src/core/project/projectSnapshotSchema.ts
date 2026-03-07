@@ -1,6 +1,6 @@
 import { z } from "zod";
-import { SESSION_SCHEMA_VERSION } from "@/core/types";
-import type { SessionManifest } from "@/core/types";
+import { PROJECT_SCHEMA_VERSION } from "@/core/types";
+import type { ProjectSnapshotManifest } from "@/core/types";
 
 const vector3Schema = z.tuple([z.number(), z.number(), z.number()]);
 const parameterValueSchema: z.ZodTypeAny = z.lazy(() =>
@@ -74,10 +74,12 @@ const materialSchema = z.object({
   wireframe: z.boolean()
 });
 
-const sessionSchema = z.object({
+const projectSnapshotSchema = z.object({
   schemaVersion: z.number(),
   appMode: z.enum(["electron-rw", "web-ro"]),
-  sessionName: z.string(),
+  projectName: z.string().optional(),
+  sessionName: z.string().optional(),
+  snapshotName: z.string().default("main"),
   createdAtIso: z.string(),
   updatedAtIso: z.string(),
   scene: z.object({
@@ -138,21 +140,25 @@ const sessionSchema = z.object({
   )
 });
 
-export function parseSession(payload: string): SessionManifest {
+export function parseProjectSnapshot(payload: string): ProjectSnapshotManifest {
   const input = JSON.parse(payload) as unknown;
-  const parsed = sessionSchema.safeParse(input);
+  const parsed = projectSnapshotSchema.safeParse(input);
   if (!parsed.success) {
-    throw new Error(`Session parse failed: ${parsed.error.message}`);
+    throw new Error(`Project snapshot parse failed: ${parsed.error.message}`);
   }
-  if (parsed.data.schemaVersion > SESSION_SCHEMA_VERSION) {
+  if (parsed.data.schemaVersion > PROJECT_SCHEMA_VERSION) {
     throw new Error(
-      `Session schema version ${parsed.data.schemaVersion} is newer than supported version ${SESSION_SCHEMA_VERSION}.`
+      `Project schema version ${parsed.data.schemaVersion} is newer than supported version ${PROJECT_SCHEMA_VERSION}.`
     );
   }
-  return parsed.data;
+  return {
+    ...parsed.data,
+    projectName: parsed.data.projectName ?? parsed.data.sessionName ?? "demo",
+    snapshotName: parsed.data.snapshotName ?? "main"
+  };
 }
 
-export function serializeSession(session: SessionManifest): string {
-  return JSON.stringify(session, null, 2);
+export function serializeProjectSnapshot(project: ProjectSnapshotManifest): string {
+  return JSON.stringify(project, null, 2);
 }
 

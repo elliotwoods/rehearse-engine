@@ -1,9 +1,9 @@
 import type { AppKernel } from "@/app/kernel";
 import type { FileParameterDefinition, Material } from "@/core/types";
 import { importHdriToKtx2 } from "@/features/imports/hdriImport";
-import type { SessionAssetRef } from "@/types/ipc";
+import type { ProjectAssetRef } from "@/types/ipc";
 
-function appendAsset(kernel: AppKernel, asset: SessionAssetRef): void {
+function appendAsset(kernel: AppKernel, asset: ProjectAssetRef): void {
   kernel.store.setState((store) => ({
     ...store,
     state: {
@@ -15,21 +15,21 @@ function appendAsset(kernel: AppKernel, asset: SessionAssetRef): void {
 }
 
 export interface FileImportResult {
-  asset: SessionAssetRef;
+  asset: ProjectAssetRef;
   extraParams?: Record<string, unknown>;
 }
 
 export async function importFileForActorParam(
   kernel: AppKernel,
   args: {
-    sessionName: string;
+    projectName: string;
     sourcePath: string;
     definition: FileParameterDefinition;
   }
 ): Promise<FileImportResult> {
   if (args.definition.import.mode === "transcode-hdri") {
     const asset = await importHdriToKtx2(kernel, {
-      sessionName: args.sessionName,
+      projectName: args.projectName,
       sourcePath: args.sourcePath,
       options: args.definition.import.options
     });
@@ -39,11 +39,11 @@ export async function importFileForActorParam(
   // DAE import: capture textures and create materials
   if (args.definition.import.mode === "import-asset" && args.sourcePath.toLowerCase().endsWith(".dae")) {
     const result = await kernel.storage.importDae({
-      sessionName: args.sessionName,
+      projectName: args.projectName,
       sourcePath: args.sourcePath
     });
 
-    // Add image assets to session state
+    // Add image assets to project state
     if (result.imageAssets.length > 0) {
       kernel.store.getState().actions.addAssets(result.imageAssets);
     }
@@ -71,22 +71,22 @@ export async function importFileForActorParam(
     }
 
     appendAsset(kernel, result.asset);
-    kernel.sessionService.queueAutosave();
+    kernel.projectService.queueAutosave();
     return { asset: result.asset, extraParams: { materialSlots, localMaterials } };
   }
 
   const asset =
     args.definition.import.kind === "gaussian-splat"
       ? await kernel.storage.importGaussianSplat({
-          sessionName: args.sessionName,
+          projectName: args.projectName,
           sourcePath: args.sourcePath
         })
       : await kernel.storage.importAsset({
-          sessionName: args.sessionName,
+          projectName: args.projectName,
           sourcePath: args.sourcePath,
           kind: args.definition.import.kind
         });
   appendAsset(kernel, asset);
-  kernel.sessionService.queueAutosave();
+  kernel.projectService.queueAutosave();
   return { asset };
 }

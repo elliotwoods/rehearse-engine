@@ -87,7 +87,7 @@ export class SparkSplatController {
       return;
     }
 
-    const activeSessionName = this.kernel.store.getState().state.activeSessionName;
+    const activeProjectName = this.kernel.store.getState().state.activeProjectName;
     const asset = this.kernel.store.getState().state.assets.find((entry) => entry.id === assetId);
     if (!asset) {
       this.kernel.store.getState().actions.setActorStatus(actor.id, {
@@ -95,7 +95,7 @@ export class SparkSplatController {
           backend: "spark-webgl",
           loadState: "failed"
         },
-        error: "Asset reference not found in session state.",
+        error: "Asset reference not found in project state.",
         updatedAtIso: new Date().toISOString()
       });
       return;
@@ -121,7 +121,7 @@ export class SparkSplatController {
 
     try {
       const bytes = await this.kernel.storage.readAssetBytes({
-        sessionName: activeSessionName,
+        projectName: activeProjectName,
         relativePath: asset.relativePath
       });
       if (this.loadingTokenByActorId.get(actor.id) !== loadToken) {

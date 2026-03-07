@@ -1,4 +1,4 @@
-import type { SessionAssetRef } from "@/types/ipc";
+import type { ProjectAssetRef, ProjectSnapshotListEntry } from "@/types/ipc";
 import type { StorageAdapter } from "./storageAdapter";
 
 const DEFAULTS_PATH = "/sessions/defaults.json";
@@ -15,31 +15,57 @@ export function createWebStorageAdapter(): StorageAdapter {
   return {
     mode: "web-ro",
     isReadOnly: true,
-    async listSessions() {
+    async listProjects() {
       const defaults = await this.loadDefaults();
-      return [defaults.defaultSessionName];
+      return [defaults.defaultProjectName];
+    },
+    async listSnapshots(_projectName) {
+      const defaults = await this.loadDefaults();
+      return [{ name: defaults.defaultSnapshotName, updatedAtIso: null }] satisfies ProjectSnapshotListEntry[];
     },
     async loadDefaults() {
       const raw = await fetchText(DEFAULTS_PATH);
-      return JSON.parse(raw) as { defaultSessionName: string };
+      const parsed = JSON.parse(raw) as { defaultProjectName?: string; defaultSnapshotName?: string; defaultSessionName?: string };
+      return {
+        defaultProjectName: parsed.defaultProjectName ?? parsed.defaultSessionName ?? "demo",
+        defaultSnapshotName: parsed.defaultSnapshotName ?? "main"
+      };
     },
     async saveDefaults() {
       throw new Error("Read-only mode: defaults cannot be saved.");
     },
-    loadSession: async (sessionName) => fetchText(`/sessions/${sessionName}/session.json`),
-    async saveSession() {
-      throw new Error("Read-only mode: session cannot be saved.");
+    async loadProjectSnapshot(projectName, snapshotName) {
+      if (snapshotName !== "main") {
+        try {
+          return await fetchText(`/sessions/${projectName}/snapshots/${snapshotName}.json`);
+        } catch {
+          // Fall back to legacy single-snapshot layout.
+        }
+      }
+      return await fetchText(`/sessions/${projectName}/session.json`);
     },
-    async cloneSession() {
-      throw new Error("Read-only mode: sessions cannot be cloned.");
+    async saveProjectSnapshot() {
+      throw new Error("Read-only mode: project cannot be saved.");
     },
-    async renameSession() {
-      throw new Error("Read-only mode: sessions cannot be renamed.");
+    async cloneProject() {
+      throw new Error("Read-only mode: projects cannot be cloned.");
+    },
+    async renameProject() {
+      throw new Error("Read-only mode: projects cannot be renamed.");
+    },
+    async duplicateSnapshot() {
+      throw new Error("Read-only mode: snapshots cannot be duplicated.");
+    },
+    async renameSnapshot() {
+      throw new Error("Read-only mode: snapshots cannot be renamed.");
+    },
+    async deleteSnapshot() {
+      throw new Error("Read-only mode: snapshots cannot be deleted.");
     },
     async importAsset(_args: {
-      sessionName: string;
+      projectName: string;
       sourcePath: string;
-      kind: SessionAssetRef["kind"];
+      kind: ProjectAssetRef["kind"];
     }) {
       throw new Error("Read-only mode: assets cannot be imported.");
     },
@@ -58,9 +84,9 @@ export function createWebStorageAdapter(): StorageAdapter {
     async deleteAsset() {
       throw new Error("Read-only mode: assets cannot be deleted.");
     },
-    resolveAssetPath: async ({ sessionName, relativePath }) => `/sessions/${sessionName}/${relativePath}`,
-    async readAssetBytes({ sessionName, relativePath }) {
-      const response = await fetch(`/sessions/${sessionName}/${relativePath}`);
+    resolveAssetPath: async ({ projectName, relativePath }) => `/sessions/${projectName}/${relativePath}`,
+    async readAssetBytes({ projectName, relativePath }) {
+      const response = await fetch(`/sessions/${projectName}/${relativePath}`);
       if (!response.ok) {
         throw new Error(`Unable to fetch asset bytes: ${relativePath}`);
       }
@@ -68,4 +94,3 @@ export function createWebStorageAdapter(): StorageAdapter {
     }
   };
 }
-

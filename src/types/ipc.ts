@@ -1,10 +1,16 @@
 export type AppMode = "electron-rw" | "web-ro";
 
-export interface DefaultSessionPointer {
-  defaultSessionName: string;
+export interface DefaultProjectPointer {
+  defaultProjectName: string;
+  defaultSnapshotName: string;
 }
 
-export interface SessionAssetRef {
+export interface ProjectSnapshotListEntry {
+  name: string;
+  updatedAtIso: string | null;
+}
+
+export interface ProjectAssetRef {
   id: string;
   kind: "hdri" | "gaussian-splat" | "generic" | "image";
   encoding?: "raw" | "ktx2" | "splatbin-v1";
@@ -14,8 +20,8 @@ export interface SessionAssetRef {
 }
 
 export interface DaeImportResult {
-  asset: SessionAssetRef;
-  imageAssets: SessionAssetRef[];
+  asset: ProjectAssetRef;
+  imageAssets: ProjectAssetRef[];
   materialDefs: Array<{
     id: string;
     name: string;
@@ -56,37 +62,41 @@ export interface LocalPluginCandidate {
 
 export interface ElectronApi {
   mode: AppMode;
-  listSessions(): Promise<string[]>;
-  loadDefaults(): Promise<DefaultSessionPointer>;
-  saveDefaults(pointer: DefaultSessionPointer): Promise<void>;
-  loadSession(sessionName: string): Promise<string>;
-  saveSession(sessionName: string, payload: string): Promise<void>;
-  cloneSession(args: { previousName: string; nextName: string }): Promise<void>;
-  renameSession(args: { previousName: string; nextName: string }): Promise<void>;
+  listProjects(): Promise<string[]>;
+  listSnapshots(projectName: string): Promise<ProjectSnapshotListEntry[]>;
+  loadDefaults(): Promise<DefaultProjectPointer>;
+  saveDefaults(pointer: DefaultProjectPointer): Promise<void>;
+  loadProjectSnapshot(args: { projectName: string; snapshotName: string }): Promise<string>;
+  saveProjectSnapshot(args: { projectName: string; snapshotName: string; payload: string }): Promise<void>;
+  cloneProject(args: { previousName: string; nextName: string }): Promise<void>;
+  renameProject(args: { previousName: string; nextName: string }): Promise<void>;
+  duplicateSnapshot(args: { projectName: string; previousName: string; nextName: string }): Promise<void>;
+  renameSnapshot(args: { projectName: string; previousName: string; nextName: string }): Promise<void>;
+  deleteSnapshot(args: { projectName: string; snapshotName: string }): Promise<void>;
   importAsset(args: {
-    sessionName: string;
+    projectName: string;
     sourcePath: string;
-    kind: SessionAssetRef["kind"];
-  }): Promise<SessionAssetRef>;
-  importDae(args: { sessionName: string; sourcePath: string }): Promise<DaeImportResult>;
+    kind: ProjectAssetRef["kind"];
+  }): Promise<ProjectAssetRef>;
+  importDae(args: { projectName: string; sourcePath: string }): Promise<DaeImportResult>;
   importGaussianSplat(args: {
-    sessionName: string;
+    projectName: string;
     sourcePath: string;
-  }): Promise<SessionAssetRef>;
+  }): Promise<ProjectAssetRef>;
   convertGaussianAsset(args: {
-    sessionName: string;
+    projectName: string;
     assetId: string;
     relativePath: string;
     sourceFileName: string;
-  }): Promise<SessionAssetRef>;
+  }): Promise<ProjectAssetRef>;
   transcodeHdriToKtx2(args: {
-    sessionName: string;
+    projectName: string;
     sourcePath: string;
     options?: HdriTranscodeOptions;
-  }): Promise<SessionAssetRef>;
-  deleteAsset(args: { sessionName: string; relativePath: string }): Promise<void>;
-  resolveAssetPath(args: { sessionName: string; relativePath: string }): Promise<string>;
-  readAssetBytes(args: { sessionName: string; relativePath: string }): Promise<Uint8Array>;
+  }): Promise<ProjectAssetRef>;
+  deleteAsset(args: { projectName: string; relativePath: string }): Promise<void>;
+  resolveAssetPath(args: { projectName: string; relativePath: string }): Promise<string>;
+  readAssetBytes(args: { projectName: string; relativePath: string }): Promise<Uint8Array>;
   openFileDialog(args: { title?: string; filters?: FileDialogFilter[] }): Promise<string | null>;
   openSaveDialog(args: SaveDialogArgs): Promise<string | null>;
   openDirectoryDialog(args: DirectoryDialogArgs): Promise<string | null>;
@@ -113,4 +123,3 @@ export interface ElectronApi {
   showAppMenu(args: { x: number; y: number }): Promise<void>;
   onWindowStateChange(listener: (state: { isMaximized: boolean }) => void): () => void;
 }
-

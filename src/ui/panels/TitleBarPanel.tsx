@@ -1,11 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
-import { faBookmark, faCircleInfo, faFloppyDisk, faPenToSquare, faPlus, faRotateRight } from "@fortawesome/free-solid-svg-icons";
+import {
+  faBookmark,
+  faCircleInfo,
+  faFloppyDisk,
+  faPenToSquare,
+  faPlus,
+  faRotateRight,
+  faStar,
+  faTrash
+} from "@fortawesome/free-solid-svg-icons";
 import { BUILD_INFO, formatBuildTimestamp } from "@/app/buildInfo";
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import { AboutModal } from "@/ui/components/AboutModal";
 import { WindowControls } from "@/ui/components/WindowControls";
+import type { ProjectSnapshotListEntry } from "@/types/ipc";
 import appIconUrl from "../../../icon.png";
 
 const APP_NAME = "Simularca";
@@ -20,110 +30,89 @@ interface TitleBarPanelProps {
   }): Promise<string | null>;
 }
 
-function nextSessionName(existingNames: string[]): string {
-  const set = new Set(existingNames);
-  if (!set.has("untitled")) {
-    return "untitled";
+function nextUntitledName(existingNames: string[], baseName: string): string {
+  const used = new Set(existingNames);
+  if (!used.has(baseName)) {
+    return baseName;
   }
   let index = 2;
-  while (set.has(`untitled-${String(index)}`)) {
+  while (used.has(`${baseName}-${String(index)}`)) {
     index += 1;
   }
-  return `untitled-${String(index)}`;
+  return `${baseName}-${String(index)}`;
 }
 
 export function TitleBarPanel(props: TitleBarPanelProps) {
   const kernel = useKernel();
   const state = useAppStore((store) => store.state);
-  const [availableSessions, setAvailableSessions] = useState<string[]>([]);
-  const [isSessionMenuOpen, setSessionMenuOpen] = useState(false);
-  const [isRenamingSession, setRenamingSession] = useState(false);
+  const [availableProjects, setAvailableProjects] = useState<string[]>([]);
+  const [availableSnapshots, setAvailableSnapshots] = useState<ProjectSnapshotListEntry[]>([]);
+  const [isMenuOpen, setMenuOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
-  const [sessionNameDraft, setSessionNameDraft] = useState("");
   const menuRef = useRef<HTMLDivElement | null>(null);
-  const sessionRenameInputRef = useRef<HTMLInputElement | null>(null);
   const isReadOnly = state.mode === "web-ro";
   const buildMeta = `${BUILD_INFO.commitShortSha || "unknown"} | ${formatBuildTimestamp(BUILD_INFO.buildTimestampIso)}`;
 
-  const sessionOptions = useMemo(() => {
-    if (availableSessions.includes(state.activeSessionName)) {
-      return availableSessions;
+  const projectOptions = useMemo(() => {
+    if (availableProjects.includes(state.activeProjectName)) {
+      return availableProjects;
     }
-    return [state.activeSessionName, ...availableSessions];
-  }, [availableSessions, state.activeSessionName]);
+    return [state.activeProjectName, ...availableProjects];
+  }, [availableProjects, state.activeProjectName]);
+
+  const snapshotOptions = useMemo(() => {
+    if (availableSnapshots.some((entry) => entry.name === state.activeSnapshotName)) {
+      return availableSnapshots;
+    }
+    return [{ name: state.activeSnapshotName, updatedAtIso: null }, ...availableSnapshots];
+  }, [availableSnapshots, state.activeSnapshotName]);
+
+  const formatSnapshotDate = (updatedAtIso: string | null): string => {
+    if (!updatedAtIso) {
+      return "No saved date";
+    }
+    const date = new Date(updatedAtIso);
+    if (Number.isNaN(date.getTime())) {
+      return "Unknown date";
+    }
+    return new Intl.DateTimeFormat(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit"
+    }).format(date);
+  };
 
   useEffect(() => {
-    void kernel.sessionService.listSessions().then((sessions) => {
-      setAvailableSessions(sessions);
-    });
-  }, [kernel, state.activeSessionName]);
+    void kernel.projectService.listProjects().then(setAvailableProjects);
+  }, [kernel, state.activeProjectName]);
 
   useEffect(() => {
-    if (!isSessionMenuOpen) {
+    void kernel.projectService.listSnapshots(state.activeProjectName).then(setAvailableSnapshots);
+  }, [kernel, state.activeProjectName, state.activeSnapshotName]);
+
+  useEffect(() => {
+    if (!isMenuOpen) {
       return;
     }
-
     const onPointerDown = (event: PointerEvent) => {
       if (!menuRef.current?.contains(event.target as Node)) {
-        setSessionMenuOpen(false);
+        setMenuOpen(false);
       }
     };
-
     window.addEventListener("pointerdown", onPointerDown);
     return () => {
       window.removeEventListener("pointerdown", onPointerDown);
     };
-  }, [isSessionMenuOpen]);
+  }, [isMenuOpen]);
 
-  useEffect(() => {
-    if (isRenamingSession) {
-      return;
-    }
-    setSessionNameDraft(state.activeSessionName);
-  }, [isRenamingSession, state.activeSessionName]);
-
-  useEffect(() => {
-    if (!isRenamingSession) {
-      return;
-    }
-    const input = sessionRenameInputRef.current;
-    if (!input) {
-      return;
-    }
-    input.focus();
-    input.setSelectionRange(0, input.value.length);
-  }, [isRenamingSession]);
-
-  const startInlineRename = (): void => {
-    if (isReadOnly) {
-      return;
-    }
-    setSessionMenuOpen(false);
-    setSessionNameDraft(state.activeSessionName);
-    setRenamingSession(true);
+  const refreshProjects = (): void => {
+    void kernel.projectService.listProjects().then(setAvailableProjects);
   };
 
-  const cancelInlineRename = (): void => {
-    setSessionNameDraft(state.activeSessionName);
-    setRenamingSession(false);
-  };
-
-  const commitInlineRename = (): void => {
-    const nextName = sessionNameDraft.trim();
-    const previousName = state.activeSessionName;
-    if (!nextName || nextName === previousName) {
-      cancelInlineRename();
-      return;
-    }
-    setRenamingSession(false);
-    void kernel.sessionService.renameSession(previousName, nextName).then(() => {
-      setAvailableSessions((prev) =>
-        prev
-          .filter((entry) => entry !== previousName)
-          .concat(nextName)
-          .sort((a, b) => a.localeCompare(b))
-      );
-    });
+  const refreshSnapshots = (): void => {
+    void kernel.projectService.listSnapshots(state.activeProjectName).then(setAvailableSnapshots);
   };
 
   return (
@@ -150,92 +139,160 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
       </div>
 
       <div className="titlebar-center titlebar-interactive">
-        <div className="titlebar-session" ref={menuRef}>
-          <div className="titlebar-session-row">
-            {isRenamingSession ? (
-              <div className="titlebar-session-inline-rename">
-                <span>Session:</span>
-                <input
-                  ref={sessionRenameInputRef}
-                  className="titlebar-session-inline-input"
-                  value={sessionNameDraft}
-                  onChange={(event) => {
-                    setSessionNameDraft(event.target.value);
-                  }}
-                  onBlur={() => {
-                    commitInlineRename();
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      event.preventDefault();
-                      commitInlineRename();
-                    } else if (event.key === "Escape") {
-                      event.preventDefault();
-                      cancelInlineRename();
-                    }
-                  }}
-                />
-                {state.dirty ? <em>*</em> : null}
-              </div>
-            ) : (
-              <button
-                type="button"
-                className="titlebar-session-trigger"
-                title="Switch session"
-                onClick={() => setSessionMenuOpen((value) => !value)}
-                onDoubleClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  startInlineRename();
-                }}
-              >
-                Session: <strong>{state.activeSessionName}</strong>
-                {state.dirty ? <em>*</em> : null}
-              </button>
-            )}
+        <div className="titlebar-project" ref={menuRef}>
+          <div className="titlebar-project-row">
+            <button
+              type="button"
+              className="titlebar-project-trigger"
+              title="Switch project or snapshot"
+              onClick={() => setMenuOpen((value) => !value)}
+            >
+              Project: <strong>{state.activeProjectName}</strong> / Snapshot: <strong>{state.activeSnapshotName}</strong>
+              {state.dirty ? <em>*</em> : null}
+            </button>
             {state.dirty ? (
               <button
                 type="button"
-                className="titlebar-session-save-stale"
+                className="titlebar-project-save-stale"
                 disabled={isReadOnly}
-                title="Save session"
+                title="Save project"
                 onClick={() => {
-                  void kernel.sessionService.saveSession();
+                  void kernel.projectService.saveProject();
                 }}
               >
                 <FontAwesomeIcon icon={faFloppyDisk} />
               </button>
             ) : null}
           </div>
-          {isSessionMenuOpen ? (
-            <div className="titlebar-session-popover">
-              <label>Active Session</label>
-              <select
-                value={state.activeSessionName}
-                onChange={(event) => {
-                  setSessionMenuOpen(false);
-                  void kernel.sessionService.loadSession(event.target.value);
-                }}
-              >
-                {sessionOptions.map((sessionName) => (
-                  <option key={sessionName} value={sessionName}>
-                    {sessionName}
-                  </option>
-                ))}
-              </select>
-              <div className="titlebar-session-actions">
+          {isMenuOpen ? (
+            <div className="titlebar-project-popover">
+              <div className="titlebar-project-section">
+                <label>Active Project</label>
+                <select
+                  value={state.activeProjectName}
+                  onChange={(event) => {
+                    setMenuOpen(false);
+                    void kernel.projectService.loadProject(event.target.value, "main");
+                  }}
+                >
+                  {projectOptions.map((projectName) => (
+                    <option key={projectName} value={projectName}>
+                      {projectName}
+                    </option>
+                  ))}
+                </select>
+
+                <div className="titlebar-project-actions">
+                  <button
+                    type="button"
+                    disabled={isReadOnly}
+                    title="New project"
+                    onClick={() => {
+                      void props
+                        .requestTextInput({
+                          title: "Create New Project",
+                          label: "Project name",
+                          initialValue: nextUntitledName(projectOptions, "untitled"),
+                          confirmLabel: "Create"
+                        })
+                        .then((nextName) => {
+                          if (!nextName) {
+                            return;
+                          }
+                          setMenuOpen(false);
+                          void kernel.projectService.createNewProject(nextName).then(refreshProjects);
+                        });
+                    }}
+                  >
+                    <FontAwesomeIcon icon={faPlus} />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isReadOnly}
+                    title="Rename project"
+                    onClick={() => {
+                      void props
+                        .requestTextInput({
+                          title: "Rename Project",
+                          label: "Project name",
+                          initialValue: state.activeProjectName,
+                          confirmLabel: "Rename"
+                        })
+                        .then((nextName) => {
+                          if (!nextName) {
+                            return;
+                          }
+                          setMenuOpen(false);
+                          void kernel.projectService.renameProject(state.activeProjectName, nextName).then(refreshProjects);
+                        });
+                    }}
+                  >
+                    <FontAwesomeIcon icon={faPenToSquare} />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isReadOnly}
+                    title="Save project"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      void kernel.projectService.saveProject();
+                    }}
+                  >
+                    <FontAwesomeIcon icon={faFloppyDisk} />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isReadOnly}
+                    title="Set as default project"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      void kernel.projectService.setDefaultProject();
+                    }}
+                  >
+                    <FontAwesomeIcon icon={faStar} />
+                  </button>
+                </div>
+              </div>
+
+              <div className="titlebar-project-divider" />
+
+              <div className="titlebar-project-section">
+                <label>Active Snapshot</label>
+                <div className="titlebar-project-snapshot-list" role="listbox" aria-label="Project snapshots">
+                  {snapshotOptions.map((snapshot) => {
+                    const isActive = snapshot.name === state.activeSnapshotName;
+                    return (
+                      <button
+                        key={snapshot.name}
+                        type="button"
+                        className={`titlebar-project-snapshot-item${isActive ? " is-active" : ""}`}
+                        aria-selected={isActive}
+                        onClick={() => {
+                          setMenuOpen(false);
+                          void kernel.projectService.loadProject(state.activeProjectName, snapshot.name);
+                        }}
+                      >
+                        <span className="titlebar-project-snapshot-name">{snapshot.name}</span>
+                        <span className="titlebar-project-snapshot-date">{formatSnapshotDate(snapshot.updatedAtIso)}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="titlebar-project-actions">
                 <button
                   type="button"
-                  title="Reload from last save"
+                  title="Reload current snapshot"
                   onClick={() => {
                     if (state.dirty) {
-                      const confirmed = window.confirm("Discard unsaved changes and reload this session from disk?");
+                      const confirmed = window.confirm("Discard unsaved changes and reload this snapshot from disk?");
                       if (!confirmed) {
                         return;
                       }
                     }
-                    setSessionMenuOpen(false);
-                    void kernel.sessionService.loadSession(state.activeSessionName);
+                    setMenuOpen(false);
+                    void kernel.projectService.loadProject(state.activeProjectName, state.activeSnapshotName);
                   }}
                 >
                   <FontAwesomeIcon icon={faRotateRight} />
@@ -243,9 +300,45 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
                 <button
                   type="button"
                   disabled={isReadOnly}
-                  title="Rename session"
+                  title="Save snapshot as"
                   onClick={() => {
-                    startInlineRename();
+                    void props
+                      .requestTextInput({
+                        title: "Save Snapshot As",
+                        label: "Snapshot name",
+                        initialValue: state.activeSnapshotName,
+                        confirmLabel: "Save"
+                      })
+                      .then((nextName) => {
+                        if (!nextName) {
+                          return;
+                        }
+                        setMenuOpen(false);
+                        void kernel.projectService.saveSnapshotAs(nextName).then(refreshSnapshots);
+                      });
+                  }}
+                >
+                  <FontAwesomeIcon icon={faBookmark} />
+                </button>
+                <button
+                  type="button"
+                  disabled={isReadOnly}
+                  title="Rename snapshot"
+                  onClick={() => {
+                    void props
+                      .requestTextInput({
+                        title: "Rename Snapshot",
+                        label: "Snapshot name",
+                        initialValue: state.activeSnapshotName,
+                        confirmLabel: "Rename"
+                      })
+                      .then((nextName) => {
+                        if (!nextName) {
+                          return;
+                        }
+                        setMenuOpen(false);
+                        void kernel.projectService.renameSnapshot(state.activeSnapshotName, nextName).then(refreshSnapshots);
+                      });
                   }}
                 >
                   <FontAwesomeIcon icon={faPenToSquare} />
@@ -253,62 +346,28 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
                 <button
                   type="button"
                   disabled={isReadOnly}
-                  title="New session"
+                  title="Set as default snapshot"
                   onClick={() => {
-                    void props
-                      .requestTextInput({
-                        title: "Create New Session",
-                        label: "Session name",
-                        initialValue: nextSessionName(sessionOptions),
-                        confirmLabel: "Create"
-                      })
-                      .then((nextName) => {
-                        if (!nextName) {
-                          return;
-                        }
-                        setSessionMenuOpen(false);
-                        void kernel.sessionService.createNewSession(nextName).then(() => {
-                          setAvailableSessions((prev) => (prev.includes(nextName) ? prev : [...prev, nextName]));
-                        });
-                      });
+                    setMenuOpen(false);
+                    void kernel.projectService.setDefaultSnapshot();
                   }}
                 >
-                  <FontAwesomeIcon icon={faPlus} />
+                  <FontAwesomeIcon icon={faStar} />
                 </button>
                 <button
                   type="button"
                   disabled={isReadOnly}
-                  title="Save"
+                  title="Delete snapshot"
                   onClick={() => {
-                    void kernel.sessionService.saveSession();
+                    const confirmed = window.confirm(`Delete snapshot "${state.activeSnapshotName}"?`);
+                    if (!confirmed) {
+                      return;
+                    }
+                    setMenuOpen(false);
+                    void kernel.projectService.deleteSnapshot(state.activeSnapshotName).then(refreshSnapshots);
                   }}
                 >
-                  <FontAwesomeIcon icon={faFloppyDisk} />
-                </button>
-                <button
-                  type="button"
-                  disabled={isReadOnly}
-                  title="Save as..."
-                  onClick={() => {
-                    void props
-                      .requestTextInput({
-                        title: "Save Session As",
-                        label: "Session name",
-                        initialValue: state.activeSessionName,
-                        confirmLabel: "Save"
-                      })
-                      .then((nextName) => {
-                        if (!nextName) {
-                          return;
-                        }
-                        setSessionMenuOpen(false);
-                        void kernel.sessionService.saveAs(nextName).then(() => {
-                          setAvailableSessions((prev) => (prev.includes(nextName) ? prev : [...prev, nextName]));
-                        });
-                      });
-                  }}
-                >
-                  <FontAwesomeIcon icon={faBookmark} />
+                  <FontAwesomeIcon icon={faTrash} />
                 </button>
               </div>
             </div>

@@ -58,4 +58,10 @@ Options of different interactive cameras:
 * Current orbit camera style
 * Unreal first person style
 
-# 
+# Refactor splats
+
+* Remove the WebGPU implementation completely (we will start from scratch if we try this again in future)
+* Make the existing splat implementation into a 'core plugin'
+* Remove any core functionality that is splat specific
+* Implement a general 'render draw order priority' for actor draw objects (e.g. some have alpha and need to be drawn late)
+(This is risky and needs testing)

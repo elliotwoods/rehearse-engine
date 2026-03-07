@@ -1,11 +1,15 @@
-import { SESSION_SCHEMA_VERSION, type AppState, type SessionManifest } from "@/core/types";
+import { PROJECT_SCHEMA_VERSION, type AppState, type ProjectSnapshotManifest } from "@/core/types";
 
-export function buildSessionManifest(state: AppState, mode: SessionManifest["appMode"]): SessionManifest {
+export function buildProjectSnapshotManifest(
+  state: AppState,
+  mode: ProjectSnapshotManifest["appMode"]
+): ProjectSnapshotManifest {
   const nowIso = new Date().toISOString();
   return {
-    schemaVersion: SESSION_SCHEMA_VERSION,
+    schemaVersion: PROJECT_SCHEMA_VERSION,
     appMode: mode,
-    sessionName: state.activeSessionName,
+    projectName: state.activeProjectName,
+    snapshotName: state.activeSnapshotName,
     createdAtIso: nowIso,
     updatedAtIso: nowIso,
     scene: structuredClone(state.scene),

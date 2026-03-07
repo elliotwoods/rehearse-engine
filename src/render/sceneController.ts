@@ -891,8 +891,8 @@ export class SceneController {
     return { texture: this.scene.environment, name: closestEnv?.name ?? "Default" };
   }
 
-  private buildAssetUrl(sessionName: string, relativePath: string): string {
-    return `simularcaasset://${encodeURIComponent(sessionName)}/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
+  private buildAssetUrl(projectName: string, relativePath: string): string {
+    return `simularcaasset://${encodeURIComponent(projectName)}/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
   }
 
   private loadCachedTexture(url: string, colorSpace: THREE.ColorSpace = THREE.LinearSRGBColorSpace): THREE.Texture {
@@ -929,7 +929,7 @@ export class SceneController {
     } else if (mat.albedo.mode === "image") {
       const asset = state.assets.find((a) => a.id === (mat.albedo as any).assetId && a.kind === "image");
       if (asset) {
-        material.map = this.loadCachedTexture(this.buildAssetUrl(state.activeSessionName, asset.relativePath), THREE.SRGBColorSpace);
+        material.map = this.loadCachedTexture(this.buildAssetUrl(state.activeProjectName, asset.relativePath), THREE.SRGBColorSpace);
         material.color.set(0xffffff);
       }
     }
@@ -941,7 +941,7 @@ export class SceneController {
     } else if (mat.roughness.mode === "image") {
       const asset = state.assets.find((a) => a.id === (mat.roughness as any).assetId && a.kind === "image");
       if (asset) {
-        material.roughnessMap = this.loadCachedTexture(this.buildAssetUrl(state.activeSessionName, asset.relativePath));
+        material.roughnessMap = this.loadCachedTexture(this.buildAssetUrl(state.activeProjectName, asset.relativePath));
         material.roughness = 1;
       }
     }
@@ -953,7 +953,7 @@ export class SceneController {
     } else if (mat.metalness.mode === "image") {
       const asset = state.assets.find((a) => a.id === (mat.metalness as any).assetId && a.kind === "image");       
       if (asset) {
-        material.metalnessMap = this.loadCachedTexture(this.buildAssetUrl(state.activeSessionName, asset.relativePath));
+        material.metalnessMap = this.loadCachedTexture(this.buildAssetUrl(state.activeProjectName, asset.relativePath));
         material.metalness = 1;
       }
     }
@@ -962,7 +962,7 @@ export class SceneController {
     if (mat.normalMap) {
       const asset = state.assets.find((a) => a.id === (mat.normalMap as any).assetId && a.kind === "image");      
       if (asset) {
-        material.normalMap = this.loadCachedTexture(this.buildAssetUrl(state.activeSessionName, asset.relativePath));
+        material.normalMap = this.loadCachedTexture(this.buildAssetUrl(state.activeProjectName, asset.relativePath));
         material.normalMapType = THREE.TangentSpaceNormalMap;
       }
     } else {
@@ -976,7 +976,7 @@ export class SceneController {
     } else if (mat.emissive.mode === "image") {
       const asset = state.assets.find((a) => a.id === (mat.emissive as any).assetId && a.kind === "image");        
       if (asset) {
-        material.emissiveMap = this.loadCachedTexture(this.buildAssetUrl(state.activeSessionName, asset.relativePath), THREE.SRGBColorSpace);
+        material.emissiveMap = this.loadCachedTexture(this.buildAssetUrl(state.activeProjectName, asset.relativePath), THREE.SRGBColorSpace);
       }
     }
     material.emissiveIntensity = mat.emissiveIntensity;
@@ -1331,7 +1331,7 @@ export class SceneController {
           loader: "splatbin-v1",
           loaderVersion: THREE.REVISION
         },
-        error: "Asset reference not found in session state.",
+        error: "Asset reference not found in project state.",
         updatedAtIso: new Date().toISOString()
       });
       return;
@@ -1349,7 +1349,7 @@ export class SceneController {
     });
     try {
       const rawBytes = await this.kernel.storage.readAssetBytes({
-        sessionName: state.activeSessionName,
+        projectName: state.activeProjectName,
         relativePath: asset.relativePath
       });
       const parsed = tryParseSplatBinary(rawBytes);
@@ -1538,10 +1538,10 @@ export class SceneController {
     const state = this.kernel.store.getState().state;
     const asset = state.assets.find((entry) => entry.id === assetId);
     if (!asset) {
-      this.kernel.store.getState().actions.setStatus("Mesh asset reference not found in session state.");
+      this.kernel.store.getState().actions.setStatus("Mesh asset reference not found in project state.");
       this.kernel.store.getState().actions.setActorStatus(actor.id, {
         values: {},
-        error: "Asset reference not found in session state.",
+        error: "Asset reference not found in project state.",
         updatedAtIso: new Date().toISOString()
       });
       return;
@@ -1549,13 +1549,13 @@ export class SceneController {
 
     const extension = asset.relativePath.split(".").pop()?.toLowerCase() ?? "";
     // Build the asset URL locally — no IPC round-trip needed.
-    const encodedSession = encodeURIComponent(state.activeSessionName);
+    const encodedProject = encodeURIComponent(state.activeProjectName);
     const encodedPath = asset.relativePath
       .split("/")
       .filter((part) => part.length > 0)
       .map((part) => encodeURIComponent(part))
       .join("/");
-    const url = `simularcaasset://${encodedSession}/${encodedPath}`;
+    const url = `simularcaasset://${encodedProject}/${encodedPath}`;
     // Defer "loading" status to a macrotask so the React re-render (useSyncExternalStore) does
     // not queue a microtask that runs before syncFromState's continuation microtask.
     const actorIdForLoading = actor.id;
@@ -2395,13 +2395,13 @@ export class SceneController {
     if (!asset) {
       this.kernel.store.getState().actions.setActorStatus(environmentActor.id, {
         values: {},
-        error: "Asset reference not found in session state.",
+        error: "Asset reference not found in project state.",
         updatedAtIso: new Date().toISOString()
       });
       return;
     }
     const url = await this.kernel.storage.resolveAssetPath({
-      sessionName: state.activeSessionName,
+      projectName: state.activeProjectName,
       relativePath: asset.relativePath
     });
 

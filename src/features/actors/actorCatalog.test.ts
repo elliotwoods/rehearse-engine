@@ -10,7 +10,7 @@ function createKernelStub(): AppKernel {
   return {
     store,
     storage: {} as AppKernel["storage"],
-    sessionService: {} as AppKernel["sessionService"],
+    projectService: {} as AppKernel["projectService"],
     hotReloadManager: {} as AppKernel["hotReloadManager"],
     pluginApi: {
       listPlugins: () => []

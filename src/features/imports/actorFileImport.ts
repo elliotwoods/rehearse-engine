@@ -87,7 +87,7 @@ export async function importFileAsActor(
     descriptorId: string;
     sourcePath: string;
     fileName: string;
-    sessionName: string;
+    projectName: string;
   }
 ): Promise<string> {
   const option = optionFromDescriptor(kernel, args.descriptorId);
@@ -101,7 +101,7 @@ export async function importFileAsActor(
   }
 
   const importedAsset = await importFileForActorParam(kernel, {
-    sessionName: args.sessionName,
+    projectName: args.projectName,
     sourcePath: args.sourcePath,
     definition: option.fileDefinition
   });
@@ -112,6 +112,6 @@ export async function importFileAsActor(
   kernel.store.getState().actions.setStatus(
     `${option.label} imported ${args.fileName} (${option.fileExtensions.join(", ")})`
   );
-  kernel.sessionService.queueAutosave();
+  kernel.projectService.queueAutosave();
   return actorId;
 }
