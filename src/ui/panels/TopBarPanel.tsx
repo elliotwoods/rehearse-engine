@@ -278,7 +278,7 @@ export function TopBarPanel(props: TopBarPanelProps) {
       </div>
 
       <div className="toolbar-group">
-        <label title="Add actor">Add</label>
+        <label title="Create Actor Browser">Create</label>
         <AddActorMenu disabled={isReadOnly} />
       </div>
 
