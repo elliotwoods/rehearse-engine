@@ -28,6 +28,7 @@ import type {
   FileParameterDefinition,
   Material,
   ParameterDefinition,
+  Vector3ParameterDefinition,
   ParameterValue,
   ParameterValues,
   RenderEngine,
@@ -149,6 +150,9 @@ function resolveActorDescriptor(
 }
 
 function inferParamType(value: BindingValue): "number" | "boolean" | "string" {
+  if (Array.isArray(value) && value.length === 3 && value.every((entry) => typeof entry === "number" && Number.isFinite(entry))) {
+    return "string";
+  }
   if (typeof value === "number") {
     return "number";
   }
@@ -219,8 +223,13 @@ function formatStatusValue(value: ActorStatusEntry["value"]): string {
     if (value.length > 0 && typeof value[0] === "string") {
       return (value as string[]).join(", ");
     }
-    const nums = value as [number, number, number];
-    return `${nums[0].toFixed(3)}, ${nums[1].toFixed(3)}, ${nums[2].toFixed(3)}`;
+    const numericValues = value.filter((entry): entry is number => typeof entry === "number" && Number.isFinite(entry));
+    if (numericValues.length === value.length) {
+      return numericValues
+        .map((entry) => (Number.isInteger(entry) ? entry.toLocaleString() : entry.toFixed(3).replace(/\.?0+$/, "")))
+        .join(", ");
+    }
+    return value.map((entry) => String(entry)).join(", ");
   }
   if (typeof value === "number") {
     return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(3).replace(/\.?0+$/, "");
@@ -302,6 +311,9 @@ function buildStatusGroups(rows: StatsRow[]): StatsGroup[] {
 function defaultValueForDefinition(definition: ParameterDefinition): BindingValue {
   if (definition.defaultValue !== undefined) {
     return definition.defaultValue;
+  }
+  if (definition.type === "vector3") {
+    return [0, 0, 0];
   }
   if (definition.type === "number") {
     return 0;
@@ -451,6 +463,84 @@ function coerceFiniteNumber(value: BindingValue, fallback = 0): number {
     }
   }
   return fallback;
+}
+
+function isVector3Value(value: BindingValue): value is [number, number, number] {
+  return Array.isArray(value) && value.length === 3 && value.every((entry) => typeof entry === "number" && Number.isFinite(entry));
+}
+
+function getVector3Value(value: BindingValue, fallback: [number, number, number]): [number, number, number] {
+  if (isVector3Value(value)) {
+    return value;
+  }
+  return fallback;
+}
+
+interface Vector3FieldProps {
+  label: string;
+  description?: string;
+  definition: Vector3ParameterDefinition;
+  value: BindingValue;
+  values: BindingValue[];
+  mixed: boolean;
+  disabled: boolean;
+  showReset: boolean;
+  defaultValue: BindingValue;
+  onReset(): void;
+  onChange(next: [number, number, number]): void;
+}
+
+function Vector3Field(props: Vector3FieldProps) {
+  const fallback = getVector3Value(props.defaultValue, [0, 0, 0]);
+  const current = getVector3Value(props.value, fallback);
+  const valuesByAxis = ([0, 1, 2] as const).map((axisIndex) =>
+    props.values.map((value) => getVector3Value(value, fallback)[axisIndex] ?? fallback[axisIndex])
+  ) as [number[], number[], number[]];
+
+  return (
+    <div className="widget-row">
+      <label className="widget-label" title={props.description}>
+        {props.label}
+      </label>
+      <div className="widget-value with-reset">
+        <div className="inspector-vector-inputs">
+          {([0, 1, 2] as const).map((axisIndex) => (
+            <div key={`${props.definition.key}-${axisIndex}`} className="inspector-vector-cell">
+              <span className="inspector-axis-label">{axisIndex === 0 ? "X" : axisIndex === 1 ? "Y" : "Z"}</span>
+              <DigitScrubInput
+                value={current[axisIndex] ?? fallback[axisIndex]}
+                mixed={isMixedNumber(valuesByAxis[axisIndex])}
+                precision={props.definition.precision}
+                disabled={props.disabled}
+                onChange={(next) => {
+                  const updated: [number, number, number] = [...current] as [number, number, number];
+                  let value = next;
+                  if (props.definition.min !== undefined) {
+                    value = Math.max(props.definition.min, value);
+                  }
+                  if (props.definition.max !== undefined) {
+                    value = Math.min(props.definition.max, value);
+                  }
+                  updated[axisIndex] = value;
+                  props.onChange(updated);
+                }}
+              />
+            </div>
+          ))}
+        </div>
+        <button
+          type="button"
+          className={`widget-reset-button${props.showReset ? "" : " is-hidden"}`}
+          title={`Reset ${props.label}`}
+          disabled={props.disabled || !props.showReset}
+          onClick={props.onReset}
+        >
+          <FontAwesomeIcon icon={faRotateLeft} />
+        </button>
+      </div>
+      {props.description ? <div className="widget-description">{props.description}</div> : null}
+    </div>
+  );
 }
 
 function allActorsMatch(actorSelection: ActorNode[], predicate: (actor: ActorNode) => boolean): boolean {
@@ -1679,6 +1769,29 @@ function ComponentSelectionInspectorView(props: ComponentSelectionInspectorViewP
               showReset={canReset}
               onReset={() => {
                 props.updateSelectedComponentParams(definition.key, String(defaultValue));
+              }}
+              onChange={(next) => {
+                props.updateSelectedComponentParams(definition.key, next);
+              }}
+            />
+          );
+        }
+
+        if (definition.type === "vector3") {
+          return (
+            <Vector3Field
+              key={definition.key}
+              label={definition.label}
+              description={definition.description}
+              definition={definition}
+              value={current}
+              values={values}
+              mixed={mixed}
+              disabled={props.readOnly}
+              showReset={canReset}
+              defaultValue={defaultValue}
+              onReset={() => {
+                props.updateSelectedComponentParams(definition.key, getVector3Value(defaultValue, [0, 0, 0]));
               }}
               onChange={(next) => {
                 props.updateSelectedComponentParams(definition.key, next);
@@ -3330,6 +3443,29 @@ export function InspectorPane() {
               showReset={canReset}
               onReset={() => {
                 updateSelectedActorParams(definition.key, String(defaultValue));
+              }}
+              onChange={(next) => {
+                updateSelectedActorParams(definition.key, next);
+              }}
+            />
+          );
+        }
+
+        if (definition.type === "vector3") {
+          return (
+            <Vector3Field
+              key={definition.key}
+              label={definition.label}
+              description={definition.description}
+              definition={definition}
+              value={current}
+              values={values}
+              mixed={mixed}
+              disabled={readOnly}
+              showReset={canReset}
+              defaultValue={defaultValue}
+              onReset={() => {
+                updateSelectedActorParams(definition.key, getVector3Value(defaultValue, [0, 0, 0]));
               }}
               onChange={(next) => {
                 updateSelectedActorParams(definition.key, next);

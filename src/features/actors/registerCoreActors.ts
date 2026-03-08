@@ -3,6 +3,7 @@ import { acceptDescriptorHotReload } from "@/core/hotReload/hmr";
 import { emptyActorDescriptor } from "@/features/actors/descriptors/emptyActor";
 import { environmentActorDescriptor } from "@/features/actors/descriptors/environmentActor";
 import { gaussianSplatSparkActorDescriptor } from "@/features/actors/descriptors/gaussianSplatSparkActor";
+import { mistVolumeActorDescriptor } from "@/features/actors/descriptors/mistVolumeActor";
 import { meshActorDescriptor } from "@/features/actors/descriptors/meshActor";
 import { primitiveActorDescriptor } from "@/features/actors/descriptors/primitiveActor";
 import { curveActorDescriptor } from "@/features/actors/descriptors/curveActor";
@@ -13,6 +14,7 @@ export function registerCoreActorDescriptors(kernel: AppKernel): void {
     emptyActorDescriptor,
     environmentActorDescriptor,
     gaussianSplatSparkActorDescriptor,
+    mistVolumeActorDescriptor,
     meshActorDescriptor,
     primitiveActorDescriptor,
     curveActorDescriptor,
@@ -28,6 +30,7 @@ export function setupActorHotReload(kernel: AppKernel): void {
     emptyActorDescriptor,
     environmentActorDescriptor,
     gaussianSplatSparkActorDescriptor,
+    mistVolumeActorDescriptor,
     meshActorDescriptor,
     primitiveActorDescriptor,
     curveActorDescriptor,

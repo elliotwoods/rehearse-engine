@@ -72,3 +72,7 @@ whilst in right click drag, WASD keys are active (they are not active otherwise)
     * sub-menus
     * blocks in the inspector
     * 
+# Remderer
+
+* Speed up
+* Sometimes we don't even need the video, we just want to cache the frames

@@ -79,6 +79,256 @@ export const GAUSSIAN_SPLAT_SPARK_SCHEMA: ParameterSchema = {
   ]
 };
 
+export const MIST_VOLUME_ACTOR_SCHEMA: ParameterSchema = {
+  id: "actor.mistVolume",
+  title: "Mist Volume",
+  params: [
+    {
+      key: "volumeActorId",
+      label: "Volume Cube",
+      type: "actor-ref",
+      allowedActorTypes: ["primitive"],
+      allowSelf: false,
+      description: "Reference a cube primitive actor to define the mist simulation bounds."
+    },
+    {
+      key: "sourceActorIds",
+      label: "Emitter Sources",
+      type: "actor-ref-list",
+      allowedActorTypes: ["empty", "curve"],
+      allowSelf: false
+    },
+    {
+      key: "resolutionX",
+      label: "Resolution X",
+      type: "number",
+      min: 4,
+      max: 256,
+      step: 1,
+      defaultValue: 32
+    },
+    {
+      key: "resolutionY",
+      label: "Resolution Y",
+      type: "number",
+      min: 4,
+      max: 256,
+      step: 1,
+      defaultValue: 24
+    },
+    {
+      key: "resolutionZ",
+      label: "Resolution Z",
+      type: "number",
+      min: 4,
+      max: 256,
+      step: 1,
+      defaultValue: 32
+    },
+    {
+      key: "sourceRadius",
+      label: "Emitter Radius",
+      type: "number",
+      min: 0.01,
+      step: 0.01,
+      unit: "m",
+      defaultValue: 0.2
+    },
+    {
+      key: "injectionRate",
+      label: "Injection Rate",
+      type: "number",
+      min: 0,
+      step: 0.05,
+      defaultValue: 1
+    },
+    {
+      key: "initialSpeed",
+      label: "Initial Speed",
+      type: "number",
+      min: 0,
+      step: 0.05,
+      unit: "m/s",
+      defaultValue: 0.6
+    },
+    {
+      key: "emissionDirection",
+      label: "Emission Direction",
+      type: "vector3",
+      defaultValue: [0, -1, 0],
+      precision: 3
+    },
+    {
+      key: "buoyancy",
+      label: "Buoyancy",
+      type: "number",
+      step: 0.05,
+      defaultValue: 0.35
+    },
+    {
+      key: "velocityDrag",
+      label: "Velocity Drag",
+      type: "number",
+      min: 0,
+      max: 1,
+      step: 0.01,
+      defaultValue: 0.12
+    },
+    {
+      key: "diffusion",
+      label: "Diffusion",
+      type: "number",
+      min: 0,
+      step: 0.01,
+      defaultValue: 0.04
+    },
+    {
+      key: "densityDecay",
+      label: "Density Decay",
+      type: "number",
+      min: 0,
+      max: 1,
+      step: 0.01,
+      defaultValue: 0.08
+    },
+    {
+      key: "simulationSubsteps",
+      label: "Simulation Steps",
+      type: "number",
+      min: 1,
+      max: 16,
+      step: 1,
+      defaultValue: 1
+    },
+    {
+      key: "previewMode",
+      label: "Preview Mode",
+      type: "select",
+      options: ["volume", "bounds", "slice-x", "slice-y", "slice-z", "off"],
+      defaultValue: "volume"
+    },
+    {
+      key: "previewTint",
+      label: "Preview Tint",
+      type: "color",
+      defaultValue: "#d9eef7"
+    },
+    {
+      key: "previewOpacity",
+      label: "Preview Opacity",
+      type: "number",
+      min: 0,
+      max: 4,
+      step: 0.05,
+      defaultValue: 1.1
+    },
+    {
+      key: "previewThreshold",
+      label: "Preview Threshold",
+      type: "number",
+      min: 0,
+      max: 1,
+      step: 0.005,
+      defaultValue: 0.02
+    },
+    {
+      key: "slicePosition",
+      label: "Slice Position",
+      type: "number",
+      min: 0,
+      max: 1,
+      step: 0.01,
+      defaultValue: 0.5,
+      visibleWhen: [{ key: "previewMode", equals: "slice-x" }]
+    },
+    {
+      key: "slicePosition",
+      label: "Slice Position",
+      type: "number",
+      min: 0,
+      max: 1,
+      step: 0.01,
+      defaultValue: 0.5,
+      visibleWhen: [{ key: "previewMode", equals: "slice-y" }]
+    },
+    {
+      key: "slicePosition",
+      label: "Slice Position",
+      type: "number",
+      min: 0,
+      max: 1,
+      step: 0.01,
+      defaultValue: 0.5,
+      visibleWhen: [{ key: "previewMode", equals: "slice-z" }]
+    },
+    {
+      key: "previewRaymarchSteps",
+      label: "Preview Steps",
+      type: "number",
+      min: 8,
+      max: 256,
+      step: 1,
+      defaultValue: 48
+    },
+    {
+      key: "renderOverrideEnabled",
+      label: "Use Render Override",
+      type: "boolean",
+      defaultValue: false
+    },
+    {
+      key: "renderResolutionX",
+      label: "Render Resolution X",
+      type: "number",
+      min: 4,
+      max: 512,
+      step: 1,
+      defaultValue: 64,
+      visibleWhen: [{ key: "renderOverrideEnabled", equals: true }]
+    },
+    {
+      key: "renderResolutionY",
+      label: "Render Resolution Y",
+      type: "number",
+      min: 4,
+      max: 512,
+      step: 1,
+      defaultValue: 48,
+      visibleWhen: [{ key: "renderOverrideEnabled", equals: true }]
+    },
+    {
+      key: "renderResolutionZ",
+      label: "Render Resolution Z",
+      type: "number",
+      min: 4,
+      max: 512,
+      step: 1,
+      defaultValue: 64,
+      visibleWhen: [{ key: "renderOverrideEnabled", equals: true }]
+    },
+    {
+      key: "renderSimulationSubsteps",
+      label: "Render Sim Steps",
+      type: "number",
+      min: 1,
+      max: 32,
+      step: 1,
+      defaultValue: 2,
+      visibleWhen: [{ key: "renderOverrideEnabled", equals: true }]
+    },
+    {
+      key: "renderPreviewRaymarchSteps",
+      label: "Render Preview Steps",
+      type: "number",
+      min: 8,
+      max: 512,
+      step: 1,
+      defaultValue: 96,
+      visibleWhen: [{ key: "renderOverrideEnabled", equals: true }]
+    }
+  ]
+};
+
 export const MESH_ACTOR_SCHEMA: ParameterSchema = {
   id: "actor.mesh",
   title: "Mesh",

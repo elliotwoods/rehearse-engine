@@ -64,4 +64,11 @@ describe("engine compatibility", () => {
     });
     expect(incompatibilityReason(actor, "webgpu")).toBe("Beam Crossover Scattering Shell 2 mode currently requires WebGL2.");
   });
+
+  test("marks Mist Volume actors incompatible with WebGPU", () => {
+    const actor = createActor({
+      actorType: "mist-volume"
+    });
+    expect(incompatibilityReason(actor, "webgpu")).toBe("Mist Volume actor currently requires WebGL2.");
+  });
 });

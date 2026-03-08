@@ -38,6 +38,7 @@ const actorSchema = z.object({
     "empty",
     "environment",
     "gaussian-splat-spark",
+    "mist-volume",
     "mesh",
     "primitive",
     "curve",

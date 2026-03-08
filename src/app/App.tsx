@@ -367,8 +367,8 @@ export function App() {
         hostEl.style.height = `${String(settings.height)}px`;
         viewport =
           sceneRenderEngine === "webgl2"
-            ? new WebGlViewport(kernel, hostEl, { antialias: sceneAntialiasing })
-            : new WebGpuViewport(kernel, hostEl, { antialias: sceneAntialiasing });
+            ? new WebGlViewport(kernel, hostEl, { antialias: sceneAntialiasing, qualityMode: "export" })
+            : new WebGpuViewport(kernel, hostEl, { antialias: sceneAntialiasing, qualityMode: "export" });
         await viewport.start();
         const frameCount = computeFrameCount(settings.durationSeconds, settings.fps);
         const startTime = settings.startTimeMode === "zero" ? 0 : previousTime.elapsedSimSeconds;

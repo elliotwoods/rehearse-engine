@@ -47,6 +47,17 @@ const DEFAULT_NEAR_FADE_START = 0.0;
 const DEFAULT_NEAR_FADE_END = 0.0;
 const DEFAULT_SOFT_CLAMP_KNEE = 0.25;
 const EPSILON = 1e-4;
+const EMPTY_MIST_TEXTURE = (() => {
+  const data = new Uint8Array([255]);
+  const texture = new THREE.Data3DTexture(data, 1, 1, 1);
+  texture.format = THREE.RedFormat;
+  texture.type = THREE.UnsignedByteType;
+  texture.minFilter = THREE.LinearFilter;
+  texture.magFilter = THREE.LinearFilter;
+  texture.unpackAlignment = 1;
+  texture.needsUpdate = true;
+  return texture;
+})();
 
 type BeamMaterial = THREE.MeshBasicMaterial | THREE.ShaderMaterial;
 
@@ -283,6 +294,7 @@ function parseBeamParams(actor: ActorNode): BeamParams {
   const beamType = actor.params.beamType;
   return {
     targetActorId: typeof actor.params.targetActorId === "string" ? actor.params.targetActorId : null,
+    mistVolumeActorId: typeof actor.params.mistVolumeActorId === "string" ? actor.params.mistVolumeActorId : null,
     beamType:
       beamType === GHOST_BEAM_TYPE ||
       beamType === NORMALS_BEAM_TYPE ||
@@ -359,6 +371,7 @@ function buildSingleStatus(actor: ActorNode, runtimeStatus?: ActorRuntimeStatus)
     { label: "Scattering Shell 2 Active", value: params.beamType === SCATTERING_SHELL2_BEAM_TYPE },
     { label: "WebGL-Only Mode", value: params.beamType === SCATTERING_SHELL_BEAM_TYPE || params.beamType === SCATTERING_SHELL2_BEAM_TYPE },
     { label: "Target Actor", value: runtimeStatus?.values.targetActorName ?? "n/a" },
+    { label: "Mist Volume", value: runtimeStatus?.values.mistVolumeName ?? "n/a" },
     { label: "Target Shape", value: runtimeStatus?.values.targetShape ?? "n/a" },
     { label: "Resolution", value: params.resolution },
     { label: "Beam Length (m)", value: params.beamLength },
@@ -392,6 +405,7 @@ function buildArrayStatus(actor: ActorNode, runtimeStatus?: ActorRuntimeStatus):
     { label: "WebGL-Only Mode", value: params.beamType === SCATTERING_SHELL_BEAM_TYPE || params.beamType === SCATTERING_SHELL2_BEAM_TYPE },
     { label: "Emitter Curve", value: runtimeStatus?.values.emitterCurveName ?? "n/a" },
     { label: "Target Actor", value: runtimeStatus?.values.targetActorName ?? "n/a" },
+    { label: "Mist Volume", value: runtimeStatus?.values.mistVolumeName ?? "n/a" },
     { label: "Target Shape", value: runtimeStatus?.values.targetShape ?? "n/a" },
     { label: "Requested Count", value: params.count },
     { label: "Along Beam Power", value: params.alongBeamPower },
@@ -528,6 +542,10 @@ type ScatteringShellUniforms = {
   uNearFadeEnd: { value: number };
   uSoftClampKnee: { value: number };
   uCameraPos: { value: THREE.Vector3 };
+  uMistEnabled: { value: boolean };
+  uMistDensityTex: { value: THREE.Data3DTexture };
+  uMistWorldToLocal: { value: THREE.Matrix4 };
+  uMistDensityScale: { value: number };
 };
 
 type ScatteringShell2Uniforms = {
@@ -536,6 +554,10 @@ type ScatteringShell2Uniforms = {
   uAlongBeamPower: { value: number };
   uScatteringFactor: { value: number };
   uCameraPos: { value: THREE.Vector3 };
+  uMistEnabled: { value: boolean };
+  uMistDensityTex: { value: THREE.Data3DTexture };
+  uMistWorldToLocal: { value: THREE.Matrix4 };
+  uMistDensityScale: { value: number };
 };
 
 function createScatteringShellMaterial(): THREE.ShaderMaterial {
@@ -563,7 +585,11 @@ function createScatteringShellMaterial(): THREE.ShaderMaterial {
       uNearFadeStart: { value: DEFAULT_NEAR_FADE_START },
       uNearFadeEnd: { value: DEFAULT_NEAR_FADE_END },
       uSoftClampKnee: { value: DEFAULT_SOFT_CLAMP_KNEE },
-      uCameraPos: { value: new THREE.Vector3() }
+      uCameraPos: { value: new THREE.Vector3() },
+      uMistEnabled: { value: false },
+      uMistDensityTex: { value: EMPTY_MIST_TEXTURE },
+      uMistWorldToLocal: { value: new THREE.Matrix4() },
+      uMistDensityScale: { value: 1 }
     },
     vertexShader: `
       attribute vec3 beamEmitterPosition;
@@ -581,6 +607,8 @@ function createScatteringShellMaterial(): THREE.ShaderMaterial {
       }
     `,
     fragmentShader: `
+      precision highp sampler3D;
+
       uniform vec3 uEmitterPos;
       uniform vec3 uBeamColor;
       uniform float uBaseAlpha;
@@ -599,6 +627,10 @@ function createScatteringShellMaterial(): THREE.ShaderMaterial {
       uniform float uNearFadeEnd;
       uniform float uSoftClampKnee;
       uniform vec3 uCameraPos;
+      uniform bool uMistEnabled;
+      uniform sampler3D uMistDensityTex;
+      uniform mat4 uMistWorldToLocal;
+      uniform float uMistDensityScale;
 
       varying vec3 vWorldPosition;
       varying vec3 vWorldNormal;
@@ -609,6 +641,18 @@ function createScatteringShellMaterial(): THREE.ShaderMaterial {
           return x;
         }
         return x / (1.0 + x * knee);
+      }
+
+      float sampleMistDensity(vec3 worldPosition) {
+        if (!uMistEnabled) {
+          return 1.0;
+        }
+        vec3 local = (uMistWorldToLocal * vec4(worldPosition, 1.0)).xyz;
+        vec3 uvw = local + vec3(0.5);
+        if (uvw.x < 0.0 || uvw.y < 0.0 || uvw.z < 0.0 || uvw.x > 1.0 || uvw.y > 1.0 || uvw.z > 1.0) {
+          return 0.0;
+        }
+        return texture(uMistDensityTex, uvw).r * uMistDensityScale;
       }
 
       void main() {
@@ -656,6 +700,7 @@ function createScatteringShellMaterial(): THREE.ShaderMaterial {
           * nearFadeTerm;
 
         visibility = softClamp(max(visibility, 0.0), uSoftClampKnee);
+        visibility *= sampleMistDensity(vWorldPosition);
         float alpha = clamp(uBaseAlpha, 0.0, 1.0) * visibility;
         vec3 rgb = uBeamColor * visibility;
 
@@ -684,7 +729,11 @@ function createScatteringShell2Material(): THREE.ShaderMaterial {
       uBaseAlpha: { value: DEFAULT_BEAM_ALPHA },
       uAlongBeamPower: { value: DEFAULT_ALONG_BEAM_POWER },
       uScatteringFactor: { value: DEFAULT_SCATTERING_FACTOR },
-      uCameraPos: { value: new THREE.Vector3() }
+      uCameraPos: { value: new THREE.Vector3() },
+      uMistEnabled: { value: false },
+      uMistDensityTex: { value: EMPTY_MIST_TEXTURE },
+      uMistWorldToLocal: { value: new THREE.Matrix4() },
+      uMistDensityScale: { value: 1 }
     },
     vertexShader: `
       attribute vec3 beamEmitterPosition;
@@ -702,15 +751,33 @@ function createScatteringShell2Material(): THREE.ShaderMaterial {
       }
     `,
     fragmentShader: `
+      precision highp sampler3D;
+
       uniform vec3 uBeamColor;
       uniform float uBaseAlpha;
       uniform float uAlongBeamPower;
       uniform float uScatteringFactor;
       uniform vec3 uCameraPos;
+      uniform bool uMistEnabled;
+      uniform sampler3D uMistDensityTex;
+      uniform mat4 uMistWorldToLocal;
+      uniform float uMistDensityScale;
 
       varying vec3 vWorldPosition;
       varying vec3 vWorldNormal;
       varying vec3 vEmitterPosition;
+
+      float sampleMistDensity(vec3 worldPosition) {
+        if (!uMistEnabled) {
+          return 1.0;
+        }
+        vec3 local = (uMistWorldToLocal * vec4(worldPosition, 1.0)).xyz;
+        vec3 uvw = local + vec3(0.5);
+        if (uvw.x < 0.0 || uvw.y < 0.0 || uvw.z < 0.0 || uvw.x > 1.0 || uvw.y > 1.0 || uvw.z > 1.0) {
+          return 0.0;
+        }
+        return texture(uMistDensityTex, uvw).r * uMistDensityScale;
+      }
 
       void main() {
         // This is still a shell proxy, not a true volumetric beam integration.
@@ -731,6 +798,7 @@ function createScatteringShell2Material(): THREE.ShaderMaterial {
 
         // Scattering Factor is a normalized artistic approximation of stage haze / water fog scatter strength.
         float visibility = max(uScatteringFactor, 0.0) * alongBeamShapeFactor * distanceFactor;
+        visibility *= sampleMistDensity(vWorldPosition);
         float alpha = clamp(uBaseAlpha, 0.0, 1.0) * visibility;
         vec3 rgb = uBeamColor * visibility;
         gl_FragColor = vec4(rgb, alpha);
@@ -749,7 +817,31 @@ function readCameraPosition(state: SceneHookContext["state"]): THREE.Vector3 {
   return new THREE.Vector3();
 }
 
-function updateMaterial(state: BeamObjectState, params: BeamParams, _cameraPosition: THREE.Vector3): void {
+function applyMistUniforms(
+  material: THREE.ShaderMaterial,
+  mistResource: ReturnType<SceneHookContext["getMistVolumeResource"]>
+): void {
+  const uniforms = material.uniforms as Partial<ScatteringShellUniforms & ScatteringShell2Uniforms>;
+  const enabled = Boolean(
+    mistResource &&
+    mistResource.densityTexture instanceof THREE.Data3DTexture &&
+    Array.isArray(mistResource.worldToLocalElements) &&
+    mistResource.worldToLocalElements.length === 16
+  );
+  uniforms.uMistEnabled!.value = enabled;
+  uniforms.uMistDensityTex!.value = enabled
+    ? (mistResource!.densityTexture as THREE.Data3DTexture)
+    : EMPTY_MIST_TEXTURE;
+  uniforms.uMistWorldToLocal!.value.fromArray(enabled ? mistResource!.worldToLocalElements : new THREE.Matrix4().elements);
+  uniforms.uMistDensityScale!.value = enabled ? mistResource!.densityScale : 1;
+}
+
+function updateMaterial(
+  state: BeamObjectState,
+  params: BeamParams,
+  _cameraPosition: THREE.Vector3,
+  mistResource: ReturnType<SceneHookContext["getMistVolumeResource"]>
+): void {
   const materialSignature = JSON.stringify({
     beamType: params.beamType,
     beamColor: params.beamColor,
@@ -825,6 +917,7 @@ function updateMaterial(state: BeamObjectState, params: BeamParams, _cameraPosit
     uniforms.uSoftClampKnee.value = params.softClampKnee;
     uniforms.uCameraPos.value.copy(_cameraPosition);
     uniforms.uEmitterPos.value.set(0, 0, 0);
+    applyMistUniforms(material, mistResource);
     material.transparent = true;
     material.depthWrite = false;
     material.depthTest = true;
@@ -844,6 +937,7 @@ function updateMaterial(state: BeamObjectState, params: BeamParams, _cameraPosit
     uniforms.uAlongBeamPower.value = params.alongBeamPower;
     uniforms.uScatteringFactor.value = params.scatteringFactor;
     uniforms.uCameraPos.value.copy(_cameraPosition);
+    applyMistUniforms(material, mistResource);
     material.transparent = true;
     material.depthWrite = false;
     material.depthTest = true;
@@ -938,11 +1032,14 @@ function getCurveMetadata(actor: ActorNode): { closed: boolean; segmentCount: nu
 function syncSingleEmitter(context: SceneHookContext, root: THREE.Group, state: BeamObjectState): void {
   const params = parseBeamParams(context.actor);
   const targetActor = params.targetActorId ? context.getActorById(params.targetActorId) : null;
+  const mistActor = params.mistVolumeActorId ? context.getActorById(params.mistVolumeActorId) : null;
+  const mistResource = params.mistVolumeActorId ? context.getMistVolumeResource(params.mistVolumeActorId) : null;
   const targetObject = params.targetActorId ? context.getActorObject(params.targetActorId) : null;
   if (!targetActor || targetActor.actorType !== "primitive" || !(targetObject instanceof THREE.Object3D)) {
     state.mesh.visible = false;
     setStatus(context, {
       targetActorName: targetActor?.name ?? "n/a",
+      mistVolumeName: mistActor?.name ?? "n/a",
       targetShape: "n/a",
       contourPointCount: 0,
       triangleCount: 0,
@@ -956,6 +1053,7 @@ function syncSingleEmitter(context: SceneHookContext, root: THREE.Group, state: 
     state.mesh.visible = false;
     setStatus(context, {
       targetActorName: targetActor.name,
+      mistVolumeName: mistActor?.name ?? "n/a",
       targetShape: "unsupported",
       contourPointCount: 0,
       triangleCount: 0,
@@ -964,7 +1062,7 @@ function syncSingleEmitter(context: SceneHookContext, root: THREE.Group, state: 
     return;
   }
 
-  updateMaterial(state, params, readCameraPosition(context.state));
+  updateMaterial(state, params, readCameraPosition(context.state), mistResource);
 
   const signature = buildSingleGeometrySignature(params, root, targetObject, targetActor);
   if (signature === state.lastGeometrySignature) {
@@ -989,6 +1087,7 @@ function syncSingleEmitter(context: SceneHookContext, root: THREE.Group, state: 
     state.mesh.visible = false;
     setStatus(context, {
       targetActorName: targetActor.name,
+      mistVolumeName: mistActor?.name ?? "n/a",
       targetShape: shape,
       contourPointCount: 0,
       triangleCount: 0,
@@ -1007,6 +1106,7 @@ function syncSingleEmitter(context: SceneHookContext, root: THREE.Group, state: 
   state.lastGeometrySignature = signature;
   setStatus(context, {
     targetActorName: targetActor.name,
+    mistVolumeName: mistActor?.name ?? "n/a",
     targetShape: shape,
     contourPointCount: silhouette.contourWorld.length,
     triangleCount: silhouette.contourWorld.length,
@@ -1021,12 +1121,15 @@ function syncEmitterArray(context: SceneHookContext, root: THREE.Group, state: B
   const params = parseBeamArrayParams(context.actor);
   const targetActor = params.targetActorId ? context.getActorById(params.targetActorId) : null;
   const curveActor = params.emitterCurveId ? context.getActorById(params.emitterCurveId) : null;
+  const mistActor = params.mistVolumeActorId ? context.getActorById(params.mistVolumeActorId) : null;
+  const mistResource = params.mistVolumeActorId ? context.getMistVolumeResource(params.mistVolumeActorId) : null;
   const targetObject = params.targetActorId ? context.getActorObject(params.targetActorId) : null;
   if (!targetActor || targetActor.actorType !== "primitive" || !curveActor || curveActor.actorType !== "curve" || !(targetObject instanceof THREE.Object3D)) {
     state.mesh.visible = false;
     setStatus(context, {
       emitterCurveName: curveActor?.name ?? "n/a",
       targetActorName: targetActor?.name ?? "n/a",
+      mistVolumeName: mistActor?.name ?? "n/a",
       targetShape: "n/a",
       activeBeamCount: 0,
       skippedBeamCount: params.count,
@@ -1043,6 +1146,7 @@ function syncEmitterArray(context: SceneHookContext, root: THREE.Group, state: B
     setStatus(context, {
       emitterCurveName: curveActor.name,
       targetActorName: targetActor.name,
+      mistVolumeName: mistActor?.name ?? "n/a",
       targetShape: "unsupported",
       activeBeamCount: 0,
       skippedBeamCount: params.count,
@@ -1053,7 +1157,7 @@ function syncEmitterArray(context: SceneHookContext, root: THREE.Group, state: B
     return;
   }
 
-  updateMaterial(state, params, readCameraPosition(context.state));
+  updateMaterial(state, params, readCameraPosition(context.state), mistResource);
 
   const signature = buildArrayGeometrySignature(params, targetObject, targetActor, curveActor);
   if (signature === state.lastGeometrySignature) {
@@ -1110,6 +1214,7 @@ function syncEmitterArray(context: SceneHookContext, root: THREE.Group, state: B
     setStatus(context, {
       emitterCurveName: curveActor.name,
       targetActorName: targetActor.name,
+      mistVolumeName: mistActor?.name ?? "n/a",
       targetShape: shape,
       activeBeamCount: 0,
       skippedBeamCount,
@@ -1136,6 +1241,7 @@ function syncEmitterArray(context: SceneHookContext, root: THREE.Group, state: B
   setStatus(context, {
     emitterCurveName: curveActor.name,
     targetActorName: targetActor.name,
+    mistVolumeName: mistActor?.name ?? "n/a",
     targetShape: shape,
     activeBeamCount: placements.length,
     skippedBeamCount,
@@ -1200,6 +1306,13 @@ const sharedBeamParams = [
     description:
       "Base transparency multiplier for the final shell intensity. In the shell-based beam modes this maps directly to the shader's base alpha after the visibility terms are evaluated.",
     defaultValue: DEFAULT_BEAM_ALPHA
+  },
+  {
+    key: "mistVolumeActorId",
+    label: "Mist Volume",
+    type: "actor-ref",
+    allowedActorTypes: ["mist-volume"],
+    allowSelf: false
   },
   {
     key: "alongBeamPower",

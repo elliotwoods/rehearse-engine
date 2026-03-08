@@ -12,6 +12,7 @@ import { incompatibilityReason } from "@/render/engineCompatibility";
 import { FramePacer } from "@/render/framePacing";
 import { SceneController } from "@/render/sceneController";
 import { reportSlowFrame } from "@/render/slowFrameDiagnostics";
+import type { MistVolumeQualityMode } from "@/render/mistVolumeController";
 import { SparkSplatController } from "@/render/sparkSplatController";
 import { countActorStats, summarizeMemory, type RenderStatsSample } from "@/render/stats";
 import { SceneOutputPass, threeToneMappingForMode } from "@/render/tonemapping";
@@ -70,9 +71,9 @@ export class WebGlViewport {
   public constructor(
     private readonly kernel: AppKernel,
     private readonly mountEl: HTMLElement,
-    options: { antialias: boolean }
+    options: { antialias: boolean; qualityMode?: MistVolumeQualityMode }
   ) {
-    this.sceneController = new SceneController(kernel);
+    this.sceneController = new SceneController(kernel, options.qualityMode ?? "interactive");
     this.sparkSplatController = new SparkSplatController(kernel, this.sceneController);
     this.framePacer = new FramePacer(kernel.store.getState().state.scene.framePacing);
     this.renderer = new THREE.WebGLRenderer({ antialias: options.antialias, alpha: false });
@@ -182,6 +183,7 @@ export class WebGlViewport {
     this.actorTransformController.dispose();
     this.curveEditController.dispose();
     this.sparkSplatController.dispose();
+    this.sceneController.dispose();
     this.bloomPass.dispose();
     this.sceneOutputPass.dispose();
     this.clearNativeGaussianConflictStatus();

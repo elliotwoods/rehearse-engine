@@ -19,6 +19,10 @@ describe("beam crossover plugin descriptors", () => {
     expect(beamEmitterArrayDescriptor.spawn?.pluginType).toBe("plugin.beamCrossover.emitterArray");
     expect(beamEmitterArrayDescriptor.schema.params.some((param) => param.key === "emitterCurveId")).toBe(true);
     expect(beamEmitterArrayDescriptor.schema.params.some((param) => param.key === "targetActorId")).toBe(true);
+    expect(beamEmitterDescriptor.schema.params.find((param) => param.key === "mistVolumeActorId")).toMatchObject({
+      type: "actor-ref",
+      allowedActorTypes: ["mist-volume"]
+    });
     const beamType = beamEmitterDescriptor.schema.params.find((param) => param.key === "beamType");
     expect(beamType?.options).toEqual(["solid", "ghost", "normals", "scatteringShell", "scatteringShell2"]);
     expect(beamEmitterDescriptor.schema.params.find((param) => param.key === "alongBeamPower")?.defaultValue).toBe(2);

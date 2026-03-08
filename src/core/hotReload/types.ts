@@ -1,4 +1,13 @@
-import type { ActorNode, ActorRuntimeStatus, ActorStatusValue, AppState, ActorType, ParameterSchema, ParameterValues } from "@/core/types";
+import type {
+  ActorNode,
+  ActorRuntimeStatus,
+  ActorStatusValue,
+  AppState,
+  ActorType,
+  MistVolumeResource,
+  ParameterSchema,
+  ParameterValues
+} from "@/core/types";
 
 export type DescriptorKind = "actor" | "component" | "system";
 
@@ -35,6 +44,7 @@ export interface SceneHookContext {
     position: [number, number, number];
     tangent: [number, number, number];
   } | null;
+  getMistVolumeResource(actorId: string): MistVolumeResource | null;
   setActorStatus(status: ActorRuntimeStatus | null): void;
 }
 

@@ -4,6 +4,9 @@ export function incompatibilityReason(actor: ActorNode, engine: RenderEngine): s
   if (engine === "webgpu" && actor.actorType === "gaussian-splat-spark") {
     return "Gaussian Splat actor requires WebGL2.";
   }
+  if (engine === "webgpu" && actor.actorType === "mist-volume") {
+    return "Mist Volume actor currently requires WebGL2.";
+  }
   if (
     engine === "webgpu" &&
     actor.actorType === "plugin" &&

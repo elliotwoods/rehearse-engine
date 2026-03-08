@@ -149,6 +149,36 @@ export function createActorFromDescriptor(kernel: AppKernel, descriptorId: strin
       scaleFactor: 1
     });
   }
+  if (descriptorId === "actor.mistVolume") {
+    kernel.store.getState().actions.updateActorParams(actorId, {
+      volumeActorId: "",
+      sourceActorIds: [],
+      resolutionX: 32,
+      resolutionY: 24,
+      resolutionZ: 32,
+      sourceRadius: 0.2,
+      injectionRate: 1,
+      initialSpeed: 0.6,
+      emissionDirection: [0, -1, 0],
+      buoyancy: 0.35,
+      velocityDrag: 0.12,
+      diffusion: 0.04,
+      densityDecay: 0.08,
+      simulationSubsteps: 1,
+      previewMode: "volume",
+      previewTint: "#d9eef7",
+      previewOpacity: 1.1,
+      previewThreshold: 0.02,
+      slicePosition: 0.5,
+      previewRaymarchSteps: 48,
+      renderOverrideEnabled: false,
+      renderResolutionX: 64,
+      renderResolutionY: 48,
+      renderResolutionZ: 64,
+      renderSimulationSubsteps: 2,
+      renderPreviewRaymarchSteps: 96
+    });
+  }
   if (descriptorId === "actor.environment") {
     kernel.store.getState().actions.updateActorParams(actorId, {
       intensity: 1

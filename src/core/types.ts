@@ -11,6 +11,7 @@ export type ActorType =
   | "empty"
   | "environment"
   | "gaussian-splat-spark"
+  | "mist-volume"
   | "mesh"
   | "primitive"
   | "curve"
@@ -105,7 +106,7 @@ export interface ParameterDefinitionBase {
   key: string;
   label: string;
   description?: string;
-  defaultValue?: number | string | boolean | string[];
+  defaultValue?: number | string | boolean | number[] | string[];
   visibleWhen?: Array<{
     key: string;
     equals: string | number | boolean;
@@ -132,6 +133,16 @@ export interface StringParameterDefinition extends ParameterDefinitionBase {
 
 export interface ColorParameterDefinition extends ParameterDefinitionBase {
   type: "color";
+}
+
+export interface Vector3ParameterDefinition extends ParameterDefinitionBase {
+  type: "vector3";
+  min?: number;
+  max?: number;
+  step?: number;
+  precision?: number;
+  unit?: string;
+  dragSpeed?: number;
 }
 
 export interface SelectParameterDefinition extends ParameterDefinitionBase {
@@ -183,6 +194,7 @@ export type ParameterDefinition =
   | BooleanParameterDefinition
   | StringParameterDefinition
   | ColorParameterDefinition
+  | Vector3ParameterDefinition
   | SelectParameterDefinition
   | ActorRefParameterDefinition
   | ActorRefListParameterDefinition
@@ -196,7 +208,7 @@ export interface ParameterSchema {
   params: ParameterDefinition[];
 }
 
-export type ParameterValue = number | string | boolean | string[] | object | null;
+export type ParameterValue = number | string | boolean | number[] | string[] | object | null;
 
 export type ParameterValues = Record<string, ParameterValue>;
 
@@ -305,12 +317,19 @@ export interface RuntimeDebugState {
   slowFrameDiagnosticsThresholdMs: number;
 }
 
-export type ActorStatusValue = string | number | boolean | [number, number, number] | string[] | object | null;
+export type ActorStatusValue = string | number | boolean | number[] | string[] | object | null;
 
 export interface ActorRuntimeStatus {
   values: Record<string, ActorStatusValue | undefined>;
   error?: string;
   updatedAtIso: string;
+}
+
+export interface MistVolumeResource {
+  densityTexture: unknown;
+  worldToLocalElements: number[];
+  resolution: [number, number, number];
+  densityScale: number;
 }
 
 export interface ConsoleLogEntry {

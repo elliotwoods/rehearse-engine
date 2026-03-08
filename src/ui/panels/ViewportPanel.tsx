@@ -73,8 +73,8 @@ export function ViewportPanel(props: ViewportPanelProps) {
     }
     const viewport: ViewportRuntime =
       backend === "webgl2"
-        ? new WebGlViewport(kernel, hostRef.current, { antialias: antialiasing })
-        : new WebGpuViewport(kernel, hostRef.current, { antialias: antialiasing });
+        ? new WebGlViewport(kernel, hostRef.current, { antialias: antialiasing, qualityMode: "interactive" })
+        : new WebGpuViewport(kernel, hostRef.current, { antialias: antialiasing, qualityMode: "interactive" });
     viewport.setActorTransformMode(actorTransformMode);
     viewport.setActorTransformSnappingEnabled(actorTransformSnappingEnabled);
     viewport.setFramePacing(framePacing);

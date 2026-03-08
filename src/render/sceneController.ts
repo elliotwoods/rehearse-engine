@@ -14,6 +14,7 @@ import { curveDataWithOverrides, getCurveSamplesPerSegmentFromActor } from "@/fe
 import { estimateCurveLength, sampleCurvePositionAndTangent } from "@/features/curves/sampler";
 import { tryParseSplatBinary } from "@/features/splats/splatBinaryFormat";
 import { getGaussianFilterMode, getGaussianFilterRegionActorIds } from "@/render/gaussianFilter";
+import { MistVolumeController, type MistVolumeQualityMode } from "@/render/mistVolumeController";
 import { collectActorRenderOrder } from "@/render/sceneRenderOrder";
 
 const GAUSSIAN_RENDER_ROOT_NAME = "gaussian-splat-render-root";
@@ -303,8 +304,9 @@ export class SceneController {
   private readonly gaussianLastCameraQuaternion = new THREE.Quaternion();
   private gaussianSortDirty = true;
   private previousSimTimeSeconds = 0;
+  private readonly mistVolumeController: MistVolumeController;
 
-  public constructor(private readonly kernel: AppKernel) {
+  public constructor(private readonly kernel: AppKernel, qualityMode: MistVolumeQualityMode = "interactive") {
     const initialBackground = normalizeBackgroundColor(this.kernel.store.getState().state.scene.backgroundColor);
     this.scene.background = new THREE.Color(initialBackground);
     const grid = new THREE.GridHelper(20, 20, 0x2f8f9d, 0x1f2430);
@@ -317,6 +319,11 @@ export class SceneController {
     this.scene.add(light);
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.4));
     this.ktx2Loader.setTranscoderPath("/basis/");
+    this.mistVolumeController = new MistVolumeController(this.kernel, {
+      getActorById: (actorId) => this.kernel.store.getState().state.actors[actorId] ?? null,
+      getActorObject: (actorId) => this.actorObjects.get(actorId) ?? null,
+      sampleCurveWorldPoint: (actorId, t) => this.sampleCurveWorldPoint(actorId, t)
+    }, qualityMode);
   }
 
   public async syncFromState(): Promise<void> {
@@ -417,6 +424,8 @@ export class SceneController {
     this.syncActorSiblingOrder(state);
     this.applyActorRenderOrder(state);
     const tC2 = performance.now();
+    this.mistVolumeController.syncFromState(state, simTimeSeconds, dtSeconds);
+    const tC3 = performance.now();
     for (const actor of Object.values(state.actors)) {
       this.syncPluginSceneActor(actor, state, simTimeSeconds, dtSeconds);
     }
@@ -431,7 +440,8 @@ export class SceneController {
         "actorLoop:", (tB - tA).toFixed(0), "ms |",
         "parentSync:", (tC - tB).toFixed(0), "ms |",
         "orderSync:", (tC2 - tC).toFixed(0), "ms |",
-        "pluginLoop:", (tD - tC2).toFixed(0), "ms |",
+        "mistSync:", (tC3 - tC2).toFixed(0), "ms |",
+        "pluginLoop:", (tD - tC3).toFixed(0), "ms |",
         "envTex:", (performance.now() - tD).toFixed(0), "ms"
       );
     }
@@ -439,6 +449,14 @@ export class SceneController {
 
   public getActorObject(actorId: string): any | null {
     return this.actorObjects.get(actorId) ?? null;
+  }
+
+  public getMistVolumeResource(actorId: string) {
+    return this.mistVolumeController.getResource(actorId);
+  }
+
+  public dispose(): void {
+    this.mistVolumeController.dispose();
   }
 
   public getGaussianRenderStats(): { drawCalls: number; triangles: number; visibleCount: number } {
@@ -1951,6 +1969,7 @@ export class SceneController {
         getActorById: (actorId) => this.kernel.store.getState().state.actors[actorId] ?? null,
         getActorObject: (actorId) => this.actorObjects.get(actorId) ?? null,
         sampleCurveWorldPoint: (actorId, t) => this.sampleCurveWorldPoint(actorId, t),
+        getMistVolumeResource: (actorId) => this.mistVolumeController.getResource(actorId),
         setActorStatus: (status: ActorRuntimeStatus | null) => {
           this.kernel.store.getState().actions.setActorStatus(actor.id, status);
         }

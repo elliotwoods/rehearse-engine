@@ -12,6 +12,7 @@ import { FramePacer } from "./framePacing";
 import { countActorStats, summarizeMemory, type RenderStatsSample } from "./stats";
 import { CurveEditController } from "./curveEditController";
 import { reportSlowFrame } from "./slowFrameDiagnostics";
+import type { MistVolumeQualityMode } from "./mistVolumeController";
 import { buildWebGpuToneMappedOutputNode, threeToneMappingForMode } from "./tonemapping";
 
 const FAST_STATS_INTERVAL_MS = 500;
@@ -65,13 +66,13 @@ export class WebGpuViewport {
   public constructor(
     private readonly kernel: AppKernel,
     private readonly mountEl: HTMLElement,
-    options: { antialias: boolean }
+    options: { antialias: boolean; qualityMode?: MistVolumeQualityMode }
   ) {
     if (!("gpu" in navigator)) {
       throw new Error("WebGPU is required by this application.");
     }
 
-    this.sceneController = new SceneController(kernel);
+    this.sceneController = new SceneController(kernel, options.qualityMode ?? "interactive");
     this.framePacer = new FramePacer(kernel.store.getState().state.scene.framePacing);
     this.renderer = new WebGPURenderer({ antialias: options.antialias, alpha: false });
     this.applyRenderScale(this.mountEl.clientWidth, this.mountEl.clientHeight);
@@ -173,6 +174,7 @@ export class WebGpuViewport {
     window.removeEventListener("wheel", this.onViewportWheel, true);
     this.actorTransformController.dispose();
     this.curveEditController.dispose();
+    this.sceneController.dispose();
     this.clearCompatibilityStatus();
     if (this.initialized) {
       try {

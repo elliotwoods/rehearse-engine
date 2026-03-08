@@ -8,6 +8,7 @@ export type ActorType =
   | "environment"
   | "gaussian-splat"
   | "gaussian-splat-spark"
+  | "mist-volume"
   | "mesh"
   | "primitive"
   | "curve";
@@ -45,6 +46,13 @@ export interface ActorRuntimeStatus {
   values: Record<string, unknown>;
   error?: string;
   updatedAtIso: string;
+}
+
+export interface MistVolumeResource {
+  densityTexture: unknown;
+  worldToLocalElements: number[];
+  resolution: [number, number, number];
+  densityScale: number;
 }
 
 export interface ActorStatusEntry {
@@ -127,11 +135,13 @@ export interface SceneHookContext {
     position: [number, number, number];
     tangent: [number, number, number];
   } | null;
+  getMistVolumeResource(actorId: string): MistVolumeResource | null;
   setActorStatus(status: ActorRuntimeStatus | null): void;
 }
 
 export interface BeamParams {
   targetActorId: string | null;
+  mistVolumeActorId: string | null;
   beamType: BeamType;
   resolution: number;
   beamLength: number;

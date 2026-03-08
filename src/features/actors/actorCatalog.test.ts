@@ -5,6 +5,7 @@ import { createActorFromDescriptor, listActorCreationOptions } from "@/features/
 import { cameraPathActorDescriptor } from "@/features/actors/descriptors/cameraPathActor";
 import { curveActorDescriptor } from "@/features/actors/descriptors/curveActor";
 import { gaussianSplatSparkActorDescriptor } from "@/features/actors/descriptors/gaussianSplatSparkActor";
+import { mistVolumeActorDescriptor } from "@/features/actors/descriptors/mistVolumeActor";
 import { primitiveActorDescriptor } from "@/features/actors/descriptors/primitiveActor";
 
 function createKernelStub(): AppKernel {
@@ -18,7 +19,7 @@ function createKernelStub(): AppKernel {
       listPlugins: () => []
     } as unknown as AppKernel["pluginApi"],
     descriptorRegistry: {
-      listByKind: () => [cameraPathActorDescriptor, curveActorDescriptor, gaussianSplatSparkActorDescriptor, primitiveActorDescriptor]
+      listByKind: () => [cameraPathActorDescriptor, curveActorDescriptor, gaussianSplatSparkActorDescriptor, mistVolumeActorDescriptor, primitiveActorDescriptor]
     } as unknown as AppKernel["descriptorRegistry"],
     clock: {} as AppKernel["clock"]
   };
@@ -98,5 +99,23 @@ describe("actorCatalog camera path creation", () => {
     expect(actor?.actorType).toBe("gaussian-splat-spark");
     expect(actor?.params.stochasticDepth).toBe(false);
     expect(actor?.params.opacity).toBe(1);
+  });
+
+  it("seeds new mist volume actors with preview and render-quality defaults", () => {
+    const kernel = createKernelStub();
+
+    const actorId = createActorFromDescriptor(kernel, "actor.mistVolume");
+    expect(actorId).toBeTruthy();
+
+    const actor = actorId ? kernel.store.getState().state.actors[actorId] : null;
+    expect(actor?.actorType).toBe("mist-volume");
+    expect(actor?.params.volumeActorId).toBe("");
+    expect(actor?.params.resolutionX).toBe(32);
+    expect(actor?.params.emissionDirection).toEqual([0, -1, 0]);
+    expect(actor?.params.previewMode).toBe("volume");
+    expect(actor?.params.slicePosition).toBe(0.5);
+    expect(actor?.params.previewRaymarchSteps).toBe(48);
+    expect(actor?.params.renderOverrideEnabled).toBe(false);
+    expect(actor?.params.renderResolutionX).toBe(64);
   });
 });
