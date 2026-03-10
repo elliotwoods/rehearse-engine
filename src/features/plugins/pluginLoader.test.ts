@@ -23,5 +23,13 @@ describe("resolvePluginModuleSpecifier", () => {
       "/plugins/thread-spindle-plugin/dist/index.js"
     );
   });
-});
 
+  it("appends a cache-busting token when provided", () => {
+    const resolved = resolvePluginModuleSpecifier(
+      "file:///C:/dev/simularca/plugins-local/thread-spindle-plugin/dist/index.js",
+      "http:",
+      123
+    );
+    expect(resolved).toBe("/@fs/C:/dev/simularca/plugins-local/thread-spindle-plugin/dist/index.js?v=123");
+  });
+});

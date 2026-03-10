@@ -6,6 +6,7 @@ import { createActorFromDescriptor, listActorCreationOptions } from "@/features/
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import { keyboardCommandRouter } from "@/app/keyboardCommandRouter";
+import { usePluginRegistryRevision } from "@/features/plugins/usePluginRegistryRevision";
 
 interface AddActorMenuProps {
   disabled?: boolean;
@@ -65,12 +66,13 @@ function getSearchRank(
 
 export function AddActorMenu(props: AddActorMenuProps) {
   const kernel = useKernel();
+  const pluginRegistryRevision = usePluginRegistryRevision();
   const mode = useAppStore((store) => store.state.mode);
   const pluginCount = kernel.pluginApi.listPlugins().length;
   const actorDescriptorCount = kernel.descriptorRegistry.listByKind("actor").length;
   const options = useMemo(
     () => listActorCreationOptions(kernel),
-    [kernel, pluginCount, actorDescriptorCount]
+    [kernel, pluginCount, actorDescriptorCount, pluginRegistryRevision]
   );
   const [open, setOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");

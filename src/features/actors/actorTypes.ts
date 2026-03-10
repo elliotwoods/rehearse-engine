@@ -95,6 +95,16 @@ export const MIST_VOLUME_ACTOR_SCHEMA: ParameterSchema = {
       description: "Reference a cube primitive actor to define the mist simulation bounds."
     },
     {
+      key: "simulationBackendMode",
+      label: "Simulation Backend",
+      type: "select",
+      groupKey: "volume",
+      groupLabel: "Volume",
+      options: ["auto", "cpu", "gpu"],
+      description: "Backend preference for timestep simulation. Auto uses GPU on supported WebGL2 systems and falls back to CPU otherwise.",
+      defaultValue: "auto"
+    },
+    {
       key: "sourceActorIds",
       label: "Emitter Sources",
       type: "actor-ref-list",

@@ -11,7 +11,7 @@ import {
 } from "@/features/camera/cycleTween";
 import { registerCoreActorDescriptors, setupActorHotReload } from "@/features/actors/registerCoreActors";
 import { importFileAsActor, listCompatibleActorFileImportOptions, type ActorFileImportOption } from "@/features/imports/actorFileImport";
-import { discoverAndLoadLocalPlugins, formatPluginDiscoverySummary } from "@/features/plugins/discovery";
+import { discoverAndLoadLocalPlugins, formatPluginDiscoverySummary, startLocalPluginAutoReload } from "@/features/plugins/discovery";
 import { FlexLayoutHost } from "@/ui/FlexLayoutHost";
 import { TopBarPanel } from "@/ui/panels/TopBarPanel";
 import { TitleBarPanel } from "@/ui/panels/TitleBarPanel";
@@ -30,8 +30,11 @@ import {
 import { computeFrameCount, frameSimTime } from "@/features/render/timeline";
 import { solveRenderCamera } from "@/features/render/cameraSolver";
 import { canvasToPngBytes, createRenderExporter } from "@/features/render/exporters";
+import { createQueuedRenderExporter } from "@/features/render/queuedExporter";
 import { WebGlViewport } from "@/render/webglRenderer";
 import { WebGpuViewport } from "@/render/webgpuRenderer";
+
+const RENDER_QUEUE_BUDGET_BYTES = 512 * 1024 * 1024;
 
 function dataTransferHasFiles(dataTransfer: DataTransfer | null): boolean {
   if (!dataTransfer) {
@@ -112,6 +115,7 @@ export function App() {
   const [renderOverlayOpen, setRenderOverlayOpen] = useState(false);
   const [renderProgress, setRenderProgress] = useState<RenderProgress | null>(null);
   const renderHostElRef = useRef<HTMLDivElement | null>(null);
+  const renderPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [mainViewportSuspended, setMainViewportSuspended] = useState(false);
   const renderCancelRequestedRef = useRef(false);
   const activeProjectName = useAppStore((store) => store.state.activeProjectName);
@@ -345,6 +349,40 @@ export function App() {
   const handleRenderHostReady = useCallback((el: HTMLDivElement | null) => {
     renderHostElRef.current = el;
   }, []);
+  const handleRenderPreviewReady = useCallback((el: HTMLCanvasElement | null) => {
+    renderPreviewCanvasRef.current = el;
+  }, []);
+
+  const drawRenderPreview = useCallback((sourceCanvas: HTMLCanvasElement) => {
+    const previewCanvas = renderPreviewCanvasRef.current;
+    if (!previewCanvas) {
+      return;
+    }
+    const displayWidth = Math.max(1, previewCanvas.clientWidth);
+    const displayHeight = Math.max(1, previewCanvas.clientHeight);
+    const devicePixelRatio = Math.max(1, window.devicePixelRatio || 1);
+    const targetWidth = Math.max(1, Math.round(displayWidth * devicePixelRatio));
+    const targetHeight = Math.max(1, Math.round(displayHeight * devicePixelRatio));
+    if (previewCanvas.width !== targetWidth || previewCanvas.height !== targetHeight) {
+      previewCanvas.width = targetWidth;
+      previewCanvas.height = targetHeight;
+    }
+    const context = previewCanvas.getContext("2d");
+    if (!context) {
+      return;
+    }
+    context.clearRect(0, 0, targetWidth, targetHeight);
+    context.fillStyle = "#02070e";
+    context.fillRect(0, 0, targetWidth, targetHeight);
+    const scale = Math.min(targetWidth / sourceCanvas.width, targetHeight / sourceCanvas.height);
+    const drawWidth = Math.max(1, sourceCanvas.width * scale);
+    const drawHeight = Math.max(1, sourceCanvas.height * scale);
+    const offsetX = (targetWidth - drawWidth) * 0.5;
+    const offsetY = (targetHeight - drawHeight) * 0.5;
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(sourceCanvas, offsetX, offsetY, drawWidth, drawHeight);
+  }, []);
 
   const cameraPathActors = useMemo(
     () =>
@@ -368,15 +406,52 @@ export function App() {
       const internalHeight = settings.height * settings.supersampleScale;
       const warmupStepRate = Math.max(30, Math.min(60, settings.fps));
       const warmupStepCount = Math.max(0, Math.ceil(settings.preRunSeconds * warmupStepRate));
+      const renderFrameCount = computeFrameCount(effectiveDurationSeconds, settings.fps);
+      const overallUnitsTotal = Math.max(1, warmupStepCount + renderFrameCount * 2);
       setRenderModalOpen(false);
       setRenderOverlayOpen(true);
       setMainViewportSuspended(true);
       renderCancelRequestedRef.current = false;
-      setRenderProgress({
-        frameIndex: 0,
-        frameCount: Math.max(1, warmupStepCount + computeFrameCount(effectiveDurationSeconds, settings.fps)),
-        message: "Preparing..."
-      });
+      let renderedFrameCount = 0;
+      let writtenFrameCount = 0;
+      let queuedBytes = 0;
+      let latestPhase: RenderProgress["phase"] = "prepare";
+      let latestPhaseIndex = 0;
+      let latestPhaseCount = Math.max(1, warmupStepCount || renderFrameCount || 1);
+      let latestMessage = "Preparing...";
+      const pushProgress = (
+        patch?: Partial<Pick<RenderProgress, "phase" | "phaseIndex" | "phaseCount" | "message">>
+      ) => {
+        if (patch?.phase) {
+          latestPhase = patch.phase;
+        }
+        if (typeof patch?.phaseIndex === "number") {
+          latestPhaseIndex = patch.phaseIndex;
+        }
+        if (typeof patch?.phaseCount === "number") {
+          latestPhaseCount = patch.phaseCount;
+        }
+        if (typeof patch?.message === "string") {
+          latestMessage = patch.message;
+        }
+        setRenderProgress({
+          phase: latestPhase,
+          phaseIndex: latestPhaseIndex,
+          phaseCount: latestPhaseCount,
+          renderFrameCountTotal: renderFrameCount,
+          renderedFrameCount,
+          writtenFrameCount,
+          queuedBytes,
+          queueBudgetBytes: RENDER_QUEUE_BUDGET_BYTES,
+          overallUnitsCompleted: Math.min(
+            overallUnitsTotal,
+            Math.max(0, latestPhase === "pre-run" ? latestPhaseIndex : warmupStepCount) + renderedFrameCount + writtenFrameCount
+          ),
+          overallUnitsTotal,
+          message: latestMessage
+        });
+      };
+      pushProgress();
       let viewport: { start(): Promise<void>; stop(): void } | null = null;
       let exporter: { abort(): Promise<void> } | null = null;
       try {
@@ -397,22 +472,37 @@ export function App() {
                 antialias: sceneAntialiasing,
                 qualityMode: "export",
                 showDebugHelpers: settings.showDebugViews,
-                editorOverlays: false
+                editorOverlays: false,
+                viewportSize: {
+                  width: internalWidth,
+                  height: internalHeight
+                }
               })
             : new WebGpuViewport(kernel, hostEl, {
                 antialias: sceneAntialiasing,
                 qualityMode: "export",
                 showDebugHelpers: settings.showDebugViews,
-                editorOverlays: false
+                editorOverlays: false,
+                viewportSize: {
+                  width: internalWidth,
+                  height: internalHeight
+                }
               });
         await viewport.start();
-        const frameCount = computeFrameCount(effectiveDurationSeconds, settings.fps);
         const startTime = settings.startTimeMode === "zero" ? 0 : previousTime.elapsedSimSeconds;
         const simulationStartTime = startTime + settings.preRunSeconds;
-        const writeExporter = await createRenderExporter(settings, {
+        const baseExporter = await createRenderExporter(settings, {
           projectName: activeProjectName
         });
-        exporter = writeExporter;
+        const queuedExporter = createQueuedRenderExporter(baseExporter, {
+          queueBudgetBytes: RENDER_QUEUE_BUDGET_BYTES,
+          onStateChange: (state) => {
+            writtenFrameCount = state.writtenFrameCount;
+            queuedBytes = state.queuedBytes;
+            pushProgress();
+          }
+        });
+        exporter = queuedExporter;
         kernel.store.getState().actions.setTimeRunning(false);
         kernel.store.getState().actions.setTimeSpeed(1);
 
@@ -425,18 +515,23 @@ export function App() {
             const simTime = startTime + settings.preRunSeconds * alpha;
             kernel.store.getState().actions.setElapsedSimSeconds(simTime);
             kernel.store.getState().actions.setCameraState(previousCamera, false);
-            setRenderProgress({
-              frameIndex: warmupIndex,
-              frameCount: warmupStepCount + frameCount,
+            pushProgress({
+              phase: "pre-run",
+              phaseIndex: warmupIndex + 1,
+              phaseCount: warmupStepCount,
               message: "Pre-running simulation..."
             });
             await nextAnimationFrame();
+            const previewCanvas = hostEl.querySelector("canvas");
+            if (previewCanvas instanceof HTMLCanvasElement) {
+              drawRenderPreview(previewCanvas);
+            }
           }
           await nextAnimationFrame();
           await nextAnimationFrame();
         }
 
-        for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
+        for (let frameIndex = 0; frameIndex < renderFrameCount; frameIndex += 1) {
           if (renderCancelRequestedRef.current) {
             throw new Error("Render cancelled.");
           }
@@ -449,9 +544,10 @@ export function App() {
             settings.cameraPathId
           );
           kernel.store.getState().actions.setCameraState(nextCamera, false);
-          setRenderProgress({
-            frameIndex: warmupStepCount + frameIndex,
-            frameCount: warmupStepCount + frameCount,
+          pushProgress({
+            phase: "render",
+            phaseIndex: frameIndex + 1,
+            phaseCount: renderFrameCount,
             message: "Rendering frame..."
           });
           await nextAnimationFrame();
@@ -460,18 +556,27 @@ export function App() {
           if (!(canvas instanceof HTMLCanvasElement)) {
             throw new Error("Render canvas is unavailable.");
           }
+          drawRenderPreview(canvas);
           const bytes = await canvasToPngBytes(canvas, {
             width: settings.width,
             height: settings.height
           });
-          await writeExporter.writeFrame(bytes, frameIndex);
-          setRenderProgress({
-            frameIndex: warmupStepCount + frameIndex,
-            frameCount: warmupStepCount + frameCount,
-            message: "Writing frame..."
+          renderedFrameCount = frameIndex + 1;
+          pushProgress({
+            phase: "render",
+            phaseIndex: renderedFrameCount,
+            phaseCount: renderFrameCount,
+            message: "Queueing frame for output..."
           });
+          await queuedExporter.enqueueFrame(bytes, frameIndex);
         }
-        const result = await writeExporter.finalize();
+        pushProgress({
+          phase: "drain",
+          phaseIndex: writtenFrameCount,
+          phaseCount: renderFrameCount,
+          message: "Draining output queue..."
+        });
+        const result = await queuedExporter.finalize();
         kernel.store.getState().actions.setStatus(`Render finished. ${result.summary}`);
         viewport.stop();
         viewport = null;
@@ -494,7 +599,7 @@ export function App() {
         setRenderProgress(null);
       }
     },
-    [activeProjectName, cameraPathActors, kernel, sceneAntialiasing, sceneRenderEngine]
+    [activeProjectName, cameraPathActors, drawRenderPreview, kernel, sceneAntialiasing, sceneRenderEngine]
   );
 
   useEffect(() => {
@@ -525,6 +630,13 @@ export function App() {
     return () => {
       unsubscribe();
     };
+  }, [kernel]);
+
+  useEffect(() => {
+    if (!window.electronAPI) {
+      return;
+    }
+    return startLocalPluginAutoReload(kernel);
   }, [kernel]);
 
   useEffect(() => {
@@ -895,6 +1007,7 @@ export function App() {
         open={renderOverlayOpen}
         progress={renderProgress}
         onHostReady={handleRenderHostReady}
+        onPreviewReady={handleRenderPreviewReady}
         onCancel={() => {
           renderCancelRequestedRef.current = true;
         }}

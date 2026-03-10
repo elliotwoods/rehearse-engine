@@ -153,6 +153,7 @@ export function createActorFromDescriptor(kernel: AppKernel, descriptorId: strin
   if (descriptorId === "actor.mistVolume") {
     kernel.store.getState().actions.updateActorParams(actorId, {
       volumeActorId: "",
+      simulationBackendMode: "auto",
       sourceActorIds: [],
       resolutionX: 32,
       resolutionY: 24,

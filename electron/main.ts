@@ -253,12 +253,12 @@ function getAssetDirectory(projectName: string, kind: ProjectAssetRef["kind"]): 
   return path.join(getProjectDirectory(projectName), "assets", kind);
 }
 
-async function discoverLocalPlugins(): Promise<Array<{ modulePath: string; sourceGroup: "plugins-local" | "plugins" }>> {
+async function discoverLocalPlugins(): Promise<Array<{ modulePath: string; sourceGroup: "plugins-local" | "plugins"; updatedAtMs: number }>> {
   const roots: Array<{ sourceGroup: "plugins-local" | "plugins"; directory: string }> = [
     { sourceGroup: "plugins-local", directory: path.join(getRepoRoot(), "plugins-local") },
     { sourceGroup: "plugins", directory: path.join(getRepoRoot(), "plugins") }
   ];
-  const discovered: Array<{ modulePath: string; sourceGroup: "plugins-local" | "plugins" }> = [];
+  const discovered: Array<{ modulePath: string; sourceGroup: "plugins-local" | "plugins"; updatedAtMs: number }> = [];
   for (const root of roots) {
     try {
       const entries = await fs.readdir(root.directory, { withFileTypes: true });
@@ -269,10 +269,11 @@ async function discoverLocalPlugins(): Promise<Array<{ modulePath: string; sourc
       for (const childName of directories) {
         const builtEntry = path.join(root.directory, childName, "dist", "index.js");
         try {
-          await fs.access(builtEntry);
+          const stat = await fs.stat(builtEntry);
           discovered.push({
             modulePath: `file:///${builtEntry.replaceAll("\\", "/")}`,
-            sourceGroup: root.sourceGroup
+            sourceGroup: root.sourceGroup,
+            updatedAtMs: stat.mtimeMs
           });
         } catch {
           // Ignore entries without built output.

@@ -6,6 +6,7 @@ interface PluginsModalProps {
   loading: boolean;
   lastRefreshSummary: string | null;
   onRefresh: () => void;
+  onRefreshPlugin: (pluginId: string) => void;
   onClose: () => void;
 }
 
@@ -34,8 +35,23 @@ export function PluginsModal(props: PluginsModalProps) {
             {props.plugins.map((entry) => (
               <li key={entry.definition.id} className="plugins-modal-item">
                 <div className="plugins-modal-item-main">
-                  <strong>{entry.manifest?.name ?? entry.definition.name}</strong>
-                  <span>{entry.manifest?.version ?? "unknown version"}</span>
+                  <div className="plugins-modal-item-copy">
+                    <strong>{entry.manifest?.name ?? entry.definition.name}</strong>
+                    <span>{entry.manifest?.version ?? "unknown version"}</span>
+                  </div>
+                  <div className="plugins-modal-item-actions">
+                    {Date.now() - Date.parse(entry.lastLoadedAtIso) < 15000 ? (
+                      <span className="plugins-modal-rebuilt-indicator">Just rebuilt</span>
+                    ) : null}
+                    <button
+                      type="button"
+                      className="plugins-modal-refresh"
+                      title="Reload this plugin"
+                      onClick={() => props.onRefreshPlugin(entry.definition.id)}
+                    >
+                      Refresh
+                    </button>
+                  </div>
                 </div>
                 <small>{entry.source?.modulePath ?? "unknown path"}</small>
               </li>
@@ -46,4 +62,3 @@ export function PluginsModal(props: PluginsModalProps) {
     </div>
   );
 }
-

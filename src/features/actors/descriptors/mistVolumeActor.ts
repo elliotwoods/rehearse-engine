@@ -67,6 +67,18 @@ export const mistVolumeActorDescriptor: ReloadableDescriptor<MistVolumeRuntime> 
           ]
         },
         {
+          label: "Backend Preference",
+          value:
+            runtimeStatus?.values.simulationBackendPreference ??
+            (actor.params.simulationBackendMode === "cpu" || actor.params.simulationBackendMode === "gpu"
+              ? actor.params.simulationBackendMode
+              : "auto")
+        },
+        {
+          label: "Simulation Backend",
+          value: runtimeStatus?.values.simulationBackend ?? "cpu"
+        },
+        {
           label: "Render Override",
           value: actor.params.renderOverrideEnabled === true
         },

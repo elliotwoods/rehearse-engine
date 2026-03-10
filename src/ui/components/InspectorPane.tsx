@@ -18,6 +18,7 @@ import {
 } from "@fortawesome/free-solid-svg-icons";
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
+import { usePluginRegistryRevision } from "@/features/plugins/usePluginRegistryRevision";
 import { DEFAULT_POST_PROCESSING } from "@/core/defaults";
 import type {
   ActorNode,
@@ -1881,6 +1882,7 @@ function ComponentSelectionInspectorView(props: ComponentSelectionInspectorViewP
 
 export function InspectorPane() {
   const kernel = useKernel();
+  usePluginRegistryRevision();
   const appState = useAppStore((store) => store.state);
   const selection = appState.selection;
   const actors = appState.actors;

@@ -58,6 +58,7 @@ export interface DirectoryDialogArgs {
 export interface LocalPluginCandidate {
   modulePath: string;
   sourceGroup: "plugins-local" | "plugins";
+  updatedAtMs: number;
 }
 
 export interface ElectronApi {

@@ -19,6 +19,12 @@ export class DescriptorRegistry {
     };
   }
 
+  public unregister(id: string): ReloadableDescriptor | undefined {
+    const previous = this.descriptors.get(id);
+    this.descriptors.delete(id);
+    return previous;
+  }
+
   public get(id: string): ReloadableDescriptor | undefined {
     return this.descriptors.get(id);
   }

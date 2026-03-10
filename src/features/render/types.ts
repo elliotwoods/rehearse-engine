@@ -3,6 +3,7 @@ export type RenderCaptureStrategy = "pipe" | "temp-folder";
 export type RenderStartTimeMode = "current" | "zero";
 export type RenderResolutionPreset = "custom" | "fhd" | "4k" | "8k" | "8k2k";
 export type RenderSupersampleScale = 1 | 2 | 4;
+export type RenderProgressPhase = "prepare" | "pre-run" | "render" | "write" | "drain";
 
 export interface RenderCameraPathOption {
   id: string;
@@ -26,7 +27,15 @@ export interface RenderSettings {
 }
 
 export interface RenderProgress {
-  frameIndex: number;
-  frameCount: number;
+  phase: RenderProgressPhase;
+  phaseIndex: number;
+  phaseCount: number;
+  renderFrameCountTotal: number;
+  renderedFrameCount: number;
+  writtenFrameCount: number;
+  queuedBytes: number;
+  queueBudgetBytes: number;
+  overallUnitsCompleted: number;
+  overallUnitsTotal: number;
   message: string;
 }

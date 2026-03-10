@@ -5,12 +5,13 @@ interface RenderOverlayProps {
   open: boolean;
   progress: RenderProgress | null;
   onHostReady: (host: HTMLDivElement | null) => void;
+  onPreviewReady: (canvas: HTMLCanvasElement | null) => void;
   onCancel: () => void;
 }
 
 function formatDuration(valueMs: number | null): string {
   if (valueMs === null || !Number.isFinite(valueMs)) {
-    return "Estimating...";
+    return "estimating";
   }
   const totalSeconds = Math.max(0, Math.round(valueMs / 1000));
   const hours = Math.floor(totalSeconds / 3600);
@@ -22,8 +23,36 @@ function formatDuration(valueMs: number | null): string {
   return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
 }
 
-export function RenderOverlay({ open, progress, onHostReady, onCancel }: RenderOverlayProps) {
+function formatQueuedBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 MB";
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(bytes >= 100 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+
+function progressLabel(progress: RenderProgress | null): string {
+  if (!progress) {
+    return "Starting render...";
+  }
+  const phaseIndex = Math.min(progress.phaseIndex, progress.phaseCount);
+  if (progress.phase === "pre-run") {
+    return `Pre-run frame ${phaseIndex} / ${progress.phaseCount}`;
+  }
+  if (progress.phase === "render") {
+    return `Render frame ${phaseIndex} / ${progress.phaseCount}`;
+  }
+  if (progress.phase === "write") {
+    return `Writing frame ${phaseIndex} / ${progress.phaseCount}`;
+  }
+  if (progress.phase === "drain") {
+    return `Draining output queue (${progress.writtenFrameCount} / ${progress.phaseCount})`;
+  }
+  return "Preparing render...";
+}
+
+export function RenderOverlay({ open, progress, onHostReady, onPreviewReady, onCancel }: RenderOverlayProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const previewRef = useRef<HTMLCanvasElement | null>(null);
   const startedAtMsRef = useRef<number | null>(null);
   const [nowMs, setNowMs] = useState(() => performance.now());
 
@@ -33,6 +62,13 @@ export function RenderOverlay({ open, progress, onHostReady, onCancel }: RenderO
       onHostReady(null);
     };
   }, [onHostReady, open]);
+
+  useEffect(() => {
+    onPreviewReady(open ? previewRef.current : null);
+    return () => {
+      onPreviewReady(null);
+    };
+  }, [onPreviewReady, open]);
 
   useEffect(() => {
     if (!open) {
@@ -60,9 +96,10 @@ export function RenderOverlay({ open, progress, onHostReady, onCancel }: RenderO
     return null;
   }
 
-  const frameIndex = progress ? Math.min(progress.frameIndex + 1, progress.frameCount) : 0;
-  const frameCount = progress?.frameCount ?? 0;
-  const ratio = frameCount > 0 ? Math.max(0, Math.min(1, frameIndex / frameCount)) : 0;
+  const overallUnitsCompleted = progress?.overallUnitsCompleted ?? 0;
+  const overallUnitsTotal = progress?.overallUnitsTotal ?? 0;
+  const ratio =
+    overallUnitsTotal > 0 ? Math.max(0, Math.min(1, overallUnitsCompleted / overallUnitsTotal)) : 0;
   const startedAtMs = startedAtMsRef.current;
   const elapsedMs = startedAtMs === null ? 0 : Math.max(0, nowMs - startedAtMs);
   const estimatedTotalMs = ratio > 0 ? elapsedMs / ratio : null;
@@ -77,16 +114,30 @@ export function RenderOverlay({ open, progress, onHostReady, onCancel }: RenderO
             Cancel
           </button>
         </header>
-        <div className="render-overlay-canvas-host" ref={hostRef} />
+        <div className="render-overlay-preview-panel">
+          <canvas className="render-overlay-preview-canvas" ref={previewRef} />
+          <div className="render-overlay-render-host" ref={hostRef} aria-hidden="true" />
+        </div>
         <footer>
           <div className="render-overlay-progress-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={ratio * 100}>
             <span style={{ width: `${ratio * 100}%` }} />
           </div>
-          {progress ? <p>Frame {frameIndex} / {frameCount}</p> : <p>Starting render...</p>}
+          <p>{progressLabel(progress)}</p>
           <p>Status: {progress?.message ?? "Preparing..."}</p>
-          <p>Time Spent: {formatDuration(elapsedMs)}</p>
-          <p>Time Remaining (est): {formatDuration(estimatedRemainingMs)}</p>
-          <p>Time Total (est): {formatDuration(estimatedTotalMs)}</p>
+          {progress ? (
+            <p>
+              Output {progress.writtenFrameCount} / {progress.renderFrameCountTotal}
+              {" · "}
+              Queue {formatQueuedBytes(progress.queuedBytes)} / {formatQueuedBytes(progress.queueBudgetBytes)}
+            </p>
+          ) : null}
+          <p>
+            Time {formatDuration(elapsedMs)} elapsed
+            {" · "}
+            {formatDuration(estimatedRemainingMs)} remaining
+            {" · "}
+            {formatDuration(estimatedTotalMs)} total
+          </p>
         </footer>
       </div>
     </div>

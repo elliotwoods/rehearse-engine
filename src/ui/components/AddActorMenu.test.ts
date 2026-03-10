@@ -99,6 +99,8 @@ describe("AddActorMenu", () => {
         actorDescriptors: [pluginDescriptor],
         componentDescriptors: []
       },
+      lastLoadedAtIso: "2026-03-09T00:00:00.000Z",
+      reloadCount: 0,
       manifest: {
         handshakeVersion: 1,
         id: "spark-plugin",

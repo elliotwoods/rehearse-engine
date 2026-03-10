@@ -4,12 +4,14 @@ import type { LocalPluginCandidate } from "@/types/ipc";
 
 export interface PluginDiscoveryReport {
   discovered: LocalPluginCandidate[];
-  loadedCount: number;
+  addedCount: number;
+  reloadedCount: number;
   failed: Array<{ modulePath: string; error: string }>;
 }
 
 export function formatPluginDiscoverySummary(report: PluginDiscoveryReport): string {
-  const base = `Discovered ${report.discovered.length}, loaded ${report.loadedCount}, failed ${report.failed.length}.`;
+  const loadedCount = report.addedCount + report.reloadedCount;
+  const base = `Discovered ${report.discovered.length}, loaded ${loadedCount} (${report.addedCount} new, ${report.reloadedCount} reloaded), failed ${report.failed.length}.`;
   const firstFailure = report.failed[0];
   if (!firstFailure) {
     return base;
@@ -31,23 +33,41 @@ function toMessage(error: unknown): string {
   }
 }
 
-export async function discoverAndLoadLocalPlugins(kernel: AppKernel): Promise<PluginDiscoveryReport> {
+export async function discoverLocalPluginCandidates(): Promise<LocalPluginCandidate[]> {
   if (!window.electronAPI) {
-    return {
-      discovered: [],
-      loadedCount: 0,
-      failed: []
-    };
+    return [];
   }
-  const discovered = await window.electronAPI.discoverLocalPlugins();
-  let loadedCount = 0;
+  return await window.electronAPI.discoverLocalPlugins();
+}
+
+export async function loadLocalPluginCandidates(
+  kernel: AppKernel,
+  candidates: LocalPluginCandidate[]
+): Promise<PluginDiscoveryReport> {
+  let addedCount = 0;
+  let reloadedCount = 0;
   const failed: Array<{ modulePath: string; error: string }> = [];
-  for (const candidate of discovered) {
+  for (const candidate of candidates) {
     try {
-      await loadPluginFromModule(kernel, candidate.modulePath, {
-        sourceGroup: candidate.sourceGroup
-      });
-      loadedCount += 1;
+      const existing = kernel.pluginApi.getPluginByModulePath(candidate.modulePath);
+      await loadPluginFromModule(
+        kernel,
+        candidate.modulePath,
+        {
+          sourceGroup: candidate.sourceGroup,
+          updatedAtMs: candidate.updatedAtMs
+        },
+        existing
+          ? {
+              cacheBustToken: candidate.updatedAtMs
+            }
+          : undefined
+      );
+      if (existing) {
+        reloadedCount += 1;
+      } else {
+        addedCount += 1;
+      }
     } catch (error) {
       failed.push({
         modulePath: candidate.modulePath,
@@ -56,8 +76,83 @@ export async function discoverAndLoadLocalPlugins(kernel: AppKernel): Promise<Pl
     }
   }
   return {
-    discovered,
-    loadedCount,
+    discovered: candidates,
+    addedCount,
+    reloadedCount,
     failed
+  };
+}
+
+export async function discoverAndLoadLocalPlugins(kernel: AppKernel): Promise<PluginDiscoveryReport> {
+  const discovered = await discoverLocalPluginCandidates();
+  return await loadLocalPluginCandidates(kernel, discovered);
+}
+
+export function startLocalPluginAutoReload(
+  kernel: AppKernel,
+  options: {
+    intervalMs?: number;
+  } = {}
+): () => void {
+  if (!window.electronAPI) {
+    return () => {};
+  }
+  const intervalMs = Math.max(500, Math.floor(options.intervalMs ?? 1500));
+  const seenBuildTimes = new Map<string, number>();
+  let disposed = false;
+  let inFlight = false;
+
+  const tick = async () => {
+    if (disposed || inFlight) {
+      return;
+    }
+    inFlight = true;
+    try {
+      const candidates = await discoverLocalPluginCandidates();
+      for (const candidate of candidates) {
+        const previousUpdatedAtMs = seenBuildTimes.get(candidate.modulePath);
+        const existing = kernel.pluginApi.getPluginByModulePath(candidate.modulePath);
+        if (previousUpdatedAtMs === undefined) {
+          seenBuildTimes.set(candidate.modulePath, candidate.updatedAtMs);
+          if (!existing) {
+            await loadLocalPluginCandidates(kernel, [candidate]);
+          }
+          continue;
+        }
+        if (candidate.updatedAtMs === previousUpdatedAtMs) {
+          continue;
+        }
+        seenBuildTimes.set(candidate.modulePath, candidate.updatedAtMs);
+        const report = await loadLocalPluginCandidates(kernel, [candidate]);
+        if (report.failed.length > 0) {
+          kernel.store.getState().actions.addLog({
+            level: "warn",
+            message: `Plugin auto-reload failed: ${candidate.modulePath}`,
+            details: report.failed[0]?.error
+          });
+          continue;
+        }
+        const plugin = kernel.pluginApi.getPluginByModulePath(candidate.modulePath);
+        const pluginName = plugin?.manifest?.name ?? plugin?.definition.name ?? candidate.modulePath;
+        kernel.store.getState().actions.addLog({
+          level: "info",
+          message: `Plugin rebuilt: ${pluginName}`
+        });
+        kernel.store.getState().actions.setStatus(`Plugin rebuilt: ${pluginName}`);
+      }
+    } catch {
+      // Keep dev session alive on discovery errors.
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const intervalId = window.setInterval(() => {
+    void tick();
+  }, intervalMs);
+
+  return () => {
+    disposed = true;
+    window.clearInterval(intervalId);
   };
 }

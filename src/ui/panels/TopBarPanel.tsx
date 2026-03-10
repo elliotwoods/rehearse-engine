@@ -16,12 +16,14 @@ import {
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import type { CameraPreset, TimeSpeedPreset } from "@/core/types";
-import { discoverAndLoadLocalPlugins, formatPluginDiscoverySummary } from "@/features/plugins/discovery";
+import { discoverAndLoadLocalPlugins, discoverLocalPluginCandidates, formatPluginDiscoverySummary } from "@/features/plugins/discovery";
 import { formatFramePacingLabel } from "@/render/framePacing";
 import { AddActorMenu } from "@/ui/components/AddActorMenu";
 import { PluginsModal } from "@/ui/components/PluginsModal";
 import { MaterialsModal } from "@/ui/components/MaterialsModal";
 import { DigitScrubInput } from "@/ui/widgets";
+import { usePluginRegistryRevision } from "@/features/plugins/usePluginRegistryRevision";
+import { loadPluginFromModule } from "@/features/plugins/pluginLoader";
 
 const SPEEDS: TimeSpeedPreset[] = [0.125, 0.25, 0.5, 1, 2, 4];
 const CAMERA_PRESETS: CameraPreset[] = ["perspective", "isometric", "top", "left", "front", "back"];
@@ -70,13 +72,13 @@ interface TopBarPanelProps {
 
 export function TopBarPanel(props: TopBarPanelProps) {
   const kernel = useKernel();
+  usePluginRegistryRevision();
   const state = useAppStore((store) => store.state);
   const [fpsHistory, setFpsHistory] = useState<number[]>([]);
   const [pluginsModalOpen, setPluginsModalOpen] = useState(false);
   const [materialsModalOpen, setMaterialsModalOpen] = useState(false);
   const [pluginsRefreshLoading, setPluginsRefreshLoading] = useState(false);
   const [pluginsRefreshSummary, setPluginsRefreshSummary] = useState<string | null>(null);
-  const [pluginsRevision, setPluginsRevision] = useState(0);
   const [fpsMenuOpen, setFpsMenuOpen] = useState(false);
   const [customTargetOpen, setCustomTargetOpen] = useState(false);
   const [customTargetDraft, setCustomTargetDraft] = useState("60");
@@ -226,14 +228,12 @@ export function TopBarPanel(props: TopBarPanelProps) {
     applyFramePacing("fixed", Math.max(1, Math.min(MAX_CUSTOM_TARGET_FPS, Math.round(parsed))));
   };
   const plugins = useMemo(() => {
-    void pluginsRevision;
     return kernel.pluginApi.listPlugins();
-  }, [kernel, pluginsRevision]);
+  }, [kernel, kernel.pluginApi]);
 
   const refreshPlugins = () => {
     if (!window.electronAPI) {
       setPluginsRefreshSummary("Plugin discovery is available in desktop mode only.");
-      setPluginsRevision((value) => value + 1);
       return;
     }
     setPluginsRefreshLoading(true);
@@ -250,7 +250,48 @@ export function TopBarPanel(props: TopBarPanelProps) {
       })
       .finally(() => {
         setPluginsRefreshLoading(false);
-        setPluginsRevision((value) => value + 1);
+      });
+  };
+
+  const refreshPlugin = (pluginId: string) => {
+    setPluginsRefreshLoading(true);
+    void Promise.resolve()
+      .then(async () => {
+        const plugin = kernel.pluginApi.listPlugins().find((entry) => entry.definition.id === pluginId);
+        const modulePath = plugin?.source?.modulePath;
+        if (!modulePath) {
+          throw new Error("Plugin source path is unavailable.");
+        }
+        const candidates = await discoverLocalPluginCandidates();
+        const candidate = candidates.find((entry) => entry.modulePath === modulePath);
+        await loadPluginFromModule(
+          kernel,
+          modulePath,
+          {
+            sourceGroup: candidate?.sourceGroup ?? plugin.source?.sourceGroup,
+            updatedAtMs: candidate?.updatedAtMs ?? plugin.source?.updatedAtMs
+          },
+          {
+            cacheBustToken: candidate?.updatedAtMs ?? Date.now()
+          }
+        );
+        return plugin.manifest?.name ?? plugin.definition.name;
+      })
+      .then(() => {
+        const pluginName = kernel.pluginApi.listPlugins().find((entry) => entry.definition.id === pluginId)?.manifest?.name
+          ?? kernel.pluginApi.listPlugins().find((entry) => entry.definition.id === pluginId)?.definition.name
+          ?? pluginId;
+        const summary = `Reloaded ${pluginName}.`;
+        setPluginsRefreshSummary(summary);
+        kernel.store.getState().actions.setStatus(summary);
+      })
+      .catch((error) => {
+        const message = error instanceof Error ? error.message : "Unknown plugin reload error";
+        setPluginsRefreshSummary(`Reload failed: ${message}`);
+        kernel.store.getState().actions.setStatus(`Plugin reload failed: ${message}`);
+      })
+      .finally(() => {
+        setPluginsRefreshLoading(false);
       });
   };
 
@@ -532,6 +573,7 @@ export function TopBarPanel(props: TopBarPanelProps) {
         loading={pluginsRefreshLoading}
         lastRefreshSummary={pluginsRefreshSummary}
         onRefresh={refreshPlugins}
+        onRefreshPlugin={refreshPlugin}
         onClose={() => setPluginsModalOpen(false)}
       />
     </div>

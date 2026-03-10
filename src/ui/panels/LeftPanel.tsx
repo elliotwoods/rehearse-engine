@@ -2,6 +2,7 @@ import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import { SceneTree } from "@/ui/components/SceneTree";
 import { AddActorMenu } from "@/ui/components/AddActorMenu";
+import { usePluginRegistryRevision } from "@/features/plugins/usePluginRegistryRevision";
 
 interface LeftPanelProps {
   pendingDropFileName?: string | null;
@@ -9,6 +10,7 @@ interface LeftPanelProps {
 
 export function LeftPanel(props: LeftPanelProps) {
   const kernel = useKernel();
+  usePluginRegistryRevision();
   const mode = useAppStore((store) => store.state.mode);
   const actorIds = useAppStore((store) => store.state.scene.actorIds);
   const actors = useAppStore((store) => store.state.actors);

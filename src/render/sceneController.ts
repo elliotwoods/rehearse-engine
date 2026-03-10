@@ -275,6 +275,7 @@ function extractPlyVertexPropertyNames(bytes: Uint8Array): Set<string> {
 export class SceneController {
   public readonly scene = new THREE.Scene();
   private readonly actorObjects = new Map<string, any>();
+  private readonly pluginDescriptorByActorId = new Map<string, ReloadableDescriptor | null>();
   private readonly gaussianAssetByActorId = new Map<string, string>();
   private readonly gaussianReloadTokenByActorId = new Map<string, number>();
   private readonly meshAssetByActorId = new Map<string, string>();
@@ -359,7 +360,7 @@ export class SceneController {
       if (!actorIds.has(existing)) {
         const object = this.actorObjects.get(existing);
         const removedActor = this.lastKnownActorById.get(existing) ?? null;
-        this.disposePluginSceneObject(removedActor, object);
+        this.disposePluginSceneObject(removedActor, object, this.pluginDescriptorByActorId.get(existing) ?? undefined);
         if (object) {
           object.parent?.remove(object);
         }
@@ -381,6 +382,7 @@ export class SceneController {
         this.gaussianSortableBatchesByActorId.delete(existing);
         this.curveSignatureByActorId.delete(existing);
         this.meshMaterialSigByActorId.delete(existing);
+        this.pluginDescriptorByActorId.delete(existing);
         this.kernel.store.getState().actions.setActorStatus(existing, null);
         this.primitiveSignatureByActorId.delete(existing);
         this.lastKnownActorById.delete(existing);
@@ -394,6 +396,8 @@ export class SceneController {
       const _ta1 = performance.now();
       await this.ensureActorObject(actor);
       const _ta2 = performance.now();
+      this.refreshPluginSceneObjectIfNeeded(actor);
+      const _ta2b = performance.now();
       this.syncActorParentAttachment(actor.id, actor.parentActorId);
       const _ta3 = performance.now();
       let _ta4 = _ta3, _ta5 = _ta3;
@@ -429,7 +433,8 @@ export class SceneController {
           "[simularca] actor slow:", actor.actorType, actor.id,
           "| clone:", (_ta1 - _ta0).toFixed(0), "ms",
           "| ensure:", (_ta2 - _ta1).toFixed(0), "ms",
-          "| parentAttach:", (_ta3 - _ta2).toFixed(0), "ms",
+          "| pluginRefresh:", (_ta2b - _ta2).toFixed(0), "ms",
+          "| parentAttach:", (_ta3 - _ta2b).toFixed(0), "ms",
           "| meshAsset:", (_ta4 - _ta3).toFixed(0), "ms",
           "| meshMat:", (_ta5 - _ta4).toFixed(0), "ms",
           "| transform:", (_ta6 - _ta5).toFixed(0), "ms",
@@ -466,6 +471,10 @@ export class SceneController {
         "envTex:", (performance.now() - tD).toFixed(0), "ms"
       );
     }
+  }
+
+  public setWebGlRenderer(renderer: THREE.WebGLRenderer | null): void {
+    this.mistVolumeController.setWebGlRenderer(renderer);
   }
 
   public getActorObject(actorId: string): any | null {
@@ -685,6 +694,25 @@ export class SceneController {
     }
   }
 
+  private refreshPluginSceneObjectIfNeeded(actor: ActorNode): void {
+    if (actor.actorType !== "plugin") {
+      return;
+    }
+    const descriptor = this.resolveActorDescriptor(actor);
+    const previousDescriptor = this.pluginDescriptorByActorId.get(actor.id);
+    if (descriptor === previousDescriptor) {
+      return;
+    }
+    const previousObject = this.actorObjects.get(actor.id);
+    this.disposePluginSceneObject(actor, previousObject, previousDescriptor ?? undefined);
+    if (previousObject) {
+      previousObject.parent?.remove(previousObject);
+    }
+    const nextObject = this.createPluginSceneObject(actor);
+    this.actorObjects.set(actor.id, nextObject);
+    this.pluginDescriptorByActorId.set(actor.id, descriptor);
+  }
+
   private syncActorParentAttachment(actorId: string, parentActorId: string | null): void {
     const object = this.actorObjects.get(actorId);
     if (!object) {
@@ -752,6 +780,9 @@ export class SceneController {
 
   private async createObjectForActor(actor: ActorNode): Promise<any> {
     const pluginCreated = this.createPluginSceneObject(actor);
+    if (actor.actorType === "plugin") {
+      this.pluginDescriptorByActorId.set(actor.id, this.resolveActorDescriptor(actor));
+    }
     if (pluginCreated) {
       return pluginCreated;
     }
@@ -1946,11 +1977,15 @@ export class SceneController {
     return null;
   }
 
-  private disposePluginSceneObject(actor: ActorNode | null, object: unknown): void {
+  private disposePluginSceneObject(
+    actor: ActorNode | null,
+    object: unknown,
+    descriptorOverride?: ReloadableDescriptor
+  ): void {
     if (!actor || !object) {
       return;
     }
-    const descriptor = this.resolveActorDescriptor(actor);
+    const descriptor = descriptorOverride ?? this.resolveActorDescriptor(actor);
     if (!descriptor?.sceneHooks?.disposeObject) {
       return;
     }

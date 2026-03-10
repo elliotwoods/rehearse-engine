@@ -3173,6 +3173,9 @@ body.is-scrubbing-number * {
 .plugins-modal-item {
   display: grid;
   gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid rgba(126, 163, 203, 0.12);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .plugins-modal-item-main {
@@ -3180,6 +3183,37 @@ body.is-scrubbing-number * {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.plugins-modal-item-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.plugins-modal-item-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plugins-modal-refresh {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.plugins-modal-item:hover .plugins-modal-refresh,
+.plugins-modal-item:focus-within .plugins-modal-refresh {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.plugins-modal-rebuilt-indicator {
+  color: #9ed0ff;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .plugins-modal-item small {
@@ -3283,12 +3317,12 @@ body.is-scrubbing-number * {
 
 .render-overlay {
   width: min(1280px, 96vw);
-  height: min(900px, 96vh);
+  height: min(1040px, 96vh);
   border: 1px solid var(--line-strong);
   background: #071220;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  gap: 8px;
+  grid-template-rows: auto minmax(420px, 1fr) auto;
+  gap: 10px;
   padding: 10px;
   overflow: hidden;
 }
@@ -3308,12 +3342,31 @@ body.is-scrubbing-number * {
   font-size: 12px;
 }
 
-.render-overlay-canvas-host {
+.render-overlay-preview-panel {
   min-width: 0;
-  min-height: 0;
+  min-height: 420px;
   border: 1px solid var(--line);
   background: #02070e;
-  overflow: auto;
+  overflow: hidden;
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.render-overlay-preview-canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  background: #02070e;
+}
+
+.render-overlay-render-host {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
 }
 
 .render-overlay footer p {
@@ -3326,6 +3379,9 @@ body.is-scrubbing-number * {
 .render-overlay footer {
   display: grid;
   gap: 6px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+  background: #071220;
 }
 
 .render-overlay-progress-bar {

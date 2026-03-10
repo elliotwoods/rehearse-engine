@@ -58,6 +58,7 @@ export class WebGpuViewport {
   private resizeObservedElements: HTMLElement[] = [];
   private readonly maxRenderDimension = 4096;
   private readonly isExportViewport: boolean;
+  private readonly fixedViewportSize: { width: number; height: number } | null;
   private previousMainRenderSample: RenderStatsSample | null = null;
   private readonly wheelZoomSpeed = 0.12;
   private readonly navigationKeysDown = new Set<string>();
@@ -67,32 +68,46 @@ export class WebGpuViewport {
   public constructor(
     private readonly kernel: AppKernel,
     private readonly mountEl: HTMLElement,
-    options: { antialias: boolean; qualityMode?: MistVolumeQualityMode; showDebugHelpers?: boolean; editorOverlays?: boolean }
+    options: {
+      antialias: boolean;
+      qualityMode?: MistVolumeQualityMode;
+      showDebugHelpers?: boolean;
+      editorOverlays?: boolean;
+      viewportSize?: { width: number; height: number };
+    }
   ) {
     if (!("gpu" in navigator)) {
       throw new Error("WebGPU is required by this application.");
     }
 
     this.isExportViewport = options.qualityMode === "export";
+    this.fixedViewportSize = options.viewportSize
+      ? {
+          width: Math.max(1, Math.round(options.viewportSize.width)),
+          height: Math.max(1, Math.round(options.viewportSize.height))
+        }
+      : null;
     this.sceneController = new SceneController(kernel, {
       qualityMode: options.qualityMode ?? "interactive",
       showDebugHelpers: options.showDebugHelpers ?? true
     });
     this.framePacer = new FramePacer(kernel.store.getState().state.scene.framePacing);
     this.renderer = new WebGPURenderer({ antialias: options.antialias, alpha: false });
-    this.applyRenderScale(this.mountEl.clientWidth, this.mountEl.clientHeight);
-    this.renderer.setSize(this.mountEl.clientWidth, this.mountEl.clientHeight);
+    const initialWidth = this.fixedViewportSize?.width ?? Math.max(1, this.mountEl.clientWidth);
+    const initialHeight = this.fixedViewportSize?.height ?? Math.max(1, this.mountEl.clientHeight);
+    this.applyRenderScale(initialWidth, initialHeight);
+    this.renderer.setSize(initialWidth, initialHeight);
     this.mountEl.appendChild(this.renderer.domElement);
 
     this.perspectiveCamera = new THREE.PerspectiveCamera(
       50,
-      this.mountEl.clientWidth / this.mountEl.clientHeight,
+      initialWidth / initialHeight,
       0.01,
       1000
     );
     this.perspectiveCamera.position.set(6, 4, 6);
 
-    const aspect = this.mountEl.clientWidth / this.mountEl.clientHeight;
+    const aspect = initialWidth / initialHeight;
     const orthoSize = 8;
     this.orthographicCamera = new THREE.OrthographicCamera(
       -orthoSize * aspect,
@@ -153,13 +168,15 @@ export class WebGpuViewport {
     }
     this.initialized = true;
     this.onResize();
-    window.addEventListener("resize", this.onResize);
-    this.resizeObserver = new ResizeObserver(() => {
-      this.onResize();
-    });
-    this.resizeObservedElements = this.collectResizeObservedElements();
-    for (const element of this.resizeObservedElements) {
-      this.resizeObserver.observe(element);
+    if (!this.fixedViewportSize) {
+      window.addEventListener("resize", this.onResize);
+      this.resizeObserver = new ResizeObserver(() => {
+        this.onResize();
+      });
+      this.resizeObservedElements = this.collectResizeObservedElements();
+      for (const element of this.resizeObservedElements) {
+        this.resizeObserver.observe(element);
+      }
     }
     this.animate();
   }
@@ -385,6 +402,9 @@ export class WebGpuViewport {
   }
 
   private getEffectiveViewportSize(): { width: number; height: number } {
+    if (this.fixedViewportSize) {
+      return this.fixedViewportSize;
+    }
     const elements = this.resizeObservedElements.length > 0 ? this.resizeObservedElements : [this.mountEl];
     const measurementElements = elements.length > 1 ? elements.slice(1) : elements;
     let width = Number.POSITIVE_INFINITY;

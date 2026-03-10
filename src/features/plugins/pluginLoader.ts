@@ -3,6 +3,11 @@ import type { AppKernel } from "@/app/kernel";
 
 export interface PluginLoadSource {
   sourceGroup?: "plugins-local" | "plugins" | "manual";
+  updatedAtMs?: number;
+}
+
+export interface PluginLoadOptions {
+  cacheBustToken?: string | number;
 }
 
 function shouldNormalizeFileUrlForDev(runtimeProtocol?: string): boolean {
@@ -23,21 +28,33 @@ function normalizeWindowsDrivePath(pathname: string): string {
   return pathname;
 }
 
-export function resolvePluginModuleSpecifier(modulePath: string, runtimeProtocol?: string): string {
+function appendCacheBust(specifier: string, cacheBustToken?: string | number): string {
+  if (cacheBustToken === undefined || cacheBustToken === null || cacheBustToken === "") {
+    return specifier;
+  }
+  const separator = specifier.includes("?") ? "&" : "?";
+  return `${specifier}${separator}v=${encodeURIComponent(String(cacheBustToken))}`;
+}
+
+export function resolvePluginModuleSpecifier(
+  modulePath: string,
+  runtimeProtocol?: string,
+  cacheBustToken?: string | number
+): string {
   if (!shouldNormalizeFileUrlForDev(runtimeProtocol)) {
-    return modulePath;
+    return appendCacheBust(modulePath, cacheBustToken);
   }
   let parsed: URL;
   try {
     parsed = new URL(modulePath);
   } catch {
-    return modulePath;
+    return appendCacheBust(modulePath, cacheBustToken);
   }
   if (parsed.protocol !== "file:") {
-    return modulePath;
+    return appendCacheBust(modulePath, cacheBustToken);
   }
   const pathname = normalizeWindowsDrivePath(decodeURIComponent(parsed.pathname));
-  return `/@fs/${pathname}`;
+  return appendCacheBust(`/@fs/${pathname}`, cacheBustToken);
 }
 
 function assertCompatibleHandshake(handshakeVersion: number, modulePath: string): void {
@@ -66,9 +83,10 @@ function assertCompatibleEngine(
 export async function loadPluginFromModule(
   kernel: AppKernel,
   modulePath: string,
-  source?: PluginLoadSource
+  source?: PluginLoadSource,
+  options?: PluginLoadOptions
 ): Promise<PluginLoaderResult> {
-  const importSpecifier = resolvePluginModuleSpecifier(modulePath);
+  const importSpecifier = resolvePluginModuleSpecifier(modulePath, undefined, options?.cacheBustToken);
   const module = (await import(/* @vite-ignore */ importSpecifier)) as {
     default?: unknown;
     handshake?: unknown;
@@ -93,7 +111,8 @@ export async function loadPluginFromModule(
   kernel.pluginApi.registerPlugin(plugin, candidate.manifest, {
     modulePath,
     sourceGroup: source?.sourceGroup ?? "manual",
-    loadedAtIso: new Date().toISOString()
+    loadedAtIso: new Date().toISOString(),
+    updatedAtMs: source?.updatedAtMs
   });
   return {
     manifest: candidate.manifest,

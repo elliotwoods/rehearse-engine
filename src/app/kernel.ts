@@ -21,7 +21,7 @@ function createKernelInternal(): AppKernel {
   const store = createAppStore(storage.mode);
   const descriptorRegistry = new DescriptorRegistry();
   const hotReloadManager = new HotReloadManager(descriptorRegistry, store);
-  const pluginApi = createPluginApi(descriptorRegistry);
+  const pluginApi = createPluginApi(descriptorRegistry, hotReloadManager);
   const projectService = new ProjectService(storage, store);
   const clock = new SimulationClock(1 / 60);
 

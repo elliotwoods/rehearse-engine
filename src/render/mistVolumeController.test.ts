@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ActorNode } from "@/core/types";
-import { pickMistVolumeQuality } from "@/render/mistVolumeController";
+import { canUseGpuMistSimulation, chooseMistSimulationBackend, pickMistVolumeQuality } from "@/render/mistVolumeController";
 
 function createActor(params: ActorNode["params"]): ActorNode {
   return {
@@ -59,5 +59,52 @@ describe("pickMistVolumeQuality", () => {
     expect(quality.resolution).toEqual([96, 72, 48]);
     expect(quality.simulationSubsteps).toBe(3);
     expect(quality.previewRaymarchSteps).toBe(120);
+  });
+});
+
+describe("canUseGpuMistSimulation", () => {
+  it("requires WebGL2 and float color buffer support", () => {
+    expect(
+      canUseGpuMistSimulation({
+        capabilities: { isWebGL2: true },
+        extensions: { has: (name: string) => name === "EXT_color_buffer_float" }
+      } as never)
+    ).toBe(true);
+    expect(
+      canUseGpuMistSimulation({
+        capabilities: { isWebGL2: false },
+        extensions: { has: () => true }
+      } as never)
+    ).toBe(false);
+    expect(
+      canUseGpuMistSimulation({
+        capabilities: { isWebGL2: true },
+        extensions: { has: () => false }
+      } as never)
+    ).toBe(false);
+  });
+});
+
+describe("chooseMistSimulationBackend", () => {
+  const gpuRendererStub = {
+    capabilities: { isWebGL2: true },
+    extensions: { has: (name: string) => name === "EXT_color_buffer_float" }
+  } as never;
+
+  it("honors manual cpu override", () => {
+    expect(chooseMistSimulationBackend("cpu", gpuRendererStub)).toBe("cpu");
+  });
+
+  it("uses gpu when requested and supported", () => {
+    expect(chooseMistSimulationBackend("gpu", gpuRendererStub)).toBe("gpu-webgl2");
+  });
+
+  it("falls back to cpu when gpu is requested but unavailable", () => {
+    expect(
+      chooseMistSimulationBackend("gpu", {
+        capabilities: { isWebGL2: false },
+        extensions: { has: () => false }
+      } as never)
+    ).toBe("cpu");
   });
 });
