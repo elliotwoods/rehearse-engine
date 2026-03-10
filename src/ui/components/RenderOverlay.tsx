@@ -132,11 +132,9 @@ export function RenderOverlay({ open, progress, onHostReady, onPreviewReady, onC
             </p>
           ) : null}
           <p>
-            Time {formatDuration(elapsedMs)} elapsed
-            {" · "}
             {formatDuration(estimatedRemainingMs)} remaining
             {" · "}
-            {formatDuration(estimatedTotalMs)} total
+            {formatDuration(elapsedMs)} / {formatDuration(estimatedTotalMs)}
           </p>
         </footer>
       </div>

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import { InspectorFieldRow } from "@/ui/widgets/InspectorFieldRow";
 import { DigitScrubInput } from "@/ui/widgets/DigitScrubInput";
+import { inferDisplayPrecision, normalizeCommittedNumber } from "@/ui/widgets/numberEditing";
 
 interface NumberFieldProps {
   label: string;
@@ -19,84 +20,8 @@ interface NumberFieldProps {
   onChange: (value: number) => void;
 }
 
-function clamp(value: number, min?: number, max?: number): number {
-  let next = value;
-  if (min !== undefined) {
-    next = Math.max(min, next);
-  }
-  if (max !== undefined) {
-    next = Math.min(max, next);
-  }
-  return next;
-}
-
-function applyStep(value: number, step?: number, min?: number): number {
-  if (!step || step <= 0) {
-    return value;
-  }
-  const base = min ?? 0;
-  const snapped = Math.round((value - base) / step) * step + base;
-  return Number(snapped.toFixed(8));
-}
-
-function normalizeValue(value: number, options: { min?: number; max?: number; step?: number }): number {
-  if (Number.isNaN(value)) {
-    return 0;
-  }
-  return clamp(applyStep(value, options.step, options.min), options.min, options.max);
-}
-
-function normalizeValueUnsnapped(value: number, options: { min?: number; max?: number }): number {
-  if (Number.isNaN(value)) {
-    return 0;
-  }
-  return clamp(value, options.min, options.max);
-}
-
-function formatValue(value: number, precision?: number): string {
-  if (precision !== undefined && precision >= 0) {
-    return value.toFixed(precision);
-  }
-  return Number(value.toFixed(6)).toString();
-}
-
-function inferDisplayPrecision(precision?: number, step?: number): number | undefined {
-  if (precision !== undefined && precision >= 0) {
-    return precision;
-  }
-  if (!step || !Number.isFinite(step)) {
-    return undefined;
-  }
-  const normalized = Math.abs(step);
-  if (normalized >= 1) {
-    return undefined;
-  }
-  const asText = normalized.toString();
-  const scientificMatch = asText.match(/e-(\d+)$/i);
-  if (scientificMatch) {
-    const exponent = Number.parseInt(scientificMatch[1] ?? "0", 10);
-    return Number.isFinite(exponent) ? exponent : undefined;
-  }
-  const decimalIndex = asText.indexOf(".");
-  if (decimalIndex === -1) {
-    return undefined;
-  }
-  return asText.length - decimalIndex - 1;
-}
-
 export function NumberField(props: NumberFieldProps) {
   const displayPrecision = inferDisplayPrecision(props.precision, props.step);
-  const [draft, setDraft] = useState(() => formatValue(props.value, displayPrecision));
-  const [editing, setEditing] = useState(false);
-  const suppressClickRef = useRef(false);
-  const draggingRef = useRef(false);
-
-  useEffect(() => {
-    if (!editing && !draggingRef.current) {
-      setDraft(formatValue(props.value, displayPrecision));
-    }
-  }, [displayPrecision, props.value, editing]);
-
   const hasRange = props.min !== undefined && props.max !== undefined;
 
   const sliderStep = useMemo(() => {
@@ -109,78 +34,6 @@ export function NumberField(props: NumberFieldProps) {
     }
     return 0.01;
   }, [props.max, props.min, props.step, hasRange]);
-
-  const commitDraft = useCallback(() => {
-    const parsed = Number.parseFloat(draft);
-    if (Number.isNaN(parsed)) {
-      setDraft(formatValue(props.value, props.precision));
-      return;
-    }
-    const next = normalizeValueUnsnapped(parsed, {
-      min: props.min,
-      max: props.max
-    });
-    props.onChange(next);
-    setDraft(formatValue(next, displayPrecision));
-  }, [displayPrecision, draft, props]);
-
-  const handleDragStart = useCallback(
-    (event: React.PointerEvent<HTMLInputElement>) => {
-      if (props.disabled) {
-        return;
-      }
-      const pointerId = event.pointerId;
-      const startX = event.clientX;
-      const startValue = props.value;
-      draggingRef.current = false;
-
-      const onPointerMove = (moveEvent: PointerEvent) => {
-        if (moveEvent.pointerId !== pointerId) {
-          return;
-        }
-        const delta = moveEvent.clientX - startX;
-        if (!draggingRef.current && Math.abs(delta) > 2) {
-          draggingRef.current = true;
-          setEditing(false);
-        }
-        if (!draggingRef.current) {
-          return;
-        }
-
-        moveEvent.preventDefault();
-        const autoSpeed =
-          props.step ??
-          (hasRange
-            ? Math.max(Math.abs((props.max as number) - (props.min as number)) / 400, 0.0001)
-            : Math.max(Math.abs(startValue) / 200, 0.01));
-        const speed = props.dragSpeed ?? autoSpeed;
-        const next = normalizeValueUnsnapped(startValue + delta * speed, {
-          min: props.min,
-          max: props.max
-        });
-        props.onChange(next);
-      };
-
-      const onPointerUp = (upEvent: PointerEvent) => {
-        if (upEvent.pointerId !== pointerId) {
-          return;
-        }
-        if (draggingRef.current) {
-          suppressClickRef.current = true;
-          window.setTimeout(() => {
-            suppressClickRef.current = false;
-          }, 0);
-        }
-        draggingRef.current = false;
-        window.removeEventListener("pointermove", onPointerMove);
-        window.removeEventListener("pointerup", onPointerUp);
-      };
-
-      window.addEventListener("pointermove", onPointerMove, { passive: false });
-      window.addEventListener("pointerup", onPointerUp);
-    },
-    [props, hasRange]
-  );
 
   const progressPercent = hasRange
     ? Math.max(
@@ -209,59 +62,26 @@ export function NumberField(props: NumberFieldProps) {
             disabled={props.disabled}
             style={{ ["--fill" as string]: `${progressPercent}%` }}
             onChange={(event) => {
-              const next = normalizeValue(Number(event.target.value), {
+              const next = normalizeCommittedNumber(Number(event.target.value), {
                 min: props.min,
                 max: props.max,
-                step: props.step
+                step: props.step,
+                precision: displayPrecision
               });
               props.onChange(next);
             }}
           />
           <div className="widget-number-input-wrap">
-            <input
-              className="widget-number-input"
-              value={props.mixed && !editing ? "" : draft}
-              placeholder={props.mixed ? "Mixed" : undefined}
+            <DigitScrubInput
+              className="widget-digit-input-rangeless"
+              value={props.value}
+              mixed={props.mixed}
+              precision={displayPrecision}
+              min={props.min}
+              max={props.max}
+              step={props.step}
               disabled={props.disabled}
-              onPointerDown={handleDragStart}
-              onClick={(event) => {
-                if (suppressClickRef.current) {
-                  event.preventDefault();
-                  (event.target as HTMLInputElement).blur();
-                }
-              }}
-              onFocus={() => setEditing(true)}
-              onBlur={() => {
-                setEditing(false);
-                commitDraft();
-              }}
-              onChange={(event) => {
-                setDraft(event.target.value);
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  commitDraft();
-                  (event.target as HTMLInputElement).blur();
-                }
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  setDraft(formatValue(props.value, displayPrecision));
-                  (event.target as HTMLInputElement).blur();
-                }
-                if (event.key === "ArrowUp" || event.key === "ArrowDown") {
-                  event.preventDefault();
-                  const factor = event.shiftKey ? 10 : 1;
-                  const stepValue = (props.step ?? sliderStep) * factor;
-                  const direction = event.key === "ArrowUp" ? 1 : -1;
-                  const next = normalizeValue(props.value + direction * stepValue, {
-                    min: props.min,
-                    max: props.max,
-                    step: props.step
-                  });
-                  props.onChange(next);
-                }
-              }}
+              onChange={props.onChange}
             />
             {props.unit ? <span className="widget-number-unit">{props.unit}</span> : null}
           </div>
@@ -272,15 +92,12 @@ export function NumberField(props: NumberFieldProps) {
             className="widget-digit-input-rangeless"
             value={props.value}
             mixed={props.mixed}
-            precision={props.precision ?? (props.step && props.step < 1 ? 3 : 2)}
+            precision={displayPrecision}
+            min={props.min}
+            max={props.max}
+            step={props.step}
             disabled={props.disabled}
-            onChange={(next) => {
-              const normalized = normalizeValueUnsnapped(next, {
-                min: props.min,
-                max: props.max
-              });
-              props.onChange(normalized);
-            }}
+            onChange={props.onChange}
           />
           {props.unit ? <span className="widget-number-unit">{props.unit}</span> : null}
         </div>

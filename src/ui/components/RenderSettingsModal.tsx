@@ -13,6 +13,7 @@ import type {
   RenderSettings,
   RenderSupersampleScale
 } from "@/features/render/types";
+import { BufferedNumberTextInput } from "@/ui/widgets/BufferedNumberTextInput";
 
 interface RenderSettingsModalProps {
   open: boolean;
@@ -158,32 +159,32 @@ export function RenderSettingsModal(props: RenderSettingsModalProps) {
           </label>
           <label>
             Resolution Width
-            <input
-              type="number"
+            <BufferedNumberTextInput
+              value={draft.width}
               min={16}
               step={1}
-              value={draft.width}
+              precision={0}
               onChange={(event) =>
                 setDraft((prev) => ({
                   ...prev,
-                  width: Number(event.target.value),
-                  resolutionPreset: detectResolutionPreset(Number(event.target.value), prev.height)
+                  width: event,
+                  resolutionPreset: detectResolutionPreset(event, prev.height)
                 }))
               }
             />
           </label>
           <label>
             Resolution Height
-            <input
-              type="number"
+            <BufferedNumberTextInput
+              value={draft.height}
               min={16}
               step={1}
-              value={draft.height}
+              precision={0}
               onChange={(event) =>
                 setDraft((prev) => ({
                   ...prev,
-                  height: Number(event.target.value),
-                  resolutionPreset: detectResolutionPreset(prev.width, Number(event.target.value))
+                  height: event,
+                  resolutionPreset: detectResolutionPreset(prev.width, event)
                 }))
               }
             />
@@ -206,22 +207,22 @@ export function RenderSettingsModal(props: RenderSettingsModalProps) {
           </label>
           <label>
             Framerate (fps)
-            <input
-              type="number"
+            <BufferedNumberTextInput
+              value={draft.fps}
               min={1}
               step={1}
-              value={draft.fps}
-              onChange={(event) => setDraft((prev) => ({ ...prev, fps: Number(event.target.value) }))}
+              precision={0}
+              onChange={(next) => setDraft((prev) => ({ ...prev, fps: next }))}
             />
           </label>
           <label>
             H.265 Bitrate (Mbps)
-            <input
-              type="number"
+            <BufferedNumberTextInput
+              value={draft.bitrateMbps}
               min={1}
               step={1}
-              value={draft.bitrateMbps}
-              onChange={(event) => setDraft((prev) => ({ ...prev, bitrateMbps: Number(event.target.value) }))}
+              precision={0}
+              onChange={(next) => setDraft((prev) => ({ ...prev, bitrateMbps: next }))}
             />
           </label>
           <label>
@@ -240,13 +241,13 @@ export function RenderSettingsModal(props: RenderSettingsModalProps) {
           </label>
           <label>
             Duration (s)
-            <input
-              type="number"
+            <BufferedNumberTextInput
+              value={selectedCameraPath ? effectiveDurationSeconds : draft.durationSeconds}
               min={0.01}
               step={0.1}
-              value={selectedCameraPath ? effectiveDurationSeconds : draft.durationSeconds}
+              precision={1}
               disabled={Boolean(selectedCameraPath)}
-              onChange={(event) => setDraft((prev) => ({ ...prev, durationSeconds: Number(event.target.value) }))}
+              onChange={(next) => setDraft((prev) => ({ ...prev, durationSeconds: next }))}
             />
           </label>
           <label>
@@ -266,12 +267,12 @@ export function RenderSettingsModal(props: RenderSettingsModalProps) {
           </label>
           <label>
             Pre-run (s)
-            <input
-              type="number"
+            <BufferedNumberTextInput
+              value={draft.preRunSeconds}
               min={0}
               step={0.1}
-              value={draft.preRunSeconds}
-              onChange={(event) => setDraft((prev) => ({ ...prev, preRunSeconds: Number(event.target.value) }))}
+              precision={1}
+              onChange={(next) => setDraft((prev) => ({ ...prev, preRunSeconds: next }))}
             />
           </label>
           <label>

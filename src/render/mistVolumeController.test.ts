@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ActorNode } from "@/core/types";
-import { canUseGpuMistSimulation, chooseMistSimulationBackend, pickMistVolumeQuality } from "@/render/mistVolumeController";
+import {
+  canUseGpuMistSimulation,
+  chooseMistSimulationBackend,
+  computeMistDensityFadeFactor,
+  pickMistVolumeQuality,
+  selectMistDensityTexture,
+  simulateMistCpuInjectionForTest
+} from "@/render/mistVolumeController";
+import * as THREE from "three";
 
 function createActor(params: ActorNode["params"]): ActorNode {
   return {
@@ -106,5 +114,49 @@ describe("chooseMistSimulationBackend", () => {
         extensions: { has: () => false }
       } as never)
     ).toBe("cpu");
+  });
+
+  it("keeps auto on the cpu recovery path", () => {
+    expect(chooseMistSimulationBackend("auto", gpuRendererStub)).toBe("cpu");
+  });
+});
+
+describe("simulateMistCpuInjectionForTest", () => {
+  it("produces non-zero density and non-zero uploaded bytes for a centered source", () => {
+    const result = simulateMistCpuInjectionForTest();
+    expect(result.densityRange[1]).toBeGreaterThan(0);
+    expect(result.uploadByteRange[1]).toBeGreaterThan(0);
+  });
+});
+
+describe("computeMistDensityFadeFactor", () => {
+  it("is lossless when the explicit fade rate is zero", () => {
+    expect(computeMistDensityFadeFactor(0, 1 / 60)).toBe(1);
+  });
+
+  it("decreases density more strongly for higher fade rates", () => {
+    expect(computeMistDensityFadeFactor(4, 1)).toBeLessThan(computeMistDensityFadeFactor(1, 1));
+  });
+});
+
+describe("selectMistDensityTexture", () => {
+  it("keeps the cpu texture when the backend is cpu", () => {
+    const cpuTexture = new THREE.Data3DTexture(new Uint8Array(8), 2, 2, 2);
+    const gpuTexture = new THREE.Data3DTexture(null, 2, 2, 2);
+    const selected = selectMistDensityTexture(cpuTexture, "cpu", {
+      densityTargets: [{ texture: gpuTexture }, { texture: gpuTexture }],
+      densityIndex: 0
+    } as never);
+    expect(selected).toBe(cpuTexture);
+  });
+
+  it("uses the active gpu density target only while the gpu backend is active", () => {
+    const cpuTexture = new THREE.Data3DTexture(new Uint8Array(8), 2, 2, 2);
+    const gpuTexture = new THREE.Data3DTexture(null, 2, 2, 2);
+    const selected = selectMistDensityTexture(cpuTexture, "gpu-webgl2", {
+      densityTargets: [{ texture: gpuTexture }, { texture: cpuTexture }],
+      densityIndex: 0
+    } as never);
+    expect(selected).toBe(gpuTexture);
   });
 });

@@ -1,6 +1,7 @@
 export { ActorRefField } from "@/ui/widgets/ActorRefField";
 export { DrillInRow } from "@/ui/widgets/DrillInRow";
 export { ActorRefListField } from "@/ui/widgets/ActorRefListField";
+export { BufferedNumberTextInput } from "@/ui/widgets/BufferedNumberTextInput";
 export { ColorField } from "@/ui/widgets/ColorField";
 export { DigitScrubInput } from "@/ui/widgets/DigitScrubInput";
 export { FileField } from "@/ui/widgets/FileField";

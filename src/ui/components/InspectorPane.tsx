@@ -70,6 +70,7 @@ import type { StatsGroup, StatsRow } from "@/ui/components/StatsBlock";
 import {
   ActorRefField,
   ActorRefListField,
+  BufferedNumberTextInput,
   ColorField,
   DigitScrubInput,
   DrillInRow,
@@ -2202,6 +2203,15 @@ export function InspectorPane() {
       kernel.store.getState().actions.setStatus(`Reset ${updatedCount} mist simulation${updatedCount === 1 ? "" : "s"}.`);
     }
   };
+  const mistBackendValues =
+    actorSelection.length > 0 && actorSelection.every((actor) => actor.actorType === "mist-volume")
+      ? actorSelection.map((actor) => {
+        const value = actor.params.simulationBackendMode;
+        return value === "cpu" || value === "gpu" ? value : "auto";
+      })
+      : [];
+  const mistBackendMixed = mistBackendValues.length > 1 && mistBackendValues.some((value) => value !== mistBackendValues[0]);
+  const mistBackendValue = mistBackendMixed ? "auto" : (mistBackendValues[0] ?? "auto");
 
   const updateSelectedActorEnabled = (nextEnabled: boolean): void => {
     for (const actor of actorSelection) {
@@ -2918,6 +2928,20 @@ export function InspectorPane() {
             <span className="widget-label">Mist Simulation</span>
           </div>
           <div className="camera-path-toolbar">
+            <label className="material-slot-row" style={{ minWidth: 0, gap: 8, alignItems: "center" }}>
+              <span className="widget-label" style={{ marginBottom: 0 }}>Backend</span>
+              <select
+                value={mistBackendValue}
+                disabled={readOnly}
+                onChange={(event) => {
+                  updateSelectedActorParams("simulationBackendMode", event.target.value);
+                }}
+              >
+                <option value="auto">{mistBackendMixed ? "Mixed -> auto" : "Auto"}</option>
+                <option value="cpu">CPU</option>
+                <option value="gpu">GPU</option>
+              </select>
+            </label>
             <button type="button" disabled={readOnly} onClick={resetSelectedMistSimulations}>
               Reset Simulation
             </button>
@@ -3128,19 +3152,15 @@ export function InspectorPane() {
                   </div>
                   <div className="camera-path-keyframe-detail-row">
                     <span className="camera-path-keyframe-label">Time (s)</span>
-                    <input
-                      type="number"
-                      className="widget-number-input"
+                    <BufferedNumberTextInput
+                      inputClassName="widget-number-input"
+                      value={selectedCameraPathKeyframe.timeSeconds}
                       min={selectedCameraPathKeyframeIndex <= 0 ? 0 : undefined}
                       step={0.01}
-                      value={selectedCameraPathKeyframe.timeSeconds}
+                      precision={2}
                       disabled={readOnly || selectedCameraPathKeyframeIndex <= 0}
-                      onChange={(event) => {
+                      onChange={(next) => {
                         if (!singleSelection || singleSelection.actorType !== "camera-path") {
-                          return;
-                        }
-                        const next = Number.parseFloat(event.target.value);
-                        if (!Number.isFinite(next)) {
                           return;
                         }
                         commitCameraPathKeyframeTime(singleSelection, selectedCameraPathKeyframe.id, next);
@@ -3473,6 +3493,13 @@ export function InspectorPane() {
         : null}
       {definitions.map((definition) => {
         if (inspectorView.kind === "component") return null;
+        if (
+          definition.key === "simulationBackendMode"
+          && actorSelection.length > 0
+          && actorSelection.every((actor) => actor.actorType === "mist-volume")
+        ) {
+          return null;
+        }
         if (inspectorView.kind === "param-group") {
           if (inspectorView.paramKey === BEAM_SHADER_GROUP_KEY) {
             if (!isBeamShaderDefinition(definition)) return null;

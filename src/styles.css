@@ -2103,6 +2103,32 @@ select {
   cursor: ew-resize;
 }
 
+.widget-buffered-number {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 100%;
+}
+
+.widget-buffered-number > input {
+  width: 100%;
+  padding-right: 24px;
+}
+
+.widget-buffered-number.is-invalid > input {
+  border-color: var(--danger);
+}
+
+.widget-buffered-number-indicator {
+  position: absolute;
+  right: 8px;
+  color: var(--danger);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+}
+
 .widget-number-unit {
   color: var(--text-muted);
   font-size: 11px;
@@ -2123,6 +2149,7 @@ select {
   gap: 0;
   padding: 0 6px;
   white-space: nowrap;
+  overflow: hidden;
   font-variant-numeric: tabular-nums;
 }
 

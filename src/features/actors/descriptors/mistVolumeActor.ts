@@ -1,4 +1,4 @@
-import type { ReloadableDescriptor } from "@/core/hotReload/types";
+import type { ActorStatusEntry, ReloadableDescriptor } from "@/core/hotReload/types";
 import { MIST_VOLUME_ACTOR_SCHEMA } from "@/features/actors/actorTypes";
 
 interface MistVolumeRuntime {
@@ -51,7 +51,10 @@ export const mistVolumeActorDescriptor: ReloadableDescriptor<MistVolumeRuntime> 
   },
   status: {
     build({ actor, runtimeStatus }) {
-      return [
+      const pausedMessage = typeof runtimeStatus?.values.simulationPausedMessage === "string"
+        ? runtimeStatus.values.simulationPausedMessage
+        : null;
+      const rows: ActorStatusEntry[] = [
         { label: "Type", value: "Mist Volume" },
         {
           label: "Volume Cube",
@@ -72,7 +75,7 @@ export const mistVolumeActorDescriptor: ReloadableDescriptor<MistVolumeRuntime> 
             runtimeStatus?.values.simulationBackendPreference ??
             (actor.params.simulationBackendMode === "cpu" || actor.params.simulationBackendMode === "gpu"
               ? actor.params.simulationBackendMode
-              : "auto")
+              : "cpu")
         },
         {
           label: "Simulation Backend",
@@ -95,12 +98,68 @@ export const mistVolumeActorDescriptor: ReloadableDescriptor<MistVolumeRuntime> 
           value: runtimeStatus?.values.activeSourceCount ?? 0
         },
         {
+          label: "First Source Sample",
+          value: runtimeStatus?.values.firstSourceSample ?? "n/a"
+        },
+        {
           label: "Density Range",
           value: runtimeStatus?.values.densityRange ?? "n/a"
         },
         {
+          label: "Density Fade Rate",
+          value: runtimeStatus?.values.densityFadeRate ?? readNumber(actor.params.densityDecay, 0.08)
+        },
+        {
+          label: "Outflow Enabled",
+          value: runtimeStatus?.values.outflowEnabled ?? true
+        },
+        {
+          label: "CPU Inject Range",
+          value: runtimeStatus?.values.cpuPostInjectRange ?? "n/a"
+        },
+        {
+          label: "CPU Transport Range",
+          value: runtimeStatus?.values.cpuPostTransportRange ?? "n/a"
+        },
+        {
+          label: "CPU Fade Range",
+          value: runtimeStatus?.values.cpuPostFadeRange ?? "n/a"
+        },
+        {
+          label: "Upload Byte Range",
+          value: runtimeStatus?.values.uploadByteRange ?? "n/a"
+        },
+        {
+          label: "GPU Emitters",
+          value: runtimeStatus?.values.gpuEmitterCount ?? 0
+        },
+        {
+          label: "Diagnostic Sample Range",
+          value: runtimeStatus?.values.diagnosticSampleRange ?? "n/a"
+        },
+        {
           label: "Preview Visible",
           value: runtimeStatus?.values.previewVisible ?? false
+        },
+        {
+          label: "Debug Overlay",
+          value: runtimeStatus?.values.debugOverlayMode ?? (typeof actor.params.debugOverlayMode === "string" ? actor.params.debugOverlayMode : "off")
+        },
+        {
+          label: "Debug Grid",
+          value: runtimeStatus?.values.debugGridResolution ?? [
+            readNumber(actor.params.debugGridResolutionX, 6),
+            readNumber(actor.params.debugGridResolutionY, 5),
+            readNumber(actor.params.debugGridResolutionZ, 6)
+          ]
+        },
+        {
+          label: "Debug Sample Range",
+          value: runtimeStatus?.values.debugDensitySampleRange ?? "n/a"
+        },
+        {
+          label: "Source Markers",
+          value: runtimeStatus?.values.debugSourceMarkerCount ?? 0
         },
         {
           label: "Noise Seed",
@@ -135,27 +194,37 @@ export const mistVolumeActorDescriptor: ReloadableDescriptor<MistVolumeRuntime> 
           value: runtimeStatus?.values.boundaryModes ?? "n/a"
         },
         {
-          label: "Source Collect Ms",
-          value: runtimeStatus?.values.sourceCollectMs ?? "n/a"
-        },
-        {
-          label: "Simulate Ms",
-          value: runtimeStatus?.values.simulationMs ?? "n/a"
-        },
-        {
-          label: "Upload Ms",
-          value: runtimeStatus?.values.uploadMs ?? "n/a"
-        },
-        {
-          label: "Total Update Ms",
-          value: runtimeStatus?.values.totalUpdateMs ?? "n/a"
-        },
-        {
           label: "Last Update",
           value: runtimeStatus?.updatedAtIso ? new Date(runtimeStatus.updatedAtIso).toLocaleString() : "n/a"
         },
         { label: "Error", value: runtimeStatus?.error ?? null, tone: "error" }
       ];
+      if (pausedMessage) {
+        rows.splice(rows.length - 2, 0, {
+          label: "Simulation",
+          value: pausedMessage
+        });
+      } else {
+        rows.splice(rows.length - 2, 0,
+          {
+            label: "Source Collect Ms",
+            value: runtimeStatus?.values.sourceCollectMs ?? "n/a"
+          },
+          {
+            label: "Simulate Ms",
+            value: runtimeStatus?.values.simulationMs ?? "n/a"
+          },
+          {
+            label: "Upload Ms",
+            value: runtimeStatus?.values.uploadMs ?? "n/a"
+          },
+          {
+            label: "Total Update Ms",
+            value: runtimeStatus?.values.totalUpdateMs ?? "n/a"
+          }
+        );
+      }
+      return rows;
     }
   }
 };

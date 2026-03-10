@@ -101,8 +101,8 @@ export const MIST_VOLUME_ACTOR_SCHEMA: ParameterSchema = {
       groupKey: "volume",
       groupLabel: "Volume",
       options: ["auto", "cpu", "gpu"],
-      description: "Backend preference for timestep simulation. Auto uses GPU on supported WebGL2 systems and falls back to CPU otherwise.",
-      defaultValue: "auto"
+      description: "Backend preference for timestep simulation. Auto currently uses the CPU recovery path by default; choose GPU explicitly to test the WebGL2 backend.",
+      defaultValue: "cpu"
     },
     {
       key: "sourceActorIds",
@@ -230,14 +230,15 @@ export const MIST_VOLUME_ACTOR_SCHEMA: ParameterSchema = {
     },
     {
       key: "densityDecay",
-      label: "Density Decay",
+      label: "Density Fade Rate",
       type: "number",
       groupKey: "physics",
       groupLabel: "Physics",
       min: 0,
-      max: 1,
-      step: 0.01,
-      description: "Rate at which mist density fades over time, simulating dissipation and mixing into the environment.",
+      max: 8,
+      step: 0.05,
+      unit: "1/s",
+      description: "Explicit local fade rate for mist density. This does not prevent mist from leaving through open faces or being transported there.",
       defaultValue: 0.08
     },
     {
@@ -586,6 +587,107 @@ export const MIST_VOLUME_ACTOR_SCHEMA: ParameterSchema = {
       max: 256,
       step: 1,
       defaultValue: 48
+    },
+    {
+      key: "debugOverlayMode",
+      label: "Debug Overlay",
+      type: "select",
+      groupKey: "debug",
+      groupLabel: "Debug",
+      options: ["off", "numbers", "density-cells", "velocity-vectors"],
+      description: "Debug overlay rendered on top of the current preview mode.",
+      defaultValue: "off"
+    },
+    {
+      key: "debugGridResolutionX",
+      label: "Debug Grid X",
+      type: "number",
+      groupKey: "debug",
+      groupLabel: "Debug",
+      min: 1,
+      max: 32,
+      step: 1,
+      description: "Number of debug sample positions across the local X axis.",
+      defaultValue: 6
+    },
+    {
+      key: "debugGridResolutionY",
+      label: "Debug Grid Y",
+      type: "number",
+      groupKey: "debug",
+      groupLabel: "Debug",
+      min: 1,
+      max: 32,
+      step: 1,
+      description: "Number of debug sample positions across the local Y axis.",
+      defaultValue: 5
+    },
+    {
+      key: "debugGridResolutionZ",
+      label: "Debug Grid Z",
+      type: "number",
+      groupKey: "debug",
+      groupLabel: "Debug",
+      min: 1,
+      max: 32,
+      step: 1,
+      description: "Number of debug sample positions across the local Z axis.",
+      defaultValue: 6
+    },
+    {
+      key: "debugValueSize",
+      label: "Debug Value Size",
+      type: "number",
+      groupKey: "debug",
+      groupLabel: "Debug",
+      min: 0.02,
+      max: 1,
+      step: 0.01,
+      unit: "m",
+      description: "World-space size of numeric debug labels.",
+      defaultValue: 0.08
+    },
+    {
+      key: "debugHideZeroNumbers",
+      label: "Hide Zero Numbers",
+      type: "boolean",
+      groupKey: "debug",
+      groupLabel: "Debug",
+      description: "When using the Numbers debug overlay, omit labels for samples whose density is zero.",
+      defaultValue: true
+    },
+    {
+      key: "debugDensityThreshold",
+      label: "Debug Density Threshold",
+      type: "number",
+      groupKey: "debug",
+      groupLabel: "Debug",
+      min: 0,
+      max: 1,
+      step: 0.005,
+      description: "Minimum sampled density required before density debug points are shown.",
+      defaultValue: 0.02
+    },
+    {
+      key: "debugVectorScale",
+      label: "Debug Vector Scale",
+      type: "number",
+      groupKey: "debug",
+      groupLabel: "Debug",
+      min: 0.01,
+      max: 4,
+      step: 0.01,
+      description: "Scale multiplier applied to velocity debug vectors.",
+      defaultValue: 0.25
+    },
+    {
+      key: "debugSourceMarkers",
+      label: "Show Source Markers",
+      type: "boolean",
+      groupKey: "debug",
+      groupLabel: "Debug",
+      description: "Show active emitter sample positions and launch directions on top of the preview.",
+      defaultValue: false
     },
     {
       key: "renderOverrideEnabled",

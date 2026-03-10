@@ -17,6 +17,10 @@ Auto-select environment based on proximity / other (be able to select/exclude en
 * Daylight environment
 * HDRI environment
 
+Scene can choose which environment is the 'backgruond plate'
+
+Let's also look into ambient occlusion, shadows, global illumination, etc
+
 # Rendering
 
 * Speed up file handling
@@ -66,6 +70,9 @@ Perhaps we can combine things, e.g.:
 whilst in right click drag, WASD keys are active (they are not active otherwise)
 
 Also fix the current camera bookmark / up/down/left/etc system (e.g. better hotkeys)
+
+X,Y,Z widget in the corner of the screen
+
 # Housekeeping
 
 * Check for where multiple patterns exist to perform the same function e.g.
@@ -77,9 +84,16 @@ Also fix the current camera bookmark / up/down/left/etc system (e.g. better hotk
 
 * Speed up
 * Sometimes we don't even need the video, we just want to cache the frames
-* Automatically choose the camera path (if one exists) and lock the time duration to that camera path
-* Dont' render grids, curves by default (make this an a toggle with default off)
+* If 'Render Debug Views' is disabled, then we shouldn't render curves
+* Smarten up this dialog box
 
 # Timings
 
 * If an actor takes > 1/framerate for draw or update, then show that time in the scene graph
+
+# Time
+
+Better transport controls
+Consider showing time at the bottom of the viewport (e.g. with keyframes, and skipping affects total time)
+Option of 'timeline mode' and 'continous mode'
+

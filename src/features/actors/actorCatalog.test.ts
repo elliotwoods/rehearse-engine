@@ -110,7 +110,7 @@ describe("actorCatalog camera path creation", () => {
     const actor = actorId ? kernel.store.getState().state.actors[actorId] : null;
     expect(actor?.actorType).toBe("mist-volume");
     expect(actor?.params.volumeActorId).toBe("");
-    expect(actor?.params.simulationBackendMode).toBe("auto");
+    expect(actor?.params.simulationBackendMode).toBe("cpu");
     expect(actor?.params.resolutionX).toBe(32);
     expect(actor?.params.emissionDirection).toEqual([0, -1, 0]);
     expect(actor?.params.noiseSeed).toBe(1);
@@ -132,6 +132,15 @@ describe("actorCatalog camera path creation", () => {
     expect(actor?.params.surfaceNegZMode).toBe("open");
     expect(actor?.params.surfacePosZMode).toBe("open");
     expect(actor?.params.previewMode).toBe("volume");
+    expect(actor?.params.debugOverlayMode).toBe("off");
+    expect(actor?.params.debugGridResolutionX).toBe(6);
+    expect(actor?.params.debugGridResolutionY).toBe(5);
+    expect(actor?.params.debugGridResolutionZ).toBe(6);
+    expect(actor?.params.debugValueSize).toBe(0.08);
+    expect(actor?.params.debugHideZeroNumbers).toBe(true);
+    expect(actor?.params.debugDensityThreshold).toBe(0.02);
+    expect(actor?.params.debugVectorScale).toBe(0.25);
+    expect(actor?.params.debugSourceMarkers).toBe(false);
     expect(actor?.params.slicePosition).toBe(0.5);
     expect(actor?.params.previewRaymarchSteps).toBe(48);
     expect(actor?.params.renderOverrideEnabled).toBe(false);

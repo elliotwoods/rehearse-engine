@@ -5,6 +5,7 @@ import { curveDataWithOverrides, getCurveSamplesPerSegmentFromActor } from "@/fe
 
 export type MistVolumeQualityMode = "interactive" | "export";
 type MistPreviewMode = "volume" | "bounds" | "slice-x" | "slice-y" | "slice-z" | "off";
+type MistDebugOverlayMode = "off" | "numbers" | "density-cells" | "velocity-vectors";
 type MistSurfaceMode = "open" | "closed";
 
 interface MistLookupNoiseSettings {
@@ -38,6 +39,31 @@ interface MistVolumeQualitySettings {
   qualityMode: MistVolumeQualityMode;
 }
 
+interface MistDebugGridResolution {
+  x: number;
+  y: number;
+  z: number;
+}
+
+interface MistDebugSettings {
+  overlayMode: MistDebugOverlayMode;
+  gridResolution: MistDebugGridResolution;
+  valueSize: number;
+  hideZeroNumbers: boolean;
+  densityThreshold: number;
+  vectorScale: number;
+  sourceMarkers: boolean;
+}
+
+interface MistDebugSamplePoint {
+  localPosition: THREE.Vector3;
+}
+
+interface MistDebugSampleResult {
+  density: number;
+  velocity: THREE.Vector3;
+}
+
 interface MistVolumeHelpers {
   getActorById(actorId: string): ActorNode | null;
   getActorObject(actorId: string): unknown | null;
@@ -62,13 +88,18 @@ interface MistVolumeBinding {
 interface MistVolumeEntry {
   actorId: string;
   previewGroup: THREE.Group;
+  debugGroup: THREE.Group;
+  debugLabelGroup: THREE.Group;
+  debugDensityPoints: THREE.Points;
+  debugVelocityLines: THREE.LineSegments;
+  debugSourceLines: THREE.LineSegments;
   volumeMesh: THREE.Mesh;
   boundsMesh: THREE.LineSegments;
   sliceMesh: THREE.Mesh;
   volumeMaterial: THREE.ShaderMaterial;
   sliceMaterial: THREE.ShaderMaterial;
   boundsMaterial: THREE.LineBasicMaterial;
-  texture: THREE.Data3DTexture;
+  cpuTexture: THREE.Data3DTexture;
   uploadBytes: Uint8Array;
   density: Float32Array;
   densityScratch: Float32Array;
@@ -81,6 +112,8 @@ interface MistVolumeEntry {
   lastLocalCameraInside: boolean;
   simulationBackend: "cpu" | "gpu-webgl2";
   gpuBackend: MistVolumeGpuBackend | null;
+  debugLabelPlaneGeometry: THREE.PlaneGeometry;
+  debugLabelTextureCache: Map<string, { texture: THREE.CanvasTexture; aspect: number }>;
 }
 
 interface MistVolumeGpuBackend {
@@ -103,7 +136,10 @@ interface MistVolumeGpuBackend {
     densityDiffuse: THREE.ShaderMaterial;
     densityDecay: THREE.ShaderMaterial;
     velocityFinalize: THREE.ShaderMaterial;
+    debugDensitySample: THREE.ShaderMaterial;
+    debugVelocitySample: THREE.ShaderMaterial;
   };
+  debugSampleTarget: THREE.WebGLRenderTarget | null;
 }
 
 interface MistSimPassUniforms {
@@ -129,6 +165,16 @@ interface MistSimPassUniforms {
   uBuoyancy: { value: number };
   uVelocityDrag: { value: number };
   uNoiseSeed: { value: number };
+}
+
+interface MistCpuSimulationDiagnostics {
+  postInjectRange: [number, number] | "n/a";
+  postTransportRange: [number, number] | "n/a";
+  postFadeRange: [number, number] | "n/a";
+}
+
+interface MistGpuSimulationDiagnostics {
+  emitterCount: number;
 }
 
 function readNumber(value: unknown, fallback: number, min?: number, max?: number): number {
@@ -179,6 +225,10 @@ function readPreviewMode(value: unknown): MistPreviewMode {
     : "volume";
 }
 
+function readDebugOverlayMode(value: unknown): MistDebugOverlayMode {
+  return value === "numbers" || value === "density-cells" || value === "velocity-vectors" ? value : "off";
+}
+
 function roundMs(value: number): number {
   return Number(value.toFixed(3));
 }
@@ -207,6 +257,22 @@ function readBoundarySettings(actor: Pick<ActorNode, "params">): MistBoundarySet
     posY: readSurfaceMode(actor.params.surfacePosYMode),
     negZ: readSurfaceMode(actor.params.surfaceNegZMode),
     posZ: readSurfaceMode(actor.params.surfacePosZMode)
+  };
+}
+
+function readDebugSettings(actor: Pick<ActorNode, "params">): MistDebugSettings {
+  return {
+    overlayMode: readDebugOverlayMode(actor.params.debugOverlayMode),
+    gridResolution: {
+      x: Math.max(1, Math.floor(readNumber(actor.params.debugGridResolutionX, 6, 1, 32))),
+      y: Math.max(1, Math.floor(readNumber(actor.params.debugGridResolutionY, 5, 1, 32))),
+      z: Math.max(1, Math.floor(readNumber(actor.params.debugGridResolutionZ, 6, 1, 32)))
+    },
+    valueSize: readNumber(actor.params.debugValueSize, 0.08, 0.02, 1),
+    hideZeroNumbers: actor.params.debugHideZeroNumbers !== false,
+    densityThreshold: readNumber(actor.params.debugDensityThreshold, 0.02, 0, 1),
+    vectorScale: readNumber(actor.params.debugVectorScale, 0.25, 0.01, 4),
+    sourceMarkers: actor.params.debugSourceMarkers === true
   };
 }
 
@@ -263,6 +329,47 @@ function sampleTrilinear(field: Float32Array, resolution: [number, number, numbe
   const c011 = field[cellIndex(x0, y1, z1, resolution)] ?? 0;
   const c111 = field[cellIndex(x1, y1, z1, resolution)] ?? 0;
 
+  const c00 = c000 * (1 - tx) + c100 * tx;
+  const c10 = c010 * (1 - tx) + c110 * tx;
+  const c01 = c001 * (1 - tx) + c101 * tx;
+  const c11 = c011 * (1 - tx) + c111 * tx;
+  const c0 = c00 * (1 - ty) + c10 * ty;
+  const c1 = c01 * (1 - ty) + c11 * ty;
+  return c0 * (1 - tz) + c1 * tz;
+}
+
+function sampleVelocityComponentTrilinear(
+  field: Float32Array,
+  resolution: [number, number, number],
+  component: 0 | 1 | 2,
+  x: number,
+  y: number,
+  z: number
+): number {
+  const maxX = resolution[0] - 1;
+  const maxY = resolution[1] - 1;
+  const maxZ = resolution[2] - 1;
+  const fx = Math.max(0, Math.min(maxX, x));
+  const fy = Math.max(0, Math.min(maxY, y));
+  const fz = Math.max(0, Math.min(maxZ, z));
+  const x0 = Math.floor(fx);
+  const y0 = Math.floor(fy);
+  const z0 = Math.floor(fz);
+  const x1 = Math.min(maxX, x0 + 1);
+  const y1 = Math.min(maxY, y0 + 1);
+  const z1 = Math.min(maxZ, z0 + 1);
+  const tx = fx - x0;
+  const ty = fy - y0;
+  const tz = fz - z0;
+  const read = (ix: number, iy: number, iz: number) => field[cellIndex(ix, iy, iz, resolution) * 3 + component] ?? 0;
+  const c000 = read(x0, y0, z0);
+  const c100 = read(x1, y0, z0);
+  const c010 = read(x0, y1, z0);
+  const c110 = read(x1, y1, z0);
+  const c001 = read(x0, y0, z1);
+  const c101 = read(x1, y0, z1);
+  const c011 = read(x0, y1, z1);
+  const c111 = read(x1, y1, z1);
   const c00 = c000 * (1 - tx) + c100 * tx;
   const c10 = c010 * (1 - tx) + c110 * tx;
   const c01 = c001 * (1 - tx) + c101 * tx;
@@ -402,13 +509,174 @@ export function chooseMistSimulationBackend(
   preference: unknown,
   renderer: Pick<THREE.WebGLRenderer, "capabilities" | "extensions"> | null
 ): "cpu" | "gpu-webgl2" {
-  if (preference === "cpu") {
+  if (preference !== "gpu") {
     return "cpu";
   }
-  if (preference === "gpu") {
-    return canUseGpuMistSimulation(renderer) ? "gpu-webgl2" : "cpu";
-  }
   return canUseGpuMistSimulation(renderer) ? "gpu-webgl2" : "cpu";
+}
+
+export function computeMistDensityRange(density: Float32Array): [number, number] {
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  for (let index = 0; index < density.length; index += 1) {
+    const value = density[index] ?? 0;
+    if (value < min) {
+      min = value;
+    }
+    if (value > max) {
+      max = value;
+    }
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max)) {
+    return [0, 0];
+  }
+  return [Number(min.toFixed(3)), Number(max.toFixed(3))];
+}
+
+export function computeMistDensityFadeFactor(fadeRatePerSecond: number, dtSeconds: number): number {
+  return Math.exp(-Math.max(0, fadeRatePerSecond) * Math.max(0, dtSeconds));
+}
+
+function uploadMistDensityBytes(density: Float32Array, uploadBytes: Uint8Array): [number, number] {
+  let min = Number.POSITIVE_INFINITY;
+  let max = Number.NEGATIVE_INFINITY;
+  for (let index = 0; index < density.length; index += 1) {
+    const byteValue = Math.round(clamp01(density[index] ?? 0) * 255);
+    uploadBytes[index] = byteValue;
+    min = Math.min(min, byteValue);
+    max = Math.max(max, byteValue);
+  }
+  return !Number.isFinite(min) || !Number.isFinite(max) ? [0, 0] : [min, max];
+}
+
+interface MistInjectionSource {
+  positionLocal: THREE.Vector3;
+  directionLocal: THREE.Vector3;
+}
+
+function injectMistSourcesIntoField(
+  density: Float32Array,
+  velocity: Float32Array,
+  resolution: [number, number, number],
+  sources: MistInjectionSource[],
+  radiusCells: number,
+  densityGain: number,
+  initialSpeed: number,
+  timeSeconds: number,
+  noiseSeed: number,
+  emissionNoiseStrength: number,
+  emissionNoiseScale: number,
+  emissionNoiseSpeed: number
+): void {
+  for (const source of sources) {
+    const [noiseX, noiseY, noiseZ] = emissionNoiseStrength > 1e-4
+      ? sampleVectorNoise4D(
+        source.positionLocal.x,
+        source.positionLocal.y,
+        source.positionLocal.z,
+        timeSeconds,
+        noiseSeed + 11,
+        emissionNoiseScale,
+        emissionNoiseSpeed
+      )
+      : [0, 0, 0];
+    const emissionNoiseValue = emissionNoiseStrength > 1e-4
+      ? sampleScalarNoiseFromLocalPosition(
+        source.positionLocal.x + 13.7,
+        source.positionLocal.y - 7.1,
+        source.positionLocal.z + 3.9,
+        timeSeconds,
+        noiseSeed + 29,
+        emissionNoiseScale,
+        emissionNoiseSpeed
+      ) * 2 - 1
+      : 0;
+    const noisyDensityGain = densityGain * Math.max(0, 1 + emissionNoiseValue * emissionNoiseStrength * 0.6);
+    const noisyInitialSpeed = initialSpeed * Math.max(0, 1 + emissionNoiseValue * emissionNoiseStrength * 0.35);
+    const noisyDirection = emissionNoiseStrength > 1e-4
+      ? source.directionLocal.clone().add(new THREE.Vector3(noiseX, noiseY, noiseZ).multiplyScalar(emissionNoiseStrength * 0.45)).normalize()
+      : source.directionLocal;
+    const cx = ((source.positionLocal.x + 0.5) * (resolution[0] - 1));
+    const cy = ((source.positionLocal.y + 0.5) * (resolution[1] - 1));
+    const cz = ((source.positionLocal.z + 0.5) * (resolution[2] - 1));
+    const minX = Math.max(0, Math.floor(cx - radiusCells));
+    const maxX = Math.min(resolution[0] - 1, Math.ceil(cx + radiusCells));
+    const minY = Math.max(0, Math.floor(cy - radiusCells));
+    const maxY = Math.min(resolution[1] - 1, Math.ceil(cy + radiusCells));
+    const minZ = Math.max(0, Math.floor(cz - radiusCells));
+    const maxZ = Math.min(resolution[2] - 1, Math.ceil(cz + radiusCells));
+    for (let z = minZ; z <= maxZ; z += 1) {
+      for (let y = minY; y <= maxY; y += 1) {
+        for (let x = minX; x <= maxX; x += 1) {
+          const dx = (x - cx) / Math.max(1, radiusCells);
+          const dy = (y - cy) / Math.max(1, radiusCells);
+          const dz = (z - cz) / Math.max(1, radiusCells);
+          const dist2 = dx * dx + dy * dy + dz * dz;
+          if (dist2 > 1) {
+            continue;
+          }
+          const weight = 1 - dist2;
+          const index = cellIndex(x, y, z, resolution);
+          density[index] = clamp01((density[index] ?? 0) + noisyDensityGain * weight);
+          const velocityIndex = index * 3;
+          velocity[velocityIndex] = (velocity[velocityIndex] ?? 0) + noisyDirection.x * noisyInitialSpeed * weight;
+          velocity[velocityIndex + 1] = (velocity[velocityIndex + 1] ?? 0) + noisyDirection.y * noisyInitialSpeed * weight;
+          velocity[velocityIndex + 2] = (velocity[velocityIndex + 2] ?? 0) + noisyDirection.z * noisyInitialSpeed * weight;
+        }
+      }
+    }
+  }
+}
+
+export function simulateMistCpuInjectionForTest(options?: {
+  resolution?: [number, number, number];
+  sources?: Array<{ positionLocal: [number, number, number]; directionLocal: [number, number, number] }>;
+  radiusCells?: number;
+  densityGain?: number;
+  initialSpeed?: number;
+  timeSeconds?: number;
+}): { densityRange: [number, number]; uploadByteRange: [number, number] } {
+  const resolution = options?.resolution ?? [8, 8, 8];
+  const count = resolution[0] * resolution[1] * resolution[2];
+  const density = new Float32Array(count);
+  const velocity = new Float32Array(count * 3);
+  const uploadBytes = new Uint8Array(count);
+  const sources = (options?.sources ?? [
+    { positionLocal: [0, 0, 0] as [number, number, number], directionLocal: [0, -1, 0] as [number, number, number] }
+  ]).map((source) => ({
+    positionLocal: new THREE.Vector3(...source.positionLocal),
+    directionLocal: new THREE.Vector3(...source.directionLocal).normalize()
+  }));
+  injectMistSourcesIntoField(
+    density,
+    velocity,
+    resolution,
+    sources,
+    options?.radiusCells ?? 2,
+    options?.densityGain ?? 0.25,
+    options?.initialSpeed ?? 0.6,
+    options?.timeSeconds ?? 0,
+    1,
+    0,
+    1,
+    0
+  );
+  const uploadByteRange = uploadMistDensityBytes(density, uploadBytes);
+  return {
+    densityRange: computeMistDensityRange(density),
+    uploadByteRange
+  };
+}
+
+export function selectMistDensityTexture(
+  cpuTexture: THREE.Data3DTexture,
+  simulationBackend: "cpu" | "gpu-webgl2",
+  gpuBackend: MistVolumeGpuBackend | null
+): THREE.Data3DTexture {
+  if (simulationBackend === "gpu-webgl2" && gpuBackend) {
+    return gpuBackend.densityTargets[gpuBackend.densityIndex].texture;
+  }
+  return cpuTexture;
 }
 
 function createMistSimTarget(
@@ -443,12 +711,16 @@ function createMistEmitterTexture(capacity: number): { texture: THREE.DataTextur
 }
 
 const MIST_SIM_VERTEX_SHADER = `
-  in vec3 position;
-  in vec2 uv;
   out vec2 vUv;
 
   void main() {
     vUv = uv;
+    gl_Position = vec4(position.xy, 0.0, 1.0);
+  }
+`;
+
+const MIST_DEBUG_SAMPLE_VERTEX_SHADER = `
+  void main() {
     gl_Position = vec4(position.xy, 0.0, 1.0);
   }
 `;
@@ -561,6 +833,126 @@ const MIST_SIM_COMMON_GLSL = `
   }
 `;
 
+const MIST_DEBUG_SAMPLE_COMMON_GLSL = `
+  precision highp float;
+  precision highp int;
+  precision highp sampler3D;
+
+  uniform sampler3D uDensityTex;
+  uniform sampler3D uVelocityTex;
+  uniform vec3 uGridResolution;
+  uniform vec2 uOutputResolution;
+  uniform int uPreviewModeCode;
+  uniform float uSlicePosition;
+  uniform float uMistTimeSeconds;
+  uniform float uMistNoiseStrength;
+  uniform float uMistNoiseScale;
+  uniform float uMistNoiseSpeed;
+  uniform vec3 uMistNoiseScroll;
+  uniform float uMistNoiseContrast;
+  uniform float uMistNoiseBias;
+  uniform float uMistNoiseSeed;
+
+  float hash31(vec3 p) {
+    return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453123);
+  }
+
+  vec3 grad3(vec3 cell) {
+    float x = hash31(cell + vec3(11.3, 0.0, 0.0)) * 2.0 - 1.0;
+    float y = hash31(cell + vec3(0.0, 17.1, 0.0)) * 2.0 - 1.0;
+    float z = hash31(cell + vec3(0.0, 0.0, 23.7)) * 2.0 - 1.0;
+    return normalize(vec3(x, y, z) + vec3(1e-4));
+  }
+
+  float gradientNoise3D(vec3 p) {
+    vec3 cell = floor(p);
+    vec3 f = fract(p);
+    vec3 u = f * f * (3.0 - 2.0 * f);
+    float n000 = dot(grad3(cell + vec3(0.0, 0.0, 0.0)), f - vec3(0.0, 0.0, 0.0));
+    float n100 = dot(grad3(cell + vec3(1.0, 0.0, 0.0)), f - vec3(1.0, 0.0, 0.0));
+    float n010 = dot(grad3(cell + vec3(0.0, 1.0, 0.0)), f - vec3(0.0, 1.0, 0.0));
+    float n110 = dot(grad3(cell + vec3(1.0, 1.0, 0.0)), f - vec3(1.0, 1.0, 0.0));
+    float n001 = dot(grad3(cell + vec3(0.0, 0.0, 1.0)), f - vec3(0.0, 0.0, 1.0));
+    float n101 = dot(grad3(cell + vec3(1.0, 0.0, 1.0)), f - vec3(1.0, 0.0, 1.0));
+    float n011 = dot(grad3(cell + vec3(0.0, 1.0, 1.0)), f - vec3(0.0, 1.0, 1.0));
+    float n111 = dot(grad3(cell + vec3(1.0, 1.0, 1.0)), f - vec3(1.0, 1.0, 1.0));
+    float nx00 = mix(n000, n100, u.x);
+    float nx10 = mix(n010, n110, u.x);
+    float nx01 = mix(n001, n101, u.x);
+    float nx11 = mix(n011, n111, u.x);
+    float nxy0 = mix(nx00, nx10, u.y);
+    float nxy1 = mix(nx01, nx11, u.y);
+    return mix(nxy0, nxy1, u.z);
+  }
+
+  float sampleLookupNoise(vec3 localPosition) {
+    if (uMistNoiseStrength <= 1e-4) {
+      return 1.0;
+    }
+    vec3 noisePosition =
+      (localPosition + vec3(0.5) + uMistNoiseScroll * uMistTimeSeconds * uMistNoiseSpeed)
+      * uMistNoiseScale
+      + vec3(uMistNoiseSeed * 0.031);
+    float noiseA = gradientNoise3D(noisePosition);
+    float noiseB = gradientNoise3D(noisePosition * 2.03 + vec3(17.1, -9.4, 5.2));
+    float noise = clamp(0.5 + 0.5 * (noiseA * 0.7 + noiseB * 0.3), 0.0, 1.0);
+    float contrasted = clamp((noise - 0.5) * uMistNoiseContrast + 0.5 + uMistNoiseBias, 0.0, 1.0);
+    return mix(1.0, contrasted, clamp(uMistNoiseStrength, 0.0, 1.0));
+  }
+
+  vec3 sampleLocalForIndex(float sampleIndex) {
+    float gx = max(uGridResolution.x, 1.0);
+    float gy = max(uGridResolution.y, 1.0);
+    float gz = max(uGridResolution.z, 1.0);
+    if (uPreviewModeCode == 1) {
+      float ix = mod(sampleIndex, gx);
+      float iy = floor(sampleIndex / gx);
+      return vec3(
+        gx <= 1.0 ? 0.0 : ix / (gx - 1.0) - 0.5,
+        gy <= 1.0 ? 0.0 : iy / (gy - 1.0) - 0.5,
+        uSlicePosition - 0.5
+      );
+    }
+    if (uPreviewModeCode == 2) {
+      float ix = mod(sampleIndex, gx);
+      float iz = floor(sampleIndex / gx);
+      return vec3(
+        gx <= 1.0 ? 0.0 : ix / (gx - 1.0) - 0.5,
+        uSlicePosition - 0.5,
+        gz <= 1.0 ? 0.0 : iz / (gz - 1.0) - 0.5
+      );
+    }
+    if (uPreviewModeCode == 3) {
+      float iy = mod(sampleIndex, gy);
+      float iz = floor(sampleIndex / gy);
+      return vec3(
+        uSlicePosition - 0.5,
+        gy <= 1.0 ? 0.0 : iy / (gy - 1.0) - 0.5,
+        gz <= 1.0 ? 0.0 : iz / (gz - 1.0) - 0.5
+      );
+    }
+    float plane = gx * gy;
+    float z = floor(sampleIndex / plane);
+    float rem = sampleIndex - z * plane;
+    float y = floor(rem / gx);
+    float x = rem - y * gx;
+    return vec3(
+      gx <= 1.0 ? 0.0 : x / (gx - 1.0) - 0.5,
+      gy <= 1.0 ? 0.0 : y / (gy - 1.0) - 0.5,
+      gz <= 1.0 ? 0.0 : z / (gz - 1.0) - 0.5
+    );
+  }
+
+  float sampleDensityLocal(vec3 localPosition) {
+    vec3 uvw = localPosition + vec3(0.5);
+    if (uvw.x < 0.0 || uvw.y < 0.0 || uvw.z < 0.0 || uvw.x > 1.0 || uvw.y > 1.0 || uvw.z > 1.0) {
+      return 0.0;
+    }
+    float density = texture(uDensityTex, uvw).r;
+    return clamp(density * sampleLookupNoise(localPosition), 0.0, 1.0);
+  }
+`;
+
 function createMistSimMaterial(fragmentBody: string): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     glslVersion: THREE.GLSL3,
@@ -596,6 +988,41 @@ function createMistSimMaterial(fragmentBody: string): THREE.ShaderMaterial {
       ${MIST_SIM_COMMON_GLSL}
       out vec4 outColor;
       void main() {
+        ${fragmentBody}
+      }
+    `
+  });
+}
+
+function createMistDebugSampleMaterial(fragmentBody: string): THREE.ShaderMaterial {
+  return new THREE.ShaderMaterial({
+    glslVersion: THREE.GLSL3,
+    depthWrite: false,
+    depthTest: false,
+    transparent: false,
+    uniforms: {
+      uDensityTex: { value: null },
+      uVelocityTex: { value: null },
+      uGridResolution: { value: new THREE.Vector3(1, 1, 1) },
+      uOutputResolution: { value: new THREE.Vector2(1, 1) },
+      uPreviewModeCode: { value: 0 },
+      uSlicePosition: { value: 0.5 },
+      uMistTimeSeconds: { value: 0 },
+      uMistNoiseStrength: { value: 0 },
+      uMistNoiseScale: { value: 1 },
+      uMistNoiseSpeed: { value: 0 },
+      uMistNoiseScroll: { value: new THREE.Vector3() },
+      uMistNoiseContrast: { value: 1 },
+      uMistNoiseBias: { value: 0 },
+      uMistNoiseSeed: { value: 1 }
+    },
+    vertexShader: MIST_DEBUG_SAMPLE_VERTEX_SHADER,
+    fragmentShader: `
+      ${MIST_DEBUG_SAMPLE_COMMON_GLSL}
+      out vec4 outColor;
+      void main() {
+        float sampleIndex = floor(gl_FragCoord.x - 0.5) + floor(gl_FragCoord.y - 0.5) * uOutputResolution.x;
+        vec3 localPosition = sampleLocalForIndex(sampleIndex);
         ${fragmentBody}
       }
     `
@@ -981,7 +1408,7 @@ function createMistVolumeGpuBackend(resolution: [number, number, number]): MistV
       vec3 localPosition = uvw - vec3(0.5);
       vec3 texel = 1.0 / max(uResolution, vec3(1.0));
       float current = texture(uDensityTex, uvw).r;
-      float nextDensity = current * max(0.0, 1.0 - uDensityDecay * uDt);
+      float nextDensity = current * exp(-max(uDensityDecay, 0.0) * max(uDt, 0.0));
       if (uEdgeBreakup > 1e-4 && current > 1e-4) {
         float neighborAverage = (
           texture(uDensityTex, clamp(uvw + vec3(texel.x, 0.0, 0.0), vec3(0.0), vec3(1.0))).r +
@@ -1024,6 +1451,18 @@ function createMistVolumeGpuBackend(resolution: [number, number, number]): MistV
         velocity.z = min(0.0, velocity.z);
       }
       outColor = vec4(velocity, 1.0);
+    `),
+    debugDensitySample: createMistDebugSampleMaterial(`
+      float density = sampleDensityLocal(localPosition);
+      outColor = vec4(density, 0.0, 0.0, 1.0);
+    `),
+    debugVelocitySample: createMistDebugSampleMaterial(`
+      vec3 uvw = localPosition + vec3(0.5);
+      vec3 velocity = vec3(0.0);
+      if (uvw.x >= 0.0 && uvw.y >= 0.0 && uvw.z >= 0.0 && uvw.x <= 1.0 && uvw.y <= 1.0 && uvw.z <= 1.0) {
+        velocity = texture(uVelocityTex, uvw).xyz;
+      }
+      outColor = vec4(velocity, 1.0);
     `)
   };
   const simQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), materials.densityInject);
@@ -1040,7 +1479,8 @@ function createMistVolumeGpuBackend(resolution: [number, number, number]): MistV
     simScene,
     simCamera,
     simQuad,
-    materials
+    materials,
+    debugSampleTarget: null
   };
 }
 
@@ -1054,6 +1494,7 @@ function disposeMistVolumeGpuBackend(backend: MistVolumeGpuBackend | null): void
   backend.velocityTargets[1].dispose();
   backend.emitterTexture.dispose();
   backend.simQuad.geometry.dispose();
+  backend.debugSampleTarget?.dispose();
   for (const material of Object.values(backend.materials)) {
     material.dispose();
   }
@@ -1097,9 +1538,8 @@ export class MistVolumeController {
       return null;
     }
     const lookupNoise = readLookupNoiseSettings(actor);
-    entry.texture = this.getActiveDensityTexture(entry);
     return {
-      densityTexture: entry.texture,
+      densityTexture: this.getActiveDensityTexture(entry),
       worldToLocalElements: [...binding.worldToVolumeLocal.elements],
       resolution: [...entry.resolution] as [number, number, number],
       densityScale: 1,
@@ -1150,6 +1590,8 @@ export class MistVolumeController {
           previewMode,
           activeSourceCount: 0,
           densityRange: entry.simulationBackend === "cpu" ? this.computeDensityRange(entry.density) : "gpu",
+          densityFadeRate: Number(readNumber(actor.params.densityDecay, 0.08, 0).toFixed(3)),
+          outflowEnabled: Object.values(boundarySettings).some((mode) => mode === "open"),
           boundaryModes: buildBoundarySummary(boundarySettings),
           previewVisible: false,
           sourceCollectMs: 0,
@@ -1194,24 +1636,38 @@ export class MistVolumeController {
     const sourceCollectMs = performance.now() - sourceCollectStart;
     const clampedDt = Math.max(0, Math.min(dtSeconds, 1 / 15));
     const simulationStart = performance.now();
+    let cpuDiagnostics: MistCpuSimulationDiagnostics = { postInjectRange: "n/a", postTransportRange: "n/a", postFadeRange: "n/a" };
+    let gpuDiagnostics: MistGpuSimulationDiagnostics = { emitterCount: 0 };
     if (clampedDt > 0) {
       if (entry.simulationBackend === "gpu-webgl2" && entry.gpuBackend && this.webglRenderer) {
-        this.simulateGpu(entry, actor, sources, simTimeSeconds, clampedDt, quality);
+        gpuDiagnostics = this.simulateGpu(entry, actor, sources, simTimeSeconds, clampedDt, quality);
       } else {
-        this.simulate(entry, actor, sources, simTimeSeconds, clampedDt, quality);
+        cpuDiagnostics = this.simulate(entry, actor, sources, simTimeSeconds, clampedDt, quality);
       }
     }
     const simulationMs = performance.now() - simulationStart;
     const uploadStart = performance.now();
+    let uploadByteRange: [number, number] | "n/a" = "n/a";
     if (entry.simulationBackend === "cpu" && (clampedDt > 0 || shouldReset)) {
-      this.uploadDensity(entry);
+      uploadByteRange = this.uploadDensity(entry);
     }
     const uploadMs = performance.now() - uploadStart;
     entry.lastSimTimeSeconds = simTimeSeconds;
-    entry.texture = this.getActiveDensityTexture(entry);
 
     const densityRange = entry.simulationBackend === "cpu" ? this.computeDensityRange(entry.density) : "gpu";
     const previewVisible = this.setPreviewVisibility(entry, actorObject.visible === true, previewMode);
+    const debugSettings = readDebugSettings(actor);
+    const diagnosticSampleRange = this.computeDiagnosticSampleRange(entry, actor, simTimeSeconds);
+    const debugState = this.updateDebugOverlay(
+      entry,
+      actor,
+      binding,
+      previewMode,
+      readNumber(actor.params.slicePosition, 0.5, 0, 1),
+      sources,
+      simTimeSeconds,
+      previewVisible
+    );
     const noiseSeed = Math.floor(readNumber(actor.params.noiseSeed, 1));
     const emissionNoiseStrength = readNumber(actor.params.emissionNoiseStrength, 0, 0);
     const windNoiseStrength = readNumber(actor.params.windNoiseStrength, 0, 0);
@@ -1229,11 +1685,25 @@ export class MistVolumeController {
         qualityMode: quality.qualityMode,
         simulationBackendPreference,
         simulationBackend: entry.simulationBackend,
+        simulationPausedMessage: clampedDt <= 1e-8 ? "Simulation time is paused (dt = 0). Press Play to advance the mist simulation." : null,
         previewMode,
         activeSourceCount: sources.length,
+        firstSourceSample: this.buildSourceDiagnostic(sources),
         densityRange,
+        densityFadeRate: Number(readNumber(actor.params.densityDecay, 0.08, 0).toFixed(3)),
+        outflowEnabled: Object.values(boundarySettings).some((mode) => mode === "open"),
+        cpuPostInjectRange: cpuDiagnostics.postInjectRange,
+        cpuPostTransportRange: cpuDiagnostics.postTransportRange,
+        cpuPostFadeRange: cpuDiagnostics.postFadeRange,
+        uploadByteRange,
+        gpuEmitterCount: gpuDiagnostics.emitterCount,
+        diagnosticSampleRange,
         boundaryModes: buildBoundarySummary(boundarySettings),
         previewVisible,
+        debugOverlayMode: debugSettings.overlayMode,
+        debugGridResolution: [debugSettings.gridResolution.x, debugSettings.gridResolution.y, debugSettings.gridResolution.z],
+        debugDensitySampleRange: debugState.sampleRange,
+        debugSourceMarkerCount: debugState.sourceMarkerCount,
         noiseSeed,
         emissionNoiseActive: emissionNoiseStrength > 1e-4,
         windNoiseActive: windNoiseStrength > 1e-4,
@@ -1284,20 +1754,65 @@ export class MistVolumeController {
     const sliceMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), sliceMaterial);
     sliceMesh.frustumCulled = false;
     sliceMesh.name = "mist-volume-preview-slice";
+    const debugGroup = new THREE.Group();
+    debugGroup.name = "mist-volume-debug";
+    const debugLabelGroup = new THREE.Group();
+    debugLabelGroup.name = "mist-volume-debug-labels";
+    const debugDensityPoints = new THREE.Points(
+      new THREE.BufferGeometry(),
+      new THREE.PointsMaterial({
+        size: 0.06,
+        sizeAttenuation: true,
+        vertexColors: true,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false
+      })
+    );
+    debugDensityPoints.frustumCulled = false;
+    debugDensityPoints.name = "mist-volume-debug-density";
+    const debugVelocityLines = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({
+        color: new THREE.Color("#ffcc55"),
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false
+      })
+    );
+    debugVelocityLines.frustumCulled = false;
+    debugVelocityLines.name = "mist-volume-debug-velocity";
+    const debugSourceLines = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({
+        color: new THREE.Color("#7ce0ff"),
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false
+      })
+    );
+    debugSourceLines.frustumCulled = false;
+    debugSourceLines.name = "mist-volume-debug-sources";
+    debugGroup.add(debugLabelGroup, debugDensityPoints, debugVelocityLines, debugSourceLines);
     const previewGroup = new THREE.Group();
     previewGroup.name = "mist-volume-preview";
     previewGroup.matrixAutoUpdate = false;
-    previewGroup.add(volumeMesh, boundsMesh, sliceMesh);
+    previewGroup.add(volumeMesh, boundsMesh, sliceMesh, debugGroup);
     const entry: MistVolumeEntry = {
       actorId,
       previewGroup,
+      debugGroup,
+      debugLabelGroup,
+      debugDensityPoints,
+      debugVelocityLines,
+      debugSourceLines,
       volumeMesh,
       boundsMesh,
       sliceMesh,
       volumeMaterial,
       sliceMaterial,
       boundsMaterial,
-      texture,
+      cpuTexture: texture,
       uploadBytes,
       density: new Float32Array(count),
       densityScratch: new Float32Array(count),
@@ -1309,7 +1824,9 @@ export class MistVolumeController {
       lastSimTimeSeconds: null,
       lastLocalCameraInside: false,
       simulationBackend: "cpu",
-      gpuBackend: null
+      gpuBackend: null,
+      debugLabelPlaneGeometry: new THREE.PlaneGeometry(1, 1),
+      debugLabelTextureCache: new Map()
     };
     this.entriesByActorId.set(actorId, entry);
     return entry;
@@ -1327,14 +1844,10 @@ export class MistVolumeController {
       entry.gpuBackend = null;
       entry.simulationBackend = "cpu";
     }
-    entry.texture = this.getActiveDensityTexture(entry);
   }
 
   private getActiveDensityTexture(entry: MistVolumeEntry): THREE.Data3DTexture {
-    if (entry.simulationBackend === "gpu-webgl2" && entry.gpuBackend) {
-      return entry.gpuBackend.densityTargets[entry.gpuBackend.densityIndex].texture;
-    }
-    return entry.texture;
+    return selectMistDensityTexture(entry.cpuTexture, entry.simulationBackend, entry.gpuBackend);
   }
 
   private resolveVolumeBinding(actor: ActorNode): MistVolumeBinding | null {
@@ -1485,6 +1998,508 @@ export class MistVolumeController {
     entry.boundsMesh.visible = showBounds;
     entry.sliceMesh.visible = showSlice;
     return showVolume || showBounds || showSlice;
+  }
+
+  private buildDebugSamplePoints(
+    previewMode: MistPreviewMode,
+    gridResolution: MistDebugGridResolution,
+    slicePosition: number
+  ): MistDebugSamplePoint[] {
+    const points: MistDebugSamplePoint[] = [];
+    const range = (count: number) => Array.from({ length: count }, (_, index) => count <= 1 ? 0 : index / (count - 1) - 0.5);
+    if (previewMode === "slice-x") {
+      for (const y of range(gridResolution.y)) {
+        for (const z of range(gridResolution.z)) {
+          points.push({
+            localPosition: new THREE.Vector3(slicePosition - 0.5, y, z)
+          });
+        }
+      }
+      return points;
+    }
+    if (previewMode === "slice-y") {
+      for (const x of range(gridResolution.x)) {
+        for (const z of range(gridResolution.z)) {
+          points.push({
+            localPosition: new THREE.Vector3(x, slicePosition - 0.5, z)
+          });
+        }
+      }
+      return points;
+    }
+    if (previewMode === "slice-z") {
+      for (const x of range(gridResolution.x)) {
+        for (const y of range(gridResolution.y)) {
+          points.push({
+            localPosition: new THREE.Vector3(x, y, slicePosition - 0.5)
+          });
+        }
+      }
+      return points;
+    }
+    for (const z of range(gridResolution.z)) {
+      for (const y of range(gridResolution.y)) {
+        for (const x of range(gridResolution.x)) {
+          points.push({
+            localPosition: new THREE.Vector3(x, y, z)
+          });
+        }
+      }
+    }
+    return points;
+  }
+
+  private getDebugPreviewModeCode(previewMode: MistPreviewMode): number {
+    if (previewMode === "slice-z") {
+      return 1;
+    }
+    if (previewMode === "slice-y") {
+      return 2;
+    }
+    if (previewMode === "slice-x") {
+      return 3;
+    }
+    return 0;
+  }
+
+  private ensureDebugSampleTarget(backend: MistVolumeGpuBackend, width: number, height: number): THREE.WebGLRenderTarget {
+    const safeWidth = Math.max(1, width);
+    const safeHeight = Math.max(1, height);
+    const existing = backend.debugSampleTarget;
+    if (existing && existing.width === safeWidth && existing.height === safeHeight) {
+      return existing;
+    }
+    existing?.dispose();
+    const target = new THREE.WebGLRenderTarget(safeWidth, safeHeight, {
+      format: THREE.RGBAFormat,
+      type: THREE.FloatType,
+      minFilter: THREE.NearestFilter,
+      magFilter: THREE.NearestFilter,
+      depthBuffer: false,
+      stencilBuffer: false,
+      generateMipmaps: false
+    });
+    backend.debugSampleTarget = target;
+    return target;
+  }
+
+  private configureDebugSampleUniforms(
+    material: THREE.ShaderMaterial,
+    entry: MistVolumeEntry,
+    actor: ActorNode,
+    previewMode: MistPreviewMode,
+    slicePosition: number,
+    simTimeSeconds: number,
+    outputWidth: number,
+    outputHeight: number
+  ): void {
+    const lookupNoise = readLookupNoiseSettings(actor);
+    const debugSettings = readDebugSettings(actor);
+    const uniforms = material.uniforms as {
+      uDensityTex: { value: THREE.Data3DTexture | null };
+      uVelocityTex: { value: THREE.Data3DTexture | null };
+      uGridResolution: { value: THREE.Vector3 };
+      uOutputResolution: { value: THREE.Vector2 };
+      uPreviewModeCode: { value: number };
+      uSlicePosition: { value: number };
+      uMistTimeSeconds: { value: number };
+      uMistNoiseStrength: { value: number };
+      uMistNoiseScale: { value: number };
+      uMistNoiseSpeed: { value: number };
+      uMistNoiseScroll: { value: THREE.Vector3 };
+      uMistNoiseContrast: { value: number };
+      uMistNoiseBias: { value: number };
+      uMistNoiseSeed: { value: number };
+    };
+    uniforms.uDensityTex.value = this.getActiveDensityTexture(entry);
+    uniforms.uVelocityTex.value = entry.simulationBackend === "gpu-webgl2" && entry.gpuBackend
+      ? entry.gpuBackend.velocityTargets[entry.gpuBackend.velocityIndex].texture
+      : null;
+    uniforms.uGridResolution.value.set(
+      debugSettings.gridResolution.x,
+      debugSettings.gridResolution.y,
+      debugSettings.gridResolution.z
+    );
+    uniforms.uOutputResolution.value.set(outputWidth, outputHeight);
+    uniforms.uPreviewModeCode.value = this.getDebugPreviewModeCode(previewMode);
+    uniforms.uSlicePosition.value = slicePosition;
+    uniforms.uMistTimeSeconds.value = simTimeSeconds;
+    uniforms.uMistNoiseStrength.value = lookupNoise.strength;
+    uniforms.uMistNoiseScale.value = lookupNoise.scale;
+    uniforms.uMistNoiseSpeed.value = lookupNoise.speed;
+    uniforms.uMistNoiseScroll.value.copy(lookupNoise.scroll);
+    uniforms.uMistNoiseContrast.value = lookupNoise.contrast;
+    uniforms.uMistNoiseBias.value = lookupNoise.bias;
+    uniforms.uMistNoiseSeed.value = lookupNoise.seed;
+  }
+
+  private renderDebugSamplePass(
+    backend: MistVolumeGpuBackend,
+    material: THREE.ShaderMaterial,
+    target: THREE.WebGLRenderTarget
+  ): Float32Array {
+    if (!this.webglRenderer) {
+      return new Float32Array();
+    }
+    const renderer = this.webglRenderer;
+    const currentTarget = renderer.getRenderTarget();
+    const currentCubeFace = renderer.getActiveCubeFace();
+    const currentMipmapLevel = renderer.getActiveMipmapLevel();
+    backend.simQuad.material = material;
+    renderer.setRenderTarget(target);
+    renderer.render(backend.simScene, backend.simCamera);
+    const buffer = new Float32Array(target.width * target.height * 4);
+    renderer.readRenderTargetPixels(target, 0, 0, target.width, target.height, buffer);
+    renderer.setRenderTarget(currentTarget, currentCubeFace, currentMipmapLevel);
+    return buffer;
+  }
+
+  private sampleCpuDebugResult(
+    entry: MistVolumeEntry,
+    actor: ActorNode,
+    localPosition: THREE.Vector3,
+    simTimeSeconds: number
+  ): MistDebugSampleResult {
+    const resolution = entry.resolution;
+    const uvw = localPosition.clone().addScalar(0.5);
+    const density = clamp01(
+      sampleTrilinear(
+        entry.density,
+        resolution,
+        uvw.x * (resolution[0] - 1),
+        uvw.y * (resolution[1] - 1),
+        uvw.z * (resolution[2] - 1)
+      ) * this.sampleLookupNoiseCpu(actor, localPosition, simTimeSeconds)
+    );
+    const velocity = new THREE.Vector3(
+      sampleVelocityComponentTrilinear(entry.velocity, resolution, 0, uvw.x * (resolution[0] - 1), uvw.y * (resolution[1] - 1), uvw.z * (resolution[2] - 1)),
+      sampleVelocityComponentTrilinear(entry.velocity, resolution, 1, uvw.x * (resolution[0] - 1), uvw.y * (resolution[1] - 1), uvw.z * (resolution[2] - 1)),
+      sampleVelocityComponentTrilinear(entry.velocity, resolution, 2, uvw.x * (resolution[0] - 1), uvw.y * (resolution[1] - 1), uvw.z * (resolution[2] - 1))
+    );
+    return { density, velocity };
+  }
+
+  private sampleLookupNoiseCpu(actor: ActorNode, localPosition: THREE.Vector3, simTimeSeconds: number): number {
+    const lookupNoise = readLookupNoiseSettings(actor);
+    if (lookupNoise.strength <= 1e-4) {
+      return 1;
+    }
+    const noisePosition = localPosition.clone()
+      .addScalar(0.5)
+      .add(lookupNoise.scroll.clone().multiplyScalar(simTimeSeconds * lookupNoise.speed))
+      .multiplyScalar(lookupNoise.scale)
+      .addScalar(lookupNoise.seed * 0.031);
+    const noiseA = sampleScalarNoiseFromLocalPosition(noisePosition.x, noisePosition.y, noisePosition.z, 0, lookupNoise.seed, 1, 1) * 2 - 1;
+    const noiseB = sampleScalarNoiseFromLocalPosition(noisePosition.x * 2.03 + 17.1, noisePosition.y * 2.03 - 9.4, noisePosition.z * 2.03 + 5.2, 0, lookupNoise.seed + 17, 1, 1) * 2 - 1;
+    const noise = clamp01(0.5 + 0.5 * (noiseA * 0.7 + noiseB * 0.3));
+    const contrasted = clamp01((noise - 0.5) * lookupNoise.contrast + 0.5 + lookupNoise.bias);
+    return THREE.MathUtils.lerp(1, contrasted, clamp01(lookupNoise.strength));
+  }
+
+  private sampleDebugResults(
+    entry: MistVolumeEntry,
+    actor: ActorNode,
+    previewMode: MistPreviewMode,
+    slicePosition: number,
+    simTimeSeconds: number,
+    samplePoints: MistDebugSamplePoint[],
+    overlayMode: MistDebugOverlayMode
+  ): MistDebugSampleResult[] {
+    if (samplePoints.length === 0) {
+      return [];
+    }
+    if (entry.simulationBackend === "gpu-webgl2" && entry.gpuBackend && this.webglRenderer) {
+      const backend = entry.gpuBackend;
+      const width = Math.min(64, samplePoints.length);
+      const height = Math.ceil(samplePoints.length / width);
+      const densityTarget = this.ensureDebugSampleTarget(backend, width, height);
+      this.configureDebugSampleUniforms(backend.materials.debugDensitySample, entry, actor, previewMode, slicePosition, simTimeSeconds, width, height);
+      const densityPixels = this.renderDebugSamplePass(backend, backend.materials.debugDensitySample, densityTarget);
+      let velocityPixels: Float32Array | null = null;
+      if (overlayMode === "velocity-vectors") {
+        this.configureDebugSampleUniforms(backend.materials.debugVelocitySample, entry, actor, previewMode, slicePosition, simTimeSeconds, width, height);
+        velocityPixels = this.renderDebugSamplePass(backend, backend.materials.debugVelocitySample, densityTarget);
+      }
+      return samplePoints.map((_, index) => {
+        const base = index * 4;
+        return {
+          density: densityPixels[base] ?? 0,
+          velocity: new THREE.Vector3(
+            velocityPixels?.[base] ?? 0,
+            velocityPixels?.[base + 1] ?? 0,
+            velocityPixels?.[base + 2] ?? 0
+          )
+        };
+      });
+    }
+    return samplePoints.map((point) => this.sampleCpuDebugResult(entry, actor, point.localPosition, simTimeSeconds));
+  }
+
+  private computeDiagnosticSampleRange(entry: MistVolumeEntry, actor: ActorNode, simTimeSeconds: number): [number, number] | "n/a" {
+    const samplePoints = this.buildDebugSamplePoints("volume", { x: 4, y: 4, z: 4 }, 0.5);
+    const sampleResults = this.sampleDebugResults(entry, actor, "volume", 0.5, simTimeSeconds, samplePoints, "density-cells");
+    if (sampleResults.length === 0) {
+      return "n/a";
+    }
+    let min = Number.POSITIVE_INFINITY;
+    let max = Number.NEGATIVE_INFINITY;
+    for (const result of sampleResults) {
+      min = Math.min(min, result.density);
+      max = Math.max(max, result.density);
+    }
+    return [Number(min.toFixed(3)), Number(max.toFixed(3))];
+  }
+
+  private buildSourceDiagnostic(sources: MistVolumeSourceSample[]): string {
+    const firstSource = sources[0];
+    if (!firstSource) {
+      return "n/a";
+    }
+    const format = (value: number) => Number(value.toFixed(3));
+    return `pos ${format(firstSource.positionLocal.x)}, ${format(firstSource.positionLocal.y)}, ${format(firstSource.positionLocal.z)} | dir ${format(firstSource.directionLocal.x)}, ${format(firstSource.directionLocal.y)}, ${format(firstSource.directionLocal.z)}`;
+  }
+
+  private getOrCreateDebugLabelTexture(
+    entry: MistVolumeEntry,
+    label: string
+  ): { texture: THREE.CanvasTexture; aspect: number } {
+    const cached = entry.debugLabelTextureCache.get(label);
+    if (cached) {
+      return cached;
+    }
+    const measureCanvas = document.createElement("canvas");
+    const measureContext = measureCanvas.getContext("2d");
+    const fontSize = 96;
+    const font = `bold ${fontSize}px monospace`;
+    const horizontalPadding = 28;
+    const verticalPadding = 16;
+    const border = 3;
+    const measuredWidth = (() => {
+      if (!measureContext) {
+        return fontSize * Math.max(1, label.length) * 0.62;
+      }
+      measureContext.font = font;
+      return Math.max(1, measureContext.measureText(label).width);
+    })();
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.ceil(measuredWidth + horizontalPadding * 2 + border * 2);
+    canvas.height = Math.ceil(fontSize + verticalPadding * 2 + border * 2);
+    const context = canvas.getContext("2d");
+    if (!context) {
+      const texture = new THREE.CanvasTexture(canvas);
+      const fallback = { texture, aspect: canvas.width / Math.max(1, canvas.height) };
+      entry.debugLabelTextureCache.set(label, fallback);
+      return fallback;
+    }
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = "rgba(8, 10, 16, 0.88)";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.strokeStyle = "rgba(220, 240, 255, 0.9)";
+    context.lineWidth = border;
+    context.strokeRect(border / 2, border / 2, canvas.width - border, canvas.height - border);
+    context.fillStyle = "#ffffff";
+    context.font = font;
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(label, canvas.width / 2, canvas.height / 2);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const next = {
+      texture,
+      aspect: canvas.width / Math.max(1, canvas.height)
+    };
+    entry.debugLabelTextureCache.set(label, next);
+    return next;
+  }
+
+  private updateDebugOverlay(
+    entry: MistVolumeEntry,
+    actor: ActorNode,
+    binding: MistVolumeBinding,
+    previewMode: MistPreviewMode,
+    slicePosition: number,
+    sources: MistVolumeSourceSample[],
+    simTimeSeconds: number,
+    previewVisible: boolean
+  ): { sampleRange: [number, number] | "n/a"; sourceMarkerCount: number } {
+    const debugSettings = readDebugSettings(actor);
+    const showPrimaryOverlay = previewVisible && debugSettings.overlayMode !== "off";
+    const showSourceMarkers = previewVisible && debugSettings.sourceMarkers;
+    entry.debugGroup.visible = showPrimaryOverlay || showSourceMarkers;
+    entry.debugLabelGroup.visible = showPrimaryOverlay && debugSettings.overlayMode === "numbers";
+    entry.debugDensityPoints.visible = showPrimaryOverlay && debugSettings.overlayMode === "density-cells";
+    entry.debugVelocityLines.visible = showPrimaryOverlay && debugSettings.overlayMode === "velocity-vectors";
+    entry.debugSourceLines.visible = showSourceMarkers;
+    let sampleRange: [number, number] | "n/a" = "n/a";
+    if (showPrimaryOverlay) {
+      const samplePoints = this.buildDebugSamplePoints(previewMode, debugSettings.gridResolution, slicePosition);
+      const sampleResults = this.sampleDebugResults(
+        entry,
+        actor,
+        previewMode,
+        slicePosition,
+        simTimeSeconds,
+        samplePoints,
+        debugSettings.overlayMode
+      );
+      if (sampleResults.length > 0) {
+        let min = Number.POSITIVE_INFINITY;
+        let max = Number.NEGATIVE_INFINITY;
+        for (const result of sampleResults) {
+          min = Math.min(min, result.density);
+          max = Math.max(max, result.density);
+        }
+        sampleRange = [Number(min.toFixed(3)), Number(max.toFixed(3))];
+      }
+      this.rebuildDebugLabels(
+        entry,
+        binding,
+        samplePoints,
+        sampleResults,
+        debugSettings.valueSize,
+        debugSettings.hideZeroNumbers,
+        debugSettings.densityThreshold
+      );
+      this.rebuildDebugDensityPoints(entry, samplePoints, sampleResults, debugSettings);
+      this.rebuildDebugVelocityLines(entry, samplePoints, sampleResults, debugSettings);
+    } else {
+      this.rebuildDebugLabels(
+        entry,
+        binding,
+        [],
+        [],
+        debugSettings.valueSize,
+        debugSettings.hideZeroNumbers,
+        debugSettings.densityThreshold
+      );
+      this.rebuildDebugDensityPoints(entry, [], [], debugSettings);
+      this.rebuildDebugVelocityLines(entry, [], [], debugSettings);
+    }
+    const sourceMarkerCount = showSourceMarkers ? this.rebuildDebugSourceMarkers(entry, sources) : this.rebuildDebugSourceMarkers(entry, []);
+    return { sampleRange, sourceMarkerCount };
+  }
+
+  private getDebugLabelQuaternion(binding: MistVolumeBinding): THREE.Quaternion {
+    const cameraPosition = this.kernel.store.getState().state.camera.position;
+    const localCameraPosition = new THREE.Vector3(
+      cameraPosition[0] ?? 0,
+      cameraPosition[1] ?? 0,
+      cameraPosition[2] ?? 0
+    ).applyMatrix4(binding.worldToVolumeLocal);
+    const faceNormal = new THREE.Vector3(0, 0, 1);
+    const absX = Math.abs(localCameraPosition.x);
+    const absY = Math.abs(localCameraPosition.y);
+    const absZ = Math.abs(localCameraPosition.z);
+    if (absX >= absY && absX >= absZ) {
+      faceNormal.set(Math.sign(localCameraPosition.x) || 1, 0, 0);
+    } else if (absY >= absZ) {
+      faceNormal.set(0, Math.sign(localCameraPosition.y) || 1, 0);
+    } else {
+      faceNormal.set(0, 0, Math.sign(localCameraPosition.z) || 1);
+    }
+    return new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), faceNormal);
+  }
+
+  private rebuildDebugLabels(
+    entry: MistVolumeEntry,
+    binding: MistVolumeBinding,
+    samplePoints: MistDebugSamplePoint[],
+    sampleResults: MistDebugSampleResult[],
+    valueSize: number,
+    hideZeroNumbers: boolean,
+    densityThreshold: number
+  ): void {
+    for (const child of [...entry.debugLabelGroup.children]) {
+      entry.debugLabelGroup.remove(child);
+      if (child instanceof THREE.Mesh && child.material instanceof THREE.MeshBasicMaterial) {
+        child.material.dispose();
+      }
+    }
+    const labelQuaternion = this.getDebugLabelQuaternion(binding);
+    samplePoints.forEach((samplePoint, index) => {
+      const density = sampleResults[index]?.density ?? 0;
+      if (hideZeroNumbers && density < densityThreshold) {
+        return;
+      }
+      const labelTexture = this.getOrCreateDebugLabelTexture(entry, density.toPrecision(3));
+      const material = new THREE.MeshBasicMaterial({
+        map: labelTexture.texture,
+        transparent: true,
+        depthWrite: false,
+        depthTest: false
+      });
+      const mesh = new THREE.Mesh(entry.debugLabelPlaneGeometry, material);
+      mesh.position.copy(samplePoint.localPosition);
+      mesh.quaternion.copy(labelQuaternion);
+      mesh.scale.set(valueSize * labelTexture.aspect, valueSize, 1);
+      mesh.frustumCulled = false;
+      entry.debugLabelGroup.add(mesh);
+    });
+  }
+
+  private rebuildDebugDensityPoints(
+    entry: MistVolumeEntry,
+    samplePoints: MistDebugSamplePoint[],
+    sampleResults: MistDebugSampleResult[],
+    debugSettings: MistDebugSettings
+  ): void {
+    const positions: number[] = [];
+    const colors: number[] = [];
+    samplePoints.forEach((samplePoint, index) => {
+      const density = sampleResults[index]?.density ?? 0;
+      if (density < debugSettings.densityThreshold) {
+        return;
+      }
+      positions.push(samplePoint.localPosition.x, samplePoint.localPosition.y, samplePoint.localPosition.z);
+      colors.push(density, density, density);
+    });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    entry.debugDensityPoints.geometry.dispose();
+    entry.debugDensityPoints.geometry = geometry;
+    (entry.debugDensityPoints.material as THREE.PointsMaterial).size = debugSettings.valueSize * 0.9;
+  }
+
+  private rebuildDebugVelocityLines(
+    entry: MistVolumeEntry,
+    samplePoints: MistDebugSamplePoint[],
+    sampleResults: MistDebugSampleResult[],
+    debugSettings: MistDebugSettings
+  ): void {
+    const positions: number[] = [];
+    samplePoints.forEach((samplePoint, index) => {
+      const velocity = sampleResults[index]?.velocity ?? new THREE.Vector3();
+      if (velocity.lengthSq() <= 1e-8) {
+        return;
+      }
+      const end = samplePoint.localPosition.clone().add(velocity.clone().multiplyScalar(debugSettings.vectorScale));
+      positions.push(
+        samplePoint.localPosition.x, samplePoint.localPosition.y, samplePoint.localPosition.z,
+        end.x, end.y, end.z
+      );
+    });
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    entry.debugVelocityLines.geometry.dispose();
+    entry.debugVelocityLines.geometry = geometry;
+  }
+
+  private rebuildDebugSourceMarkers(entry: MistVolumeEntry, sources: MistVolumeSourceSample[]): number {
+    const positions: number[] = [];
+    for (const source of sources) {
+      const end = source.positionLocal.clone().add(source.directionLocal.clone().multiplyScalar(0.08));
+      positions.push(
+        source.positionLocal.x, source.positionLocal.y, source.positionLocal.z,
+        end.x, end.y, end.z
+      );
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    entry.debugSourceLines.geometry.dispose();
+    entry.debugSourceLines.geometry = geometry;
+    return sources.length;
   }
 
   private collectSources(actor: ActorNode, binding: MistVolumeBinding): MistVolumeSourceSample[] {
@@ -1663,7 +2678,7 @@ export class MistVolumeController {
     uniforms.uWindNoiseSpeed.value = readNumber(actor.params.windNoiseSpeed, 0.25, 0);
     uniforms.uWispiness.value = readNumber(actor.params.wispiness, 0, 0);
     uniforms.uDiffusion.value = Math.max(0, readNumber(actor.params.diffusion, 0.04, 0));
-    uniforms.uDensityDecay.value = clamp01(readNumber(actor.params.densityDecay, 0.08, 0, 1));
+    uniforms.uDensityDecay.value = Math.max(0, readNumber(actor.params.densityDecay, 0.08, 0));
     uniforms.uEdgeBreakup.value = readNumber(actor.params.edgeBreakup, 0, 0);
     uniforms.uBuoyancy.value = readNumber(actor.params.buoyancy, 0.35);
     uniforms.uVelocityDrag.value = clamp01(readNumber(actor.params.velocityDrag, 0.12, 0, 1));
@@ -1699,18 +2714,20 @@ export class MistVolumeController {
     simTimeSeconds: number,
     dtSeconds: number,
     quality: MistVolumeQualitySettings
-  ): void {
+  ): MistGpuSimulationDiagnostics {
     void quality;
     const backend = entry.gpuBackend;
     if (!backend || !this.webglRenderer) {
-      return;
+      return { emitterCount: 0 };
     }
     const steps = Math.max(1, quality.simulationSubsteps);
     const stepDt = dtSeconds / steps;
     const boundaries = readBoundarySettings(actor);
+    let lastEmitterCount = 0;
     for (let step = 0; step < steps; step += 1) {
       const stepTime = simTimeSeconds - dtSeconds + stepDt * (step + 1);
       const emitterCount = this.uploadGpuEmitters(backend, actor, sources, stepTime);
+      lastEmitterCount = emitterCount;
       const nextVelocityTarget = backend.velocityTargets[1 - backend.velocityIndex]!;
       const nextDensityTarget = backend.densityTargets[1 - backend.densityIndex]!;
       this.configureGpuPassUniforms(backend.materials.velocityInject, entry, actor, emitterCount, stepDt, stepTime, boundaries);
@@ -1751,6 +2768,7 @@ export class MistVolumeController {
       this.renderGpuPass(backend, backend.materials.velocityFinalize, velocityTargetAfterDiffuse);
       backend.velocityIndex = (1 - backend.velocityIndex) as 0 | 1;
     }
+    return { emitterCount: lastEmitterCount };
   }
 
   private simulate(
@@ -1760,7 +2778,7 @@ export class MistVolumeController {
     simTimeSeconds: number,
     dtSeconds: number,
     quality: MistVolumeQualitySettings
-  ): void {
+  ): MistCpuSimulationDiagnostics {
     const steps = Math.max(1, quality.simulationSubsteps);
     const stepDt = dtSeconds / steps;
     const noiseSeed = Math.floor(readNumber(actor.params.noiseSeed, 1));
@@ -1770,7 +2788,7 @@ export class MistVolumeController {
     const buoyancy = readNumber(actor.params.buoyancy, 0.35);
     const velocityDrag = clamp01(readNumber(actor.params.velocityDrag, 0.12, 0, 1));
     const diffusion = Math.max(0, readNumber(actor.params.diffusion, 0.04, 0));
-    const densityDecay = clamp01(readNumber(actor.params.densityDecay, 0.08, 0, 1));
+    const densityDecay = Math.max(0, readNumber(actor.params.densityDecay, 0.08, 0));
     const emissionNoiseStrength = readNumber(actor.params.emissionNoiseStrength, 0, 0);
     const emissionNoiseScale = readNumber(actor.params.emissionNoiseScale, 1, 0.01);
     const emissionNoiseSpeed = readNumber(actor.params.emissionNoiseSpeed, 0.75, 0);
@@ -1788,6 +2806,8 @@ export class MistVolumeController {
         Math.max(entry.resolution[0], entry.resolution[1], entry.resolution[2])
       )
       );
+    let postInjectRange: [number, number] | "n/a" = "n/a";
+    let postTransportRange: [number, number] | "n/a" = "n/a";
 
     for (let step = 0; step < steps; step += 1) {
       const stepTime = simTimeSeconds - dtSeconds + stepDt * (step + 1);
@@ -1803,13 +2823,20 @@ export class MistVolumeController {
         emissionNoiseScale,
         emissionNoiseSpeed
       );
+      postInjectRange = computeMistDensityRange(entry.density);
       this.applyNoiseForces(entry, stepDt, stepTime, noiseSeed, windVector, windNoiseStrength, windNoiseScale, windNoiseSpeed, wispiness);
       this.diffuseVelocity(entry, diffusion, stepDt);
       this.advectDensity(entry, stepDt, boundaries);
       this.applyDensityDiffusion(entry, diffusion);
+      postTransportRange = computeMistDensityRange(entry.density);
       this.applyDecay(entry, densityDecay, stepDt, edgeBreakup, stepTime, noiseSeed);
       this.applyVelocityForces(entry, buoyancy, velocityDrag, stepDt, boundaries);
     }
+    return {
+      postInjectRange,
+      postTransportRange,
+      postFadeRange: computeMistDensityRange(entry.density)
+    };
   }
 
   private injectSources(
@@ -1824,64 +2851,20 @@ export class MistVolumeController {
     emissionNoiseScale: number,
     emissionNoiseSpeed: number
   ): void {
-    for (const source of sources) {
-      const [noiseX, noiseY, noiseZ] = emissionNoiseStrength > 1e-4
-        ? sampleVectorNoise4D(
-          source.positionLocal.x,
-          source.positionLocal.y,
-          source.positionLocal.z,
-          timeSeconds,
-          noiseSeed + 11,
-          emissionNoiseScale,
-          emissionNoiseSpeed
-        )
-        : [0, 0, 0];
-      const emissionNoiseValue = emissionNoiseStrength > 1e-4
-        ? sampleScalarNoiseFromLocalPosition(
-          source.positionLocal.x + 13.7,
-          source.positionLocal.y - 7.1,
-          source.positionLocal.z + 3.9,
-          timeSeconds,
-          noiseSeed + 29,
-          emissionNoiseScale,
-          emissionNoiseSpeed
-        ) * 2 - 1
-        : 0;
-      const noisyDensityGain = densityGain * Math.max(0, 1 + emissionNoiseValue * emissionNoiseStrength * 0.6);
-      const noisyInitialSpeed = initialSpeed * Math.max(0, 1 + emissionNoiseValue * emissionNoiseStrength * 0.35);
-      const noisyDirection = emissionNoiseStrength > 1e-4
-        ? source.directionLocal.clone().add(new THREE.Vector3(noiseX, noiseY, noiseZ).multiplyScalar(emissionNoiseStrength * 0.45)).normalize()
-        : source.directionLocal;
-      const cx = ((source.positionLocal.x + 0.5) * (entry.resolution[0] - 1));
-      const cy = ((source.positionLocal.y + 0.5) * (entry.resolution[1] - 1));
-      const cz = ((source.positionLocal.z + 0.5) * (entry.resolution[2] - 1));
-      const minX = Math.max(0, Math.floor(cx - radiusCells));
-      const maxX = Math.min(entry.resolution[0] - 1, Math.ceil(cx + radiusCells));
-      const minY = Math.max(0, Math.floor(cy - radiusCells));
-      const maxY = Math.min(entry.resolution[1] - 1, Math.ceil(cy + radiusCells));
-      const minZ = Math.max(0, Math.floor(cz - radiusCells));
-      const maxZ = Math.min(entry.resolution[2] - 1, Math.ceil(cz + radiusCells));
-      for (let z = minZ; z <= maxZ; z += 1) {
-        for (let y = minY; y <= maxY; y += 1) {
-          for (let x = minX; x <= maxX; x += 1) {
-            const dx = (x - cx) / Math.max(1, radiusCells);
-            const dy = (y - cy) / Math.max(1, radiusCells);
-            const dz = (z - cz) / Math.max(1, radiusCells);
-            const dist2 = dx * dx + dy * dy + dz * dz;
-            if (dist2 > 1) {
-              continue;
-            }
-            const weight = 1 - dist2;
-            const index = cellIndex(x, y, z, entry.resolution);
-            entry.density[index] = clamp01((entry.density[index] ?? 0) + noisyDensityGain * weight);
-            const velocityIndex = index * 3;
-            entry.velocity[velocityIndex] = (entry.velocity[velocityIndex] ?? 0) + noisyDirection.x * noisyInitialSpeed * weight;
-            entry.velocity[velocityIndex + 1] = (entry.velocity[velocityIndex + 1] ?? 0) + noisyDirection.y * noisyInitialSpeed * weight;
-            entry.velocity[velocityIndex + 2] = (entry.velocity[velocityIndex + 2] ?? 0) + noisyDirection.z * noisyInitialSpeed * weight;
-          }
-        }
-      }
-    }
+    injectMistSourcesIntoField(
+      entry.density,
+      entry.velocity,
+      entry.resolution,
+      sources,
+      radiusCells,
+      densityGain,
+      initialSpeed,
+      timeSeconds,
+      noiseSeed,
+      emissionNoiseStrength,
+      emissionNoiseScale,
+      emissionNoiseSpeed
+    );
   }
 
   private applyNoiseForces(
@@ -2073,7 +3056,7 @@ export class MistVolumeController {
     timeSeconds: number,
     noiseSeed: number
   ): void {
-    const decayFactor = Math.max(0, 1 - densityDecay * stepDt);
+    const decayFactor = computeMistDensityFadeFactor(densityDecay, stepDt);
     const maxX = Math.max(1, entry.resolution[0] - 1);
     const maxY = Math.max(1, entry.resolution[1] - 1);
     const maxZ = Math.max(1, entry.resolution[2] - 1);
@@ -2155,29 +3138,14 @@ export class MistVolumeController {
     }
   }
 
-  private uploadDensity(entry: MistVolumeEntry): void {
-    for (let index = 0; index < entry.count; index += 1) {
-      entry.uploadBytes[index] = Math.round(clamp01(entry.density[index] ?? 0) * 255);
-    }
-    entry.texture.needsUpdate = true;
+  private uploadDensity(entry: MistVolumeEntry): [number, number] {
+    const byteRange = uploadMistDensityBytes(entry.density, entry.uploadBytes);
+    entry.cpuTexture.needsUpdate = true;
+    return byteRange;
   }
 
   private computeDensityRange(density: Float32Array): [number, number] {
-    let min = Number.POSITIVE_INFINITY;
-    let max = Number.NEGATIVE_INFINITY;
-    for (let index = 0; index < density.length; index += 1) {
-      const value = density[index] ?? 0;
-      if (value < min) {
-        min = value;
-      }
-      if (value > max) {
-        max = value;
-      }
-    }
-    if (!Number.isFinite(min) || !Number.isFinite(max)) {
-      return [0, 0];
-    }
-    return [Number(min.toFixed(3)), Number(max.toFixed(3))];
+    return computeMistDensityRange(density);
   }
 
   private disposeEntry(actorId: string): void {
@@ -2189,12 +3157,28 @@ export class MistVolumeController {
     entry.volumeMesh.geometry.dispose();
     entry.boundsMesh.geometry.dispose();
     entry.sliceMesh.geometry.dispose();
+    entry.debugDensityPoints.geometry.dispose();
+    (entry.debugDensityPoints.material as THREE.PointsMaterial).dispose();
+    entry.debugVelocityLines.geometry.dispose();
+    (entry.debugVelocityLines.material as THREE.LineBasicMaterial).dispose();
+    entry.debugSourceLines.geometry.dispose();
+    (entry.debugSourceLines.material as THREE.LineBasicMaterial).dispose();
+    entry.debugLabelPlaneGeometry.dispose();
+    for (const labelTexture of entry.debugLabelTextureCache.values()) {
+      labelTexture.texture.dispose();
+    }
+    for (const child of [...entry.debugLabelGroup.children]) {
+      if (child instanceof THREE.Mesh) {
+        const material = child.material;
+        if (material instanceof THREE.MeshBasicMaterial) {
+          material.dispose();
+        }
+      }
+    }
     entry.volumeMaterial.dispose();
     entry.sliceMaterial.dispose();
     entry.boundsMaterial.dispose();
-    if (entry.simulationBackend === "cpu") {
-      entry.texture.dispose();
-    }
+    entry.cpuTexture.dispose();
     disposeMistVolumeGpuBackend(entry.gpuBackend);
     this.entriesByActorId.delete(actorId);
   }

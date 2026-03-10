@@ -1,4 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  formatNumberValue,
+  normalizeCommittedNumber,
+  parseDraftNumber
+} from "@/ui/widgets/numberEditing";
 
 interface DigitToken {
   char: string;
@@ -10,13 +15,12 @@ interface DigitScrubInputProps {
   value: number;
   mixed?: boolean;
   precision?: number;
+  min?: number;
+  max?: number;
+  step?: number;
   disabled?: boolean;
   className?: string;
   onChange: (value: number) => void;
-}
-
-function formatValue(value: number, precision: number): string {
-  return Number.isFinite(value) ? value.toFixed(precision) : (0).toFixed(precision);
 }
 
 function tokensFromFormatted(formatted: string): DigitToken[] {
@@ -57,10 +61,6 @@ function tokensWithGhostDigits(formatted: string, includeGhostDigits: boolean, g
   return [...base.slice(0, firstNumericIndex), ...ghosts, ...base.slice(firstNumericIndex)];
 }
 
-function roundToPrecision(value: number, precision: number): number {
-  return Number(value.toFixed(Math.max(0, precision)));
-}
-
 function setGlobalScrubMode(active: boolean): void {
   const className = "is-scrubbing-number";
   if (active) {
@@ -73,22 +73,25 @@ function setGlobalScrubMode(active: boolean): void {
 export function DigitScrubInput(props: DigitScrubInputProps) {
   const precision = props.precision ?? 3;
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(formatValue(props.value, precision));
+  const [draft, setDraft] = useState(formatNumberValue(props.value, precision));
   const [hoveredPlace, setHoveredPlace] = useState<number | null>(null);
   const [hovered, setHovered] = useState(false);
   const [pendingReplaceSelection, setPendingReplaceSelection] = useState(false);
   const editInputRef = useRef<HTMLInputElement | null>(null);
   const rootRef = useRef<HTMLButtonElement | null>(null);
   const cleanupDragRef = useRef<(() => void) | null>(null);
-  const [maxVisibleChars, setMaxVisibleChars] = useState<number | null>(null);
+  const cleanupPendingRef = useRef<(() => void) | null>(null);
   const draggingRef = useRef(false);
   const suppressClickRef = useRef(false);
+  const skipBlurCommitRef = useRef(false);
+  const parsedDraft = useMemo(() => parseDraftNumber(draft), [draft]);
+  const invalidDraft = editing && draft.trim().length > 0 && parsedDraft === null;
 
   useEffect(() => {
     if (!editing && !draggingRef.current) {
-      setDraft(formatValue(props.value, precision));
+      setDraft(formatNumberValue(props.value, precision));
     }
-  }, [props.value, precision, editing]);
+  }, [editing, precision, props.value]);
 
   useEffect(() => {
     if (!editing || !pendingReplaceSelection || !editInputRef.current) {
@@ -102,112 +105,47 @@ export function DigitScrubInput(props: DigitScrubInputProps) {
 
   useEffect(() => {
     return () => {
+      cleanupPendingRef.current?.();
       cleanupDragRef.current?.();
       setGlobalScrubMode(false);
     };
   }, []);
 
-  useEffect(() => {
-    const root = rootRef.current;
-    if (!root) {
-      return;
-    }
-    const measure = () => {
-      const style = window.getComputedStyle(root);
-      const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
-      const paddingRight = Number.parseFloat(style.paddingRight) || 0;
-      const contentWidth = Math.max(1, root.clientWidth - paddingLeft - paddingRight);
-      const canvas = document.createElement("canvas");
-      const context = canvas.getContext("2d");
-      if (!context) {
-        setMaxVisibleChars(Math.max(1, Math.floor(contentWidth / 8)));
-        return;
-      }
-      context.font = `${style.fontSize} ${style.fontFamily}`;
-      const charWidth = Math.max(1, context.measureText("0").width);
-      setMaxVisibleChars(Math.max(1, Math.floor(contentWidth / charWidth)));
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(root);
-    return () => {
-      observer.disconnect();
-    };
-  }, []);
-
-  const tokens = useMemo(() => tokensWithGhostDigits(draft, hovered, 1), [draft, hovered]);
-  const visibleTokenIndexes = useMemo(() => {
-    if (maxVisibleChars === null || tokens.length <= maxVisibleChars) {
-      return new Set(tokens.map((_, index) => index));
-    }
-    const hidden = new Set<number>();
-    const decimalIndex = tokens.findIndex((token) => token.char === ".");
-    let visibleCount = tokens.length;
-
-    for (let index = tokens.length - 1; index >= 0 && visibleCount > maxVisibleChars; index -= 1) {
-      const token = tokens[index];
-      if (!token) {
-        continue;
-      }
-      if (decimalIndex !== -1 && index <= decimalIndex) {
-        break;
-      }
-      if (token.ghost) {
-        continue;
-      }
-      hidden.add(index);
-      visibleCount -= 1;
-    }
-
-    if (decimalIndex !== -1 && visibleCount > maxVisibleChars && !hidden.has(decimalIndex)) {
-      hidden.add(decimalIndex);
-      visibleCount -= 1;
-    }
-
-    for (let index = tokens.length - 1; index >= 0 && visibleCount > maxVisibleChars; index -= 1) {
-      if (hidden.has(index)) {
-        continue;
-      }
-      const token = tokens[index];
-      if (!token) {
-        continue;
-      }
-      if (token.ghost) {
-        continue;
-      }
-      hidden.add(index);
-      visibleCount -= 1;
-    }
-
-    return new Set(tokens.map((_, index) => index).filter((index) => !hidden.has(index)));
-  }, [tokens, maxVisibleChars]);
+  const tokens = useMemo(() => {
+    return hovered ? tokensWithGhostDigits(draft, true, 1) : tokensFromFormatted(draft);
+  }, [draft, hovered]);
 
   const commitDraft = () => {
-    const parsed = Number.parseFloat(draft);
-    if (Number.isNaN(parsed)) {
-      setDraft(formatValue(props.value, precision));
+    setEditing(false);
+    if (parsedDraft === null) {
+      setDraft(formatNumberValue(props.value, precision));
       return;
     }
-    const next = roundToPrecision(parsed, precision);
+    const next = normalizeCommittedNumber(parsedDraft, {
+      min: props.min,
+      max: props.max,
+      step: props.step,
+      precision
+    });
     props.onChange(next);
-    setDraft(formatValue(next, precision));
+    setDraft(formatNumberValue(next, precision));
   };
 
-  const startDigitDrag = (event: React.PointerEvent<HTMLSpanElement>, place: number) => {
-    if (props.disabled) {
+  const cancelDraft = () => {
+    setEditing(false);
+    setDraft(formatNumberValue(props.value, precision));
+  };
+
+  const startDigitDrag = (place: number) => {
+    if (props.disabled || !rootRef.current) {
       return;
     }
-    if (!rootRef.current) {
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
+    cleanupPendingRef.current?.();
     const startValue = props.value;
     const increment = 10 ** place;
     let lastSteps = 0;
     let accumulatedDeltaX = 0;
     let lockAcquired = false;
-    let didAdjustValue = false;
     let disposed = false;
     const root = rootRef.current;
 
@@ -227,12 +165,15 @@ export function DigitScrubInput(props: DigitScrubInputProps) {
       }
       draggingRef.current = true;
       lastSteps = steps;
-      const next = roundToPrecision(startValue + steps * increment, precision);
+      const rawNext = startValue + steps * increment;
+      const next = normalizeCommittedNumber(rawNext, {
+        min: props.min,
+        max: props.max,
+        step: props.step,
+        precision
+      });
       props.onChange(next);
-      setDraft(formatValue(next, precision));
-      if (next !== startValue) {
-        didAdjustValue = true;
-      }
+      setDraft(formatNumberValue(next, precision));
     };
 
     const cleanup = () => {
@@ -251,7 +192,7 @@ export function DigitScrubInput(props: DigitScrubInputProps) {
       if (document.pointerLockElement === root) {
         document.exitPointerLock();
       }
-      if (lockAcquired && didAdjustValue) {
+      if (lockAcquired) {
         suppressClickRef.current = true;
         window.setTimeout(() => {
           suppressClickRef.current = false;
@@ -330,33 +271,109 @@ export function DigitScrubInput(props: DigitScrubInputProps) {
     }
   };
 
+  const startPendingDigitDrag = (event: React.PointerEvent<HTMLSpanElement>, place: number) => {
+    if (props.disabled) {
+      return;
+    }
+    cleanupPendingRef.current?.();
+    const pointerId = event.pointerId;
+    const startX = event.clientX;
+    let disposed = false;
+
+    const cleanup = () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerCancel);
+      cleanupPendingRef.current = null;
+    };
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+      if (moveEvent.pointerId !== pointerId) {
+        return;
+      }
+      if (Math.abs(moveEvent.clientX - startX) <= 3) {
+        return;
+      }
+      cleanup();
+      startDigitDrag(place);
+    };
+
+    const onPointerUp = (upEvent: PointerEvent) => {
+      if (upEvent.pointerId !== pointerId) {
+        return;
+      }
+      cleanup();
+    };
+
+    const onPointerCancel = (cancelEvent: PointerEvent) => {
+      if (cancelEvent.pointerId !== pointerId) {
+        return;
+      }
+      cleanup();
+    };
+
+    cleanupPendingRef.current = cleanup;
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", onPointerUp);
+    window.addEventListener("pointercancel", onPointerCancel);
+  };
+
   if (editing) {
     return (
-      <input
-        ref={editInputRef}
-        className={`widget-digit-input editing${props.className ? ` ${props.className}` : ""}`}
-        type="text"
-        value={draft}
-        autoFocus
-        disabled={props.disabled}
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => {
-          setEditing(false);
-          commitDraft();
-        }}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") {
-            event.preventDefault();
-            setEditing(false);
+      <span className={`widget-buffered-number${invalidDraft ? " is-invalid" : ""}`}>
+        <input
+          ref={editInputRef}
+          className={`widget-digit-input editing${props.className ? ` ${props.className}` : ""}`}
+          type="text"
+          value={draft}
+          autoFocus
+          disabled={props.disabled}
+          aria-invalid={invalidDraft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={() => {
+            if (skipBlurCommitRef.current) {
+              skipBlurCommitRef.current = false;
+              return;
+            }
             commitDraft();
-          }
-          if (event.key === "Escape") {
-            event.preventDefault();
-            setEditing(false);
-            setDraft(formatValue(props.value, precision));
-          }
-        }}
-      />
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              (event.target as HTMLInputElement).blur();
+            }
+            if (event.key === "Escape") {
+              event.preventDefault();
+              skipBlurCommitRef.current = true;
+              cancelDraft();
+              (event.target as HTMLInputElement).blur();
+            }
+            if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+              event.preventDefault();
+              const factor = event.shiftKey ? 10 : 1;
+              const direction = event.key === "ArrowUp" ? 1 : -1;
+              const baseStep = props.step ?? Math.max(10 ** -precision, 0.0001);
+              const next = normalizeCommittedNumber(props.value + direction * baseStep * factor, {
+                min: props.min,
+                max: props.max,
+                step: props.step,
+                precision
+              });
+              props.onChange(next);
+              setDraft(formatNumberValue(next, precision));
+            }
+          }}
+        />
+        {invalidDraft ? (
+          <span className="widget-buffered-number-indicator" aria-hidden="true" title="Invalid number">
+            !
+          </span>
+        ) : null}
+      </span>
     );
   }
 
@@ -368,10 +385,7 @@ export function DigitScrubInput(props: DigitScrubInputProps) {
       disabled={props.disabled}
       title={props.mixed ? "Mixed values" : "Drag digits to adjust place values. Click to type."}
       onClick={() => {
-        if (props.disabled) {
-          return;
-        }
-        if (suppressClickRef.current) {
+        if (props.disabled || suppressClickRef.current) {
           return;
         }
         setPendingReplaceSelection(true);
@@ -382,19 +396,12 @@ export function DigitScrubInput(props: DigitScrubInputProps) {
         setHovered(false);
         setHoveredPlace(null);
       }}
-      onPointerDown={(event) => {
-        if (hoveredPlace !== null) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-      }}
     >
       {props.mixed
         ? "Mixed"
         : tokens.map((token, index) => (
             <span
               key={`${token.char}-${token.place ?? "sym"}-${index}`}
-              style={visibleTokenIndexes.has(index) ? undefined : { display: "none" }}
               className={
                 token.place !== undefined
                   ? `digit${token.ghost ? " ghost" : ""}${hoveredPlace === token.place ? " hot" : ""}`
@@ -408,7 +415,7 @@ export function DigitScrubInput(props: DigitScrubInputProps) {
               onPointerDown={
                 token.place !== undefined
                   ? (event) => {
-                      startDigitDrag(event, token.place as number);
+                      startPendingDigitDrag(event, token.place as number);
                     }
                   : undefined
               }
