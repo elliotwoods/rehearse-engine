@@ -36,6 +36,7 @@ export interface SceneHookContext {
     tangent: [number, number, number];
   } | null;
   setActorStatus(status: ActorRuntimeStatus | null): void;
+  readAssetBytes(assetId: string): Promise<Uint8Array>;
 }
 
 export interface DescriptorSceneHooks {

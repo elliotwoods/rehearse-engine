@@ -1953,6 +1953,16 @@ export class SceneController {
         sampleCurveWorldPoint: (actorId, t) => this.sampleCurveWorldPoint(actorId, t),
         setActorStatus: (status: ActorRuntimeStatus | null) => {
           this.kernel.store.getState().actions.setActorStatus(actor.id, status);
+        },
+        readAssetBytes: (assetId: string): Promise<Uint8Array> => {
+          const asset = state.assets.find(a => a.id === assetId);
+          if (!asset) {
+            return Promise.reject(new Error(`Asset not found: ${assetId}`));
+          }
+          return this.kernel.storage.readAssetBytes({
+            projectName: state.activeProjectName,
+            relativePath: asset.relativePath
+          });
         }
       });
     } catch (error) {

@@ -3,7 +3,29 @@
     "allow": [
       "Bash(xargs grep:*)",
       "Bash(grep:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(node -e \"const tsl = require\\(''/c/dev/simularca/.claude/worktrees/cranky-roentgen/node_modules/three/build/three.tsl.cjs''\\); console.log\\(Object.keys\\(tsl\\).filter\\(k => /storage|instance|attribute|uniform|position|Fn|NodeMaterial|varying|cameraP|modelW|discard/.test\\(k\\)\\).join\\(''\\\\n''\\)\\)\")",
+      "Bash(node -e \"const m = require\\(''module''\\); const r = m.createRequire\\(''/c/dev/simularca/node_modules/''\\); const tsl = r\\(''three/build/three.tsl.js''\\); console.log\\(Object.keys\\(tsl\\).filter\\(k => /^\\(storage|instanceIndex|instance|attribute|uniform|positionLocal|positionWorld|Fn|NodeMaterial|varying|varyingProperty|cameraProjectionMatrix|cameraViewMatrix|modelWorldMatrix|modelViewMatrix|discard|If|select|Loop|Break\\)$/.test\\(k\\)\\).sort\\(\\).join\\(''\\\\n''\\)\\)\")",
+      "Bash(node --input-type=module -e \"import { storage, instanceIndex, attribute, uniform, positionLocal, Fn, NodeMaterial, varyingProperty, cameraProjectionMatrix, cameraViewMatrix, modelWorldMatrix, modelViewMatrix } from ''/c/dev/simularca/node_modules/three/build/three.tsl.js''; console.log\\(''storage:'', typeof storage\\); console.log\\(''instanceIndex:'', typeof instanceIndex\\); console.log\\(''attribute:'', typeof attribute\\); console.log\\(''Fn:'', typeof Fn\\); console.log\\(''NodeMaterial:'', typeof NodeMaterial\\); console.log\\(''varyingProperty:'', typeof varyingProperty\\); console.log\\(''positionLocal:'', typeof positionLocal\\); console.log\\(''cameraProjectionMatrix:'', typeof cameraProjectionMatrix\\); console.log\\(''cameraViewMatrix:'', typeof cameraViewMatrix\\); console.log\\(''modelWorldMatrix:'', typeof modelWorldMatrix\\); console.log\\(''modelViewMatrix:'', typeof modelViewMatrix\\);\")",
+      "Bash(node --input-type=module -e \"import { storage, instanceIndex, attribute, uniform, positionLocal, Fn, NodeMaterial, varyingProperty, cameraProjectionMatrix, cameraViewMatrix, modelWorldMatrix, modelViewMatrix } from ''C:/dev/simularca/node_modules/three/build/three.tsl.js''; console.log\\(''storage:'', typeof storage\\); console.log\\(''instanceIndex:'', typeof instanceIndex\\); console.log\\(''attribute:'', typeof attribute\\); console.log\\(''Fn:'', typeof Fn\\); console.log\\(''NodeMaterial:'', typeof NodeMaterial\\); console.log\\(''varyingProperty:'', typeof varyingProperty\\); console.log\\(''positionLocal:'', typeof positionLocal\\); console.log\\(''cameraProjectionMatrix:'', typeof cameraProjectionMatrix\\); console.log\\(''cameraViewMatrix:'', typeof cameraViewMatrix\\); console.log\\(''modelWorldMatrix:'', typeof modelWorldMatrix\\); console.log\\(''modelViewMatrix:'', typeof modelViewMatrix\\);\")",
+      "Bash(tr -d '{}')",
+      "Bash(node -e \"const p = require\\(''C:/dev/simularca/node_modules/three/package.json''\\); console.log\\(p.version\\)\")",
+      "Bash(node -e \"const t = require\\(''C:/dev/simularca/node_modules/three/build/three.cjs.js''\\); console.log\\(''StorageBufferAttribute:'', typeof t.StorageBufferAttribute\\); console.log\\(''Has InstancedBufferGeometry:'', typeof t.InstancedBufferGeometry\\);\")",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:webgpu.github.io)",
+      "WebFetch(domain:xbdev.net)",
+      "WebFetch(domain:shi-yan.github.io)",
+      "WebFetch(domain:www.sctheblog.com)",
+      "Bash(ls -la node_modules/three/webgpu*)",
+      "Bash(ls chunk-*)",
+      "Bash(ls -la node_modules/.vite/deps/chunk-YUY42DWY*)",
+      "Bash(test -d /c/dev/simularca/.claude/worktrees/cranky-roentgen/node_modules)",
+      "Bash(xargs cat)",
+      "WebSearch",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:sparkjs.dev)",
+      "WebFetch(domain:blog.42yeah.is)",
+      "Bash(npm run build)"
     ]
   }
 }
