@@ -81,6 +81,7 @@ export interface ReloadableDescriptor {
       getActorObject(actorId: string): unknown | null;
       sampleCurveWorldPoint(actorId: string, t: number): { position: [number, number, number]; tangent: [number, number, number] } | null;
       setActorStatus(status: unknown): void;
+      readAssetBytes(assetId: string): Promise<Uint8Array>;
     }): void;
     disposeObject?(args: { actor: unknown; state: unknown; object: unknown }): void;
   };

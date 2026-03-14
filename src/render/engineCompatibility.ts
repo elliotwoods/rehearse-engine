@@ -8,6 +8,13 @@ export function incompatibilityReason(actor: ActorNode, engine: RenderEngine): s
     return "Mist Volume actor currently requires WebGL2.";
   }
   if (
+    engine === "webgl2" &&
+    actor.actorType === "plugin" &&
+    actor.pluginType === "plugin.gaussianSplat.webgpu"
+  ) {
+    return "Gaussian Splat (WebGPU) plugin requires the WebGPU render engine.";
+  }
+  if (
     engine === "webgpu" &&
     actor.actorType === "plugin" &&
     (actor.pluginType === "plugin.beamCrossover.emitter" || actor.pluginType === "plugin.beamCrossover.emitterArray") &&

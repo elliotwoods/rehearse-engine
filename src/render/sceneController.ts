@@ -1001,7 +1001,7 @@ export class SceneController {
       material.metalness = mat.metalness.value;
       material.metalnessMap = null;
     } else if (mat.metalness.mode === "image") {
-      const asset = state.assets.find((a) => a.id === (mat.metalness as any).assetId && a.kind === "image");       
+      const asset = state.assets.find((a) => a.id === (mat.metalness as any).assetId && a.kind === "image");
       if (asset) {
         material.metalnessMap = this.loadCachedTexture(this.buildAssetUrl(state.activeProjectName, asset.relativePath));
         material.metalness = 1;
@@ -1010,7 +1010,7 @@ export class SceneController {
 
     // Normal map
     if (mat.normalMap) {
-      const asset = state.assets.find((a) => a.id === (mat.normalMap as any).assetId && a.kind === "image");      
+      const asset = state.assets.find((a) => a.id === (mat.normalMap as any).assetId && a.kind === "image");
       if (asset) {
         material.normalMap = this.loadCachedTexture(this.buildAssetUrl(state.activeProjectName, asset.relativePath));
         material.normalMapType = THREE.TangentSpaceNormalMap;
@@ -1024,7 +1024,7 @@ export class SceneController {
       material.emissive.set(mat.emissive.color);
       material.emissiveMap = null;
     } else if (mat.emissive.mode === "image") {
-      const asset = state.assets.find((a) => a.id === (mat.emissive as any).assetId && a.kind === "image");        
+      const asset = state.assets.find((a) => a.id === (mat.emissive as any).assetId && a.kind === "image");
       if (asset) {
         material.emissiveMap = this.loadCachedTexture(this.buildAssetUrl(state.activeProjectName, asset.relativePath), THREE.SRGBColorSpace);
       }
@@ -1577,7 +1577,7 @@ export class SceneController {
     const previousAssetId = this.meshAssetByActorId.get(actor.id) ?? "";
     const previousReloadToken = this.meshReloadTokenByActorId.get(actor.id) ?? 0;
     if (assetId === previousAssetId && reloadToken === previousReloadToken) {
-      return; // early exit — expected on every frame after the first load
+      return; // early exit Ã¢â‚¬â€ expected on every frame after the first load
     }
     console.log("[simularca] syncMeshAsset LOAD TRIGGERED assetId:", assetId, "reloadToken:", reloadToken, "actor:", actor.id);
     this.meshAssetByActorId.set(actor.id, assetId);
@@ -1603,7 +1603,7 @@ export class SceneController {
     }
 
     const extension = asset.relativePath.split(".").pop()?.toLowerCase() ?? "";
-    // Build the asset URL locally — no IPC round-trip needed.
+    // Build the asset URL locally Ã¢â‚¬â€ no IPC round-trip needed.
     const encodedProject = encodeURIComponent(state.activeProjectName);
     const encodedPath = asset.relativePath
       .split("/")
@@ -2029,6 +2029,16 @@ export class SceneController {
         getMistVolumeResource: (actorId) => this.mistVolumeController.getResource(actorId),
         setActorStatus: (status: ActorRuntimeStatus | null) => {
           this.kernel.store.getState().actions.setActorStatus(actor.id, status);
+        },
+        readAssetBytes: (assetId: string): Promise<Uint8Array> => {
+          const asset = state.assets.find(a => a.id === assetId);
+          if (!asset) {
+            return Promise.reject(new Error(`Asset not found: ${assetId}`));
+          }
+          return this.kernel.storage.readAssetBytes({
+            projectName: state.activeProjectName,
+            relativePath: asset.relativePath
+          });
         }
       });
     } catch (error) {

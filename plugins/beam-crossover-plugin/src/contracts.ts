@@ -144,6 +144,7 @@ export interface SceneHookContext {
   } | null;
   getMistVolumeResource(actorId: string): MistVolumeResource | null;
   setActorStatus(status: ActorRuntimeStatus | null): void;
+  readAssetBytes(assetId: string): Promise<Uint8Array>;
 }
 
 export interface BeamParams {

@@ -1,3 +1,5 @@
+import { createGaussianSplatDescriptor } from "./splatDescriptor";
+
 export interface ParameterSchema {
   id: string;
   title: string;
@@ -35,6 +37,9 @@ export interface ReloadableDescriptor {
     }): void;
     disposeObject?(args: { actor: unknown; state: unknown; object: unknown }): void;
   };
+  status?: {
+    build(context: { actor: unknown; state: unknown; runtimeStatus?: unknown }): Array<{ label: string; value: unknown; tone?: string }>;
+  };
 }
 
 export interface PluginDefinition {
@@ -61,46 +66,13 @@ export interface PluginHandshakeModule {
   createPlugin(): PluginDefinition;
 }
 
-const descriptorId = "plugin.template.artwork.actor";
-
-const actorDescriptor: ReloadableDescriptor = {
-  id: descriptorId,
-  kind: "actor",
-  version: 1,
-  schema: {
-    id: descriptorId,
-    title: "Template Artwork Actor",
-    params: []
-  },
-  spawn: {
-    actorType: "plugin",
-    pluginType: descriptorId,
-    label: "Template Artwork Actor",
-    description: "Template plugin actor with empty scene hook lifecycle.",
-    iconGlyph: "TA"
-  },
-  createRuntime: () => ({ initializedAt: Date.now() }),
-  updateRuntime: () => {
-    // Intentionally empty template runtime update.
-  },
-  sceneHooks: {
-    createObject: () => null,
-    syncObject: () => {
-      // Intentionally empty template scene sync.
-    },
-    disposeObject: () => {
-      // Intentionally empty template scene dispose.
-    }
-  }
-};
-
 const handshake: PluginHandshakeModule = {
   manifest: {
     handshakeVersion: 1,
-    id: "template.artwork.plugin",
-    name: "Template Artwork Actor Plugin",
+    id: "gaussianSplat.webgpu",
+    name: "Gaussian Splat (WebGPU)",
     version: "0.1.0",
-    description: "Starter template for artwork-specific plugin actors.",
+    description: "Renders Gaussian splats using the WebGPU pipeline with proper 3D-to-2D covariance projection.",
     engine: {
       minApiVersion: 1,
       maxApiVersion: 1
@@ -108,9 +80,9 @@ const handshake: PluginHandshakeModule = {
   },
   createPlugin() {
     return {
-      id: "template.artwork.plugin",
-      name: "Template Artwork Actor Plugin",
-      actorDescriptors: [actorDescriptor],
+      id: "gaussianSplat.webgpu",
+      name: "Gaussian Splat (WebGPU)",
+      actorDescriptors: [createGaussianSplatDescriptor()],
       componentDescriptors: []
     };
   }

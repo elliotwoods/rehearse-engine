@@ -10,7 +10,6 @@ import type {
 } from "@/core/types";
 
 export type DescriptorKind = "actor" | "component" | "system";
-
 export interface ParamMigration {
   fromVersion: number;
   toVersion: number;
@@ -46,6 +45,7 @@ export interface SceneHookContext {
   } | null;
   getMistVolumeResource(actorId: string): MistVolumeResource | null;
   setActorStatus(status: ActorRuntimeStatus | null): void;
+  readAssetBytes(assetId: string): Promise<Uint8Array>;
 }
 
 export interface DescriptorSceneHooks {
@@ -90,4 +90,3 @@ export interface HotReloadEvent {
   applied: boolean;
   fallbackReason?: string;
 }
-
