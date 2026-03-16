@@ -115,7 +115,8 @@ function getAxisHandleLayout(camera: CameraState) {
 
 function depthToZIndex(depth: number): number {
   const normalizedDepth = Math.max(-1, Math.min(1, depth));
-  return 50 + Math.round((normalizedDepth + 1) * 20);
+  // With this camera basis, front-facing handles land at negative depth.
+  return 50 + Math.round((1 - normalizedDepth) * 20);
 }
 
 function applyDirectionalShortcut(camera: CameraState, digit: "1" | "3" | "7"): CameraState {
