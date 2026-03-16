@@ -33,9 +33,13 @@ import {
 /** Sentinel depth value: frustum-culled splats get this so they sort to the end */
 const CULLED_DEPTH = 99999.0;
 
-// Camera movement thresholds (same as CPU sorter)
+// Camera movement thresholds
 const CAMERA_MOVE_THRESHOLD_POS = 1e-4;
 const CAMERA_MOVE_THRESHOLD_QUAT = 1e-4;
+
+// Temporal sort coherence: skip full sort when camera rotates slowly
+const SORT_ANGLE_THRESHOLD = 0.01; // ~0.57° — re-sort when exceeded
+const MAX_SKIP_FRAMES = 4;         // force sort at least every 5th frame
 
 function nextPowerOfTwo(n: number): number {
   let p = 1;
@@ -68,6 +72,10 @@ export class GpuSorter {
   private lastCameraQuaternion = new THREE.Quaternion();
   private hasSortedOnce = false;
   private visibilityDirty = true; // force re-sort when visibility changes
+
+  // Temporal coherence: track camera at last full sort
+  private lastSortCameraQuaternion = new THREE.Quaternion();
+  private framesSinceSort = 0;
 
   // Scratch matrix (allocated once)
   private readonly modelViewMatrix = new THREE.Matrix4();
@@ -236,7 +244,7 @@ export class GpuSorter {
 
     const cameraMoved = this.hasCameraMoved(camera);
     if (!cameraMoved && !this.visibilityDirty && this.hasSortedOnce) {
-      return;
+      return; // Camera stationary → skip entirely
     }
 
     // Compute model-view matrix and extract row 2 (Z axis in view space)
@@ -247,20 +255,31 @@ export class GpuSorter {
     // Row 2 = elements[2], [6], [10], [14]
     this.uMvRow2.value.set(me[2], me[6], me[10], me[14]);
 
-    // Pass 1: compute depths (with chunk frustum culling if enabled)
+    // Always recompute depths (1 dispatch — cheap)
     renderer.compute(this.depthComputeNode);
 
-    // Pass 2: bitonic sort steps
-    const n = this.paddedCount;
-    for (let k = 2; k <= n; k *= 2) {
-      for (let j = k >> 1; j > 0; j >>= 1) {
-        this.uK.value = k;
-        this.uJ.value = j;
-        renderer.compute(this.bitonicStepNode);
+    // Temporal coherence: decide if full sort is needed
+    this.framesSinceSort++;
+    const needsFullSort = !this.hasSortedOnce
+      || this.visibilityDirty
+      || this.angleSinceLastSort(camera) > SORT_ANGLE_THRESHOLD
+      || this.framesSinceSort >= MAX_SKIP_FRAMES;
+
+    if (needsFullSort) {
+      // Full bitonic sort
+      const n = this.paddedCount;
+      for (let k = 2; k <= n; k *= 2) {
+        for (let j = k >> 1; j > 0; j >>= 1) {
+          this.uK.value = k;
+          this.uJ.value = j;
+          renderer.compute(this.bitonicStepNode);
+        }
       }
+      this.framesSinceSort = 0;
+      this.lastSortCameraQuaternion.copy(camera.quaternion);
     }
 
-    // Save camera snapshot
+    // Save camera snapshot for movement detection
     this.lastCameraPosition.copy(camera.position);
     this.lastCameraQuaternion.copy(camera.quaternion);
     this.hasSortedOnce = true;
@@ -277,6 +296,17 @@ export class GpuSorter {
       Math.abs(camera.quaternion.z - this.lastCameraQuaternion.z) +
       Math.abs(camera.quaternion.w - this.lastCameraQuaternion.w);
     return dq > CAMERA_MOVE_THRESHOLD_QUAT;
+  }
+
+  /** Angular distance (radians) between current camera and last full sort. */
+  private angleSinceLastSort(camera: THREE.Camera): number {
+    const dot = Math.abs(
+      camera.quaternion.x * this.lastSortCameraQuaternion.x +
+      camera.quaternion.y * this.lastSortCameraQuaternion.y +
+      camera.quaternion.z * this.lastSortCameraQuaternion.z +
+      camera.quaternion.w * this.lastSortCameraQuaternion.w
+    );
+    return 2 * Math.acos(Math.min(dot, 1.0));
   }
 
   dispose(): void {

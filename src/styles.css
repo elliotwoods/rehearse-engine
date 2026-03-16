@@ -1839,7 +1839,6 @@ select {
   height: 28px;
   padding: 0;
   transform: translate(-50%, -50%);
-  z-index: 100;
   border: 1px solid rgba(126, 163, 203, 0.48);
   background: linear-gradient(180deg, rgba(18, 40, 63, 0.98) 0%, rgba(12, 26, 40, 0.96) 100%);
   color: #d6e7ff;
@@ -1853,7 +1852,7 @@ select {
 .viewport-axes-readout {
   position: absolute;
   left: 50%;
-  bottom: 12px;
+  bottom: 6px;
   transform: translateX(-50%);
   color: rgba(214, 231, 255, 0.72);
   font-family: var(--font-mono);

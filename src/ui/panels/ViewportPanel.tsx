@@ -113,6 +113,11 @@ function getAxisHandleLayout(camera: CameraState) {
   }).sort((a, b) => b.depth - a.depth);
 }
 
+function depthToZIndex(depth: number): number {
+  const normalizedDepth = Math.max(-1, Math.min(1, depth));
+  return 50 + Math.round((normalizedDepth + 1) * 20);
+}
+
 function applyDirectionalShortcut(camera: CameraState, digit: "1" | "3" | "7"): CameraState {
   switch (digit) {
     case "1":
@@ -644,7 +649,7 @@ export function ViewportPanel(props: ViewportPanelProps) {
               style={{
                 left: `calc(50% + ${handle.left}px)`,
                 top: `calc(50% + ${handle.top}px)`,
-                zIndex: String(50 + Math.round((1 - handle.depth) * 20))
+                zIndex: String(depthToZIndex(handle.depth))
               }}
               onPointerDown={(event) => {
                 event.stopPropagation();
@@ -663,6 +668,7 @@ export function ViewportPanel(props: ViewportPanelProps) {
           <button
             type="button"
             className={`viewport-axes-center${camera.mode === "perspective" ? " is-perspective" : ""}`}
+            style={{ zIndex: String(depthToZIndex(0)) }}
             onPointerDown={(event) => {
               event.stopPropagation();
             }}

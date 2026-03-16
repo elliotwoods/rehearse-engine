@@ -34,6 +34,8 @@ interface PanState {
   lastPoint: THREE.Vector3;
 }
 
+type SupportedViewportCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
+
 function getClientNdc(domElement: HTMLElement, clientX: number, clientY: number): THREE.Vector2 | null {
   const rect = domElement.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) {
@@ -54,6 +56,10 @@ function updateCameraLookAt(camera: THREE.Camera, target: THREE.Vector3): void {
   ) {
     (camera as { updateProjectionMatrix: () => void }).updateProjectionMatrix();
   }
+}
+
+function isSupportedViewportCamera(camera: THREE.Camera): camera is SupportedViewportCamera {
+  return camera instanceof THREE.PerspectiveCamera || camera instanceof THREE.OrthographicCamera;
 }
 
 function getCameraDistance(camera: THREE.Camera, target: THREE.Vector3): number {
@@ -283,6 +289,9 @@ export class CameraInteractionController {
     }
 
     if (this.mode === "orbit") {
+      if (!isSupportedViewportCamera(camera)) {
+        return;
+      }
       const dx = this.pointerClient.x - this.processedPointerClient.x;
       const dy = this.pointerClient.y - this.processedPointerClient.y;
       if (dx === 0 && dy === 0) {
