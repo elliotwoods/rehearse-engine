@@ -34,6 +34,7 @@ import {
   workgroupArray,
   workgroupBarrier,
 } from "three/tsl";
+import { classifyWorldTransformChange, type ModelChangeKind } from "./transformInvalidation";
 
 /** Sentinel depth value: frustum-culled splats get this so they sort to the end */
 const CULLED_DEPTH = 99999.0;
@@ -55,6 +56,8 @@ export interface SortFrameStats {
   dispatches: number;
   framesSinceFullSort: number;
   angleSinceSort: number;
+  modelChange: ModelChangeKind;
+  projectionDirty: boolean;
 }
 
 function nextPowerOfTwo(n: number): number {
@@ -90,6 +93,8 @@ export class GpuSorter {
   private lastCameraQuaternion = new THREE.Quaternion();
   private hasSortedOnce = false;
   private visibilityDirty = true; // force re-sort when visibility changes
+  private readonly lastModelMatrix = new THREE.Matrix4();
+  private hasModelSnapshot = false;
 
   // Temporal coherence: track camera at last full sort
   private lastSortCameraQuaternion = new THREE.Quaternion();
@@ -364,14 +369,35 @@ export class GpuSorter {
   sort(renderer: any, camera: THREE.Camera, modelWorldMatrix: THREE.Matrix4): SortFrameStats {
     // Guard: renderer.compute may not be available during scene transitions
     if (typeof renderer.compute !== "function") {
-      return { sortMode: "skipped", dispatches: 0, framesSinceFullSort: this.framesSinceSort, angleSinceSort: 0 };
+      return {
+        sortMode: "skipped",
+        dispatches: 0,
+        framesSinceFullSort: this.framesSinceSort,
+        angleSinceSort: 0,
+        modelChange: "none",
+        projectionDirty: false
+      };
     }
 
+    const modelChange = classifyWorldTransformChange(
+      this.hasModelSnapshot ? this.lastModelMatrix : null,
+      modelWorldMatrix
+    );
     const angleSinceSort = this.hasSortedOnce ? this.angleSinceLastSort(camera) : 0;
 
     const cameraMoved = this.hasCameraMoved(camera);
-    if (!cameraMoved && !this.visibilityDirty && this.hasSortedOnce) {
-      return { sortMode: "skipped", dispatches: 0, framesSinceFullSort: this.framesSinceSort, angleSinceSort };
+    const projectionDirty = !this.hasSortedOnce || cameraMoved || this.visibilityDirty || modelChange !== "none";
+    if (!cameraMoved && !this.visibilityDirty && modelChange === "none" && this.hasSortedOnce) {
+      this.lastModelMatrix.copy(modelWorldMatrix);
+      this.hasModelSnapshot = true;
+      return {
+        sortMode: "skipped",
+        dispatches: 0,
+        framesSinceFullSort: this.framesSinceSort,
+        angleSinceSort,
+        modelChange,
+        projectionDirty
+      };
     }
 
     // Compute model-view matrix and extract row 2 (Z axis in view space)
@@ -387,6 +413,7 @@ export class GpuSorter {
     this.framesSinceSort++;
     const needsFullSort = !this.hasSortedOnce
       || this.visibilityDirty
+      || modelChange === "full-sort"
       || angleSinceSort > SORT_ANGLE_THRESHOLD
       || this.framesSinceSort >= MAX_SKIP_FRAMES;
 
@@ -434,10 +461,19 @@ export class GpuSorter {
     // Save camera snapshot for movement detection
     this.lastCameraPosition.copy(camera.position);
     this.lastCameraQuaternion.copy(camera.quaternion);
+    this.lastModelMatrix.copy(modelWorldMatrix);
+    this.hasModelSnapshot = true;
     this.hasSortedOnce = true;
     this.visibilityDirty = false;
 
-    return { sortMode, dispatches, framesSinceFullSort: this.framesSinceSort, angleSinceSort };
+    return {
+      sortMode,
+      dispatches,
+      framesSinceFullSort: this.framesSinceSort,
+      angleSinceSort,
+      modelChange,
+      projectionDirty
+    };
   }
 
   private hasCameraMoved(camera: THREE.Camera): boolean {

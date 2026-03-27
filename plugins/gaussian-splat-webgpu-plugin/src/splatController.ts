@@ -535,8 +535,7 @@ export class SplatController {
 
     // GPU projection compute pre-pass: project Cov3D → Cov2D once per splat
     // (instead of 4× per vertex in the vertex shader)
-    // Skip when sort was "skipped" (camera stationary) — projections haven't changed
-    if (this.splatProjection && this.mesh && this.lastSortStats?.sortMode !== "skipped") {
+    if (this.splatProjection && this.mesh && this.lastSortStats?.projectionDirty) {
       this.splatProjection.updateUniforms(
         camera,
         this.mesh.matrixWorld,
