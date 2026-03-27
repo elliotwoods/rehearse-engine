@@ -23,6 +23,7 @@ const FALLBACK_IMAGE_PNG = Buffer.from(
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const IS_DEV = Boolean(DEV_SERVER_URL);
+const APP_DISPLAY_NAME = "Simularca";
 const DEFAULTS_FILE_NAME = "defaults.json";
 const LEGACY_PROJECT_FILE_NAME = "session.json";
 const SNAPSHOT_DIRECTORY_NAME = "snapshots";
@@ -127,6 +128,8 @@ void writeRuntimeLog("boot", "electron main module loaded", {
   node: process.version,
   platform: process.platform
 });
+
+app.setName(APP_DISPLAY_NAME);
 
 function getSaveDataRoot(): string {
   return path.join(getRepoRoot(), "savedata");
@@ -715,7 +718,7 @@ function registerIpcHandlers(): void {
       { role: "editMenu" },
       { role: "viewMenu" },
       { role: "windowMenu" },
-      { role: "help", submenu: [{ label: "Simularca", enabled: false }] }
+      { role: "help", submenu: [{ label: APP_DISPLAY_NAME, enabled: false }] }
     ]);
     menu.popup({
       window: win,
