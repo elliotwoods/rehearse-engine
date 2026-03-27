@@ -14,6 +14,11 @@ const ORBIT_POINTER_SCALE_BASE = Math.PI * 2;
 
 export type CameraViewDirection = "front" | "back" | "left" | "right" | "top" | "bottom" | "isometric";
 
+export interface ProjectedViewportDirection {
+  screen: THREE.Vector2;
+  depth: number;
+}
+
 let lastPerspectiveReference: CameraState | null = null;
 
 function clamp(value: number, min: number, max: number): number {
@@ -83,6 +88,53 @@ export function getCameraForward(camera: CameraState): THREE.Vector3 {
     return new THREE.Vector3(0, 0, -1);
   }
   return forward.normalize();
+}
+
+function createProjectionCamera(camera: CameraState, viewportAspect: number): THREE.PerspectiveCamera | THREE.OrthographicCamera {
+  const aspect = Number.isFinite(viewportAspect) && viewportAspect > EPSILON ? viewportAspect : 1;
+  const projectionCamera =
+    camera.mode === "perspective"
+      ? new THREE.PerspectiveCamera(camera.fov, aspect, camera.near, camera.far)
+      : new THREE.OrthographicCamera(
+          -ORTHOGRAPHIC_HALF_HEIGHT * aspect,
+          ORTHOGRAPHIC_HALF_HEIGHT * aspect,
+          ORTHOGRAPHIC_HALF_HEIGHT,
+          -ORTHOGRAPHIC_HALF_HEIGHT,
+          camera.near,
+          camera.far
+        );
+  if (projectionCamera instanceof THREE.OrthographicCamera) {
+    projectionCamera.zoom = clamp(camera.zoom, MIN_ZOOM, MAX_ZOOM);
+  }
+  projectionCamera.position.set(...camera.position);
+  projectionCamera.up.copy(WORLD_UP);
+  const target = toVector3(camera.target);
+  if (projectionCamera.position.distanceToSquared(target) <= EPSILON) {
+    target.z -= 1;
+  }
+  projectionCamera.lookAt(target);
+  projectionCamera.updateMatrixWorld(true);
+  projectionCamera.updateProjectionMatrix();
+  return projectionCamera;
+}
+
+export function projectWorldDirectionsAtViewportCenter(
+  camera: CameraState,
+  viewportAspect: number,
+  directions: readonly THREE.Vector3[]
+): ProjectedViewportDirection[] {
+  const projectionCamera = createProjectionCamera(camera, viewportAspect);
+  const forward = getCameraForward(camera);
+  const origin = toVector3(camera.target);
+  const originProjected = origin.clone().project(projectionCamera);
+  const sampleDistance = Math.max(1e-4, getCameraViewHeight(camera) * 1e-3);
+  return directions.map((direction) => {
+    const sampleProjected = origin.clone().addScaledVector(direction, sampleDistance).project(projectionCamera);
+    return {
+      screen: new THREE.Vector2(sampleProjected.x - originProjected.x, sampleProjected.y - originProjected.y),
+      depth: direction.dot(forward)
+    };
+  });
 }
 
 export function isCameraFacingDirection(

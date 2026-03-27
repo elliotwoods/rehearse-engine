@@ -17,6 +17,7 @@ describe("viewportScreenshot helpers", () => {
   it("formats a success status message with backend details", () => {
     expect(
       formatViewportScreenshotStatus({
+        pngBytes: new Uint8Array(),
         width: 2560,
         height: 1440,
         backend: "webgpu"

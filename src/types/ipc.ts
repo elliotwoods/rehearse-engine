@@ -109,10 +109,11 @@ export interface ElectronApi {
   renderTempFinalize(args: { jobId: string }): Promise<{ summary: string }>;
   renderTempAbort(args: { jobId: string }): Promise<void>;
   logRuntimeError(payload: Record<string, unknown>): void;
-  getWindowState(): Promise<{ isMaximized: boolean }>;
+  getWindowState(): Promise<{ isMaximized: boolean; isFullscreen: boolean }>;
   windowMinimize(): Promise<void>;
   windowToggleMaximize(): Promise<void>;
+  windowSetFullscreen(fullscreen: boolean): Promise<{ isMaximized: boolean; isFullscreen: boolean }>;
   windowClose(): Promise<void>;
   showAppMenu(args: { x: number; y: number }): Promise<void>;
-  onWindowStateChange(listener: (state: { isMaximized: boolean }) => void): () => void;
+  onWindowStateChange(listener: (state: { isMaximized: boolean; isFullscreen: boolean }) => void): () => void;
 }

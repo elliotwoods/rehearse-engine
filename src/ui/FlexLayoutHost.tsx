@@ -209,12 +209,20 @@ interface FlexLayoutHostProps {
   topBar: React.ReactNode;
   pendingDropFileName?: string | null;
   viewportSuspended?: boolean;
+  viewportFullscreen?: boolean;
   viewportScreenshotRequestId?: number;
   onViewportScreenshotBusyChange?: (busy: boolean) => void;
 }
 
 export function FlexLayoutHost(props: FlexLayoutHostProps) {
   const model = useMemo(() => createLayoutModel(), []);
+  const renderViewportPanel = (): React.ReactNode => (
+    <ViewportPanel
+      suspended={props.viewportSuspended}
+      screenshotRequestId={props.viewportScreenshotRequestId}
+      onScreenshotBusyChange={props.onViewportScreenshotBusyChange}
+    />
+  );
 
   const factory = (node: TabNode): React.ReactNode => {
     const component = node.getComponent();
@@ -222,13 +230,7 @@ export function FlexLayoutHost(props: FlexLayoutHostProps) {
       case "left":
         return <LeftPanel pendingDropFileName={props.pendingDropFileName} />;
       case "center":
-        return (
-          <ViewportPanel
-            suspended={props.viewportSuspended}
-            screenshotRequestId={props.viewportScreenshotRequestId}
-            onScreenshotBusyChange={props.onViewportScreenshotBusyChange}
-          />
-        );
+        return renderViewportPanel();
       case "right":
         return <RightPanel />;
       case "console":
@@ -239,12 +241,18 @@ export function FlexLayoutHost(props: FlexLayoutHostProps) {
   };
 
   return (
-    <div className="layout-shell">
-      <div className="layout-shell-title">{props.titleBar}</div>
-      <div className="layout-shell-toolbar">{props.topBar}</div>
-      <div className="flex-layout-host">
-        <Layout model={model} factory={factory} onModelChange={persistLayoutConfig} />
-      </div>
+    <div className={`layout-shell${props.viewportFullscreen ? " is-viewport-fullscreen" : ""}`}>
+      {props.viewportFullscreen ? (
+        <div className="viewport-fullscreen-shell">{renderViewportPanel()}</div>
+      ) : (
+        <>
+          <div className="layout-shell-title">{props.titleBar}</div>
+          <div className="layout-shell-toolbar">{props.topBar}</div>
+          <div className="flex-layout-host">
+            <Layout model={model} factory={factory} onModelChange={persistLayoutConfig} />
+          </div>
+        </>
+      )}
     </div>
   );
 }

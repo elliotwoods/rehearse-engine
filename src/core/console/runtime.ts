@@ -718,7 +718,7 @@ function buildRuntimeApi(kernel: AppKernel) {
     window: {
       async state() {
         if (!window.electronAPI) {
-          return { isDesktop: false, isMaximized: false };
+          return { isDesktop: false, isMaximized: false, isFullscreen: false };
         }
         return {
           isDesktop: true,

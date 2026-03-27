@@ -1,3 +1,4 @@
+import * as THREE from "three";
 import { describe, expect, it } from "vitest";
 import {
   cameraStateForHomeView,
@@ -6,6 +7,7 @@ import {
   getCameraForward,
   getCameraViewHeight,
   orbitCameraFromPointerDelta,
+  projectWorldDirectionsAtViewportCenter,
   rememberPerspectiveCamera,
   resolveRepeatedDirectionalShortcut,
   stepOrbitAroundTarget,
@@ -102,5 +104,32 @@ describe("viewUtils", () => {
     expect(next.position[0]).toBeCloseTo(nearTop.position[0], 6);
     expect(next.position[1]).toBeCloseTo(nearTop.position[1], 6);
     expect(next.position[2]).toBeCloseTo(nearTop.position[2], 6);
+  });
+
+  it("projects viewport-center world directions using the active viewport aspect", () => {
+    const xDirection = projectWorldDirectionsAtViewportCenter(PERSPECTIVE_CAMERA, 1, [new THREE.Vector3(1, 0, 0)])[0]!;
+    const wideXDirection = projectWorldDirectionsAtViewportCenter(PERSPECTIVE_CAMERA, 2, [new THREE.Vector3(1, 0, 0)])[0]!;
+    expect(xDirection.screen.x).toBeGreaterThan(0);
+    expect(Math.abs(wideXDirection.screen.x)).toBeLessThan(Math.abs(xDirection.screen.x));
+    expect(Math.abs(wideXDirection.screen.y)).toBeCloseTo(Math.abs(xDirection.screen.y), 9);
+  });
+
+  it("keeps forward-aligned viewport directions centered in screen space", () => {
+    const forward = getCameraForward(PERSPECTIVE_CAMERA);
+    const direction = projectWorldDirectionsAtViewportCenter(PERSPECTIVE_CAMERA, 16 / 9, [forward])[0]!;
+    expect(direction.screen.length()).toBeLessThan(1e-6);
+    expect(direction.depth).toBeCloseTo(1, 6);
+  });
+
+  it("matches three.js orthographic top-view screen orientation", () => {
+    const top = cameraStateForViewDirection(PERSPECTIVE_CAMERA, "top", "orthographic");
+    const [positiveX, positiveZ] = projectWorldDirectionsAtViewportCenter(top, 16 / 9, [
+      new THREE.Vector3(1, 0, 0),
+      new THREE.Vector3(0, 0, 1)
+    ]) as [ReturnType<typeof projectWorldDirectionsAtViewportCenter>[number], ReturnType<typeof projectWorldDirectionsAtViewportCenter>[number]];
+    expect(positiveX.screen.x).toBeGreaterThan(0);
+    expect(Math.abs(positiveX.screen.y)).toBeLessThan(1e-6);
+    expect(positiveZ.screen.y).toBeLessThan(0);
+    expect(Math.abs(positiveZ.screen.x)).toBeLessThan(1e-6);
   });
 });

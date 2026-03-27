@@ -71,6 +71,7 @@ const api = {
   getWindowState: () => ipcRenderer.invoke("window:get-state"),
   windowMinimize: () => ipcRenderer.invoke("window:minimize"),
   windowToggleMaximize: () => ipcRenderer.invoke("window:toggle-maximize"),
+  windowSetFullscreen: (fullscreen) => ipcRenderer.invoke("window:set-fullscreen", fullscreen),
   windowClose: () => ipcRenderer.invoke("window:close"),
   showAppMenu: (args) => ipcRenderer.invoke("menu:show-app", args),
   onWindowStateChange: (listener) => {

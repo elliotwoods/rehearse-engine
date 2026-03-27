@@ -645,7 +645,8 @@ function createWindow(): BrowserWindow {
 
   const pushWindowState = () => {
     mainWindow.webContents.send("window:state", {
-      isMaximized: mainWindow.isMaximized()
+      isMaximized: mainWindow.isMaximized(),
+      isFullscreen: mainWindow.isFullScreen()
     });
   };
   mainWindow.on("maximize", pushWindowState);
@@ -687,7 +688,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle("mode:get", () => "electron-rw");
   ipcMain.handle("window:get-state", (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
-    return { isMaximized: win?.isMaximized() ?? false };
+    return { isMaximized: win?.isMaximized() ?? false, isFullscreen: win?.isFullScreen() ?? false };
   });
   ipcMain.handle("window:minimize", (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
@@ -703,6 +704,14 @@ function registerIpcHandlers(): void {
       return;
     }
     win.maximize();
+  });
+  ipcMain.handle("window:set-fullscreen", (event, fullscreen: boolean) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win) {
+      return { isMaximized: false, isFullscreen: false };
+    }
+    win.setFullScreen(Boolean(fullscreen));
+    return { isMaximized: win.isMaximized(), isFullscreen: win.isFullScreen() };
   });
   ipcMain.handle("window:close", (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);

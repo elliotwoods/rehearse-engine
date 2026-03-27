@@ -11,6 +11,7 @@ import {
   getCameraForward,
   getViewDirectionVector,
   orbitCameraFromPointerDelta,
+  projectWorldDirectionsAtViewportCenter,
   resolveRepeatedDirectionalShortcut,
   stepOrbitAroundTarget,
   toggleCameraProjectionMode,
@@ -51,7 +52,6 @@ interface AxisHandleConfig {
   negative: boolean;
 }
 
-const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const AXES_WIDGET_RADIUS = 45;
 const VIEW_SHORTCUT_ROTATION_STEP = Math.PI / 12;
 
@@ -84,45 +84,30 @@ function setGlobalAxesDragMode(active: boolean): void {
   document.body.classList.remove(className);
 }
 
-function getCameraBasis(camera: CameraState): {
-  forward: THREE.Vector3;
-  right: THREE.Vector3;
-  up: THREE.Vector3;
-} {
-  const forward = getCameraForward(camera);
-  const right = new THREE.Vector3().crossVectors(forward, WORLD_UP);
-  if (right.lengthSq() <= 1e-6) {
-    right.set(1, 0, 0);
-  } else {
-    right.normalize();
-  }
-  const up = new THREE.Vector3().crossVectors(right, forward);
-  if (up.lengthSq() <= 1e-6) {
-    up.copy(WORLD_UP);
-  } else {
-    up.normalize();
-  }
-  return { forward, right, up };
-}
-
-function getAxisHandleLayout(camera: CameraState) {
-  const basis = getCameraBasis(camera);
-  return AXIS_HANDLES.map((handle) => {
-    const screenX = handle.vector.dot(basis.right);
-    const screenY = handle.vector.dot(basis.up);
-    const depth = handle.vector.dot(basis.forward);
+function getAxisHandleLayout(camera: CameraState, viewportSize: { width: number; height: number }) {
+  const aspect = viewportSize.width > 0 && viewportSize.height > 0 ? viewportSize.width / viewportSize.height : 1;
+  const projectedDirections = projectWorldDirectionsAtViewportCenter(
+    camera,
+    aspect,
+    AXIS_HANDLES.map((handle) => handle.vector)
+  );
+  const maxScreenDistance =
+    projectedDirections.reduce((maxValue, entry) => Math.max(maxValue, entry.screen.length()), 0) || 1;
+  const scale = AXES_WIDGET_RADIUS / maxScreenDistance;
+  return AXIS_HANDLES.map((handle, index) => {
+    const projected = projectedDirections[index]!;
     return {
       ...handle,
-      depth,
-      left: screenX * AXES_WIDGET_RADIUS,
-      top: -screenY * AXES_WIDGET_RADIUS
+      depth: projected.depth,
+      left: projected.screen.x * scale,
+      top: -projected.screen.y * scale
     };
   }).sort((a, b) => b.depth - a.depth);
 }
 
 function depthToZIndex(depth: number): number {
   const normalizedDepth = Math.max(-1, Math.min(1, depth));
-  // With this camera basis, front-facing handles land at negative depth.
+  // Front-facing handles land at negative depth and should render above rear-facing handles.
   return 50 + Math.round((1 - normalizedDepth) * 20);
 }
 
@@ -233,7 +218,7 @@ export function ViewportPanel(props: ViewportPanelProps) {
   const [viewportHovered, setViewportHovered] = useState(false);
   const [axesDragging, setAxesDragging] = useState(false);
   const actorTransformSnappingEnabled = actorTransformSnapToggled !== actorTransformSnapShiftOverride;
-  const axisHandles = getAxisHandleLayout(camera);
+  const axisHandles = getAxisHandleLayout(camera, viewportSize);
 
   cameraRef.current = camera;
   viewportHoveredRef.current = viewportHovered;

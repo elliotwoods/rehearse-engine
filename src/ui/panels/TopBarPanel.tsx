@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faCamera,
-  faCube,
   faCirclePause,
   faCirclePlay,
   faForwardStep,
@@ -16,19 +15,17 @@ import {
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import type { CameraPreset, TimeSpeedPreset } from "@/core/types";
-import { discoverAndLoadLocalPlugins, discoverLocalPluginCandidates, formatPluginDiscoverySummary } from "@/features/plugins/discovery";
 import { formatFramePacingLabel } from "@/render/framePacing";
-import { AddActorMenu } from "@/ui/components/AddActorMenu";
-import { PluginsModal } from "@/ui/components/PluginsModal";
 import { MaterialsModal } from "@/ui/components/MaterialsModal";
 import { DigitScrubInput } from "@/ui/widgets";
-import { usePluginRegistryRevision } from "@/features/plugins/usePluginRegistryRevision";
-import { loadPluginFromModule } from "@/features/plugins/pluginLoader";
 
 const SPEEDS: TimeSpeedPreset[] = [0.125, 0.25, 0.5, 1, 2, 4];
 const CAMERA_PRESETS: CameraPreset[] = ["perspective", "isometric", "top", "left", "front", "back"];
 const FPS_TARGET_PRESETS = [30, 60, 120];
 const MAX_CUSTOM_TARGET_FPS = 240;
+const TOOLBAR_LAYOUT_MODES = ["full", "compact", "wrapped", "scroll"] as const;
+
+type ToolbarLayoutMode = (typeof TOOLBAR_LAYOUT_MODES)[number];
 
 function formatSpeed(speed: TimeSpeedPreset): string {
   if (speed >= 1) {
@@ -75,20 +72,21 @@ interface TopBarPanelProps {
 
 export function TopBarPanel(props: TopBarPanelProps) {
   const kernel = useKernel();
-  usePluginRegistryRevision();
   const state = useAppStore((store) => store.state);
   const [fpsHistory, setFpsHistory] = useState<number[]>([]);
-  const [pluginsModalOpen, setPluginsModalOpen] = useState(false);
   const [materialsModalOpen, setMaterialsModalOpen] = useState(false);
-  const [pluginsRefreshLoading, setPluginsRefreshLoading] = useState(false);
-  const [pluginsRefreshSummary, setPluginsRefreshSummary] = useState<string | null>(null);
   const [fpsMenuOpen, setFpsMenuOpen] = useState(false);
   const [customTargetOpen, setCustomTargetOpen] = useState(false);
   const [customTargetDraft, setCustomTargetDraft] = useState("60");
+  const [toolbarLayoutMode, setToolbarLayoutMode] = useState<ToolbarLayoutMode>("full");
   const fpsMenuRef = useRef<HTMLDivElement | null>(null);
   const fpsButtonRef = useRef<HTMLButtonElement | null>(null);
   const fpsPopoverRef = useRef<HTMLDivElement | null>(null);
   const customTargetInputRef = useRef<HTMLInputElement | null>(null);
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const toolbarMeasurementFrameRef = useRef<number | null>(null);
+  const toolbarLayoutModeRef = useRef<ToolbarLayoutMode>("full");
+  const scheduleToolbarMeasurementRef = useRef<(() => void) | null>(null);
   const [fpsMenuPosition, setFpsMenuPosition] = useState({ top: 0, left: 0, minWidth: 210 });
 
   const isReadOnly = state.mode === "web-ro";
@@ -230,78 +228,80 @@ export function TopBarPanel(props: TopBarPanelProps) {
     }
     applyFramePacing("fixed", Math.max(1, Math.min(MAX_CUSTOM_TARGET_FPS, Math.round(parsed))));
   };
-  const plugins = useMemo(() => {
-    return kernel.pluginApi.listPlugins();
-  }, [kernel, kernel.pluginApi]);
 
-  const refreshPlugins = () => {
-    if (!window.electronAPI) {
-      setPluginsRefreshSummary("Plugin discovery is available in desktop mode only.");
+  useEffect(() => {
+    toolbarLayoutModeRef.current = toolbarLayoutMode;
+  }, [toolbarLayoutMode]);
+
+  useEffect(() => {
+    const toolbarEl = toolbarRef.current;
+    if (!toolbarEl) {
       return;
     }
-    setPluginsRefreshLoading(true);
-    void discoverAndLoadLocalPlugins(kernel)
-      .then((report) => {
-        const summary = formatPluginDiscoverySummary(report);
-        setPluginsRefreshSummary(summary);
-        kernel.store.getState().actions.setStatus(`Plugins refreshed. ${summary}`);
-      })
-      .catch((error) => {
-        const message = error instanceof Error ? error.message : "Unknown plugin refresh error";
-        setPluginsRefreshSummary(`Refresh failed: ${message}`);
-        kernel.store.getState().actions.setStatus(`Plugin refresh failed: ${message}`);
-      })
-      .finally(() => {
-        setPluginsRefreshLoading(false);
-      });
-  };
 
-  const refreshPlugin = (pluginId: string) => {
-    setPluginsRefreshLoading(true);
-    void Promise.resolve()
-      .then(async () => {
-        const plugin = kernel.pluginApi.listPlugins().find((entry) => entry.definition.id === pluginId);
-        const modulePath = plugin?.source?.modulePath;
-        if (!modulePath) {
-          throw new Error("Plugin source path is unavailable.");
+    const applyToolbarLayoutMode = (mode: ToolbarLayoutMode) => {
+      toolbarEl.classList.toggle("is-compact", mode === "compact" || mode === "wrapped" || mode === "scroll");
+      toolbarEl.classList.toggle("is-wrapped", mode === "wrapped");
+      toolbarEl.classList.toggle("is-scroll", mode === "scroll");
+      toolbarEl.dataset.layoutMode = mode;
+    };
+
+    const measureToolbarLayout = () => {
+      let nextMode: ToolbarLayoutMode = "scroll";
+      for (const candidate of TOOLBAR_LAYOUT_MODES) {
+        applyToolbarLayoutMode(candidate);
+        if (toolbarEl.scrollWidth <= toolbarEl.clientWidth + 1) {
+          nextMode = candidate;
+          break;
         }
-        const candidates = await discoverLocalPluginCandidates();
-        const candidate = candidates.find((entry) => entry.modulePath === modulePath);
-        await loadPluginFromModule(
-          kernel,
-          modulePath,
-          {
-            sourceGroup: candidate?.sourceGroup ?? plugin.source?.sourceGroup,
-            updatedAtMs: candidate?.updatedAtMs ?? plugin.source?.updatedAtMs
-          },
-          {
-            cacheBustToken: candidate?.updatedAtMs ?? Date.now()
-          }
-        );
-        return plugin.manifest?.name ?? plugin.definition.name;
-      })
-      .then(() => {
-        const pluginName = kernel.pluginApi.listPlugins().find((entry) => entry.definition.id === pluginId)?.manifest?.name
-          ?? kernel.pluginApi.listPlugins().find((entry) => entry.definition.id === pluginId)?.definition.name
-          ?? pluginId;
-        const summary = `Reloaded ${pluginName}.`;
-        setPluginsRefreshSummary(summary);
-        kernel.store.getState().actions.setStatus(summary);
-      })
-      .catch((error) => {
-        const message = error instanceof Error ? error.message : "Unknown plugin reload error";
-        setPluginsRefreshSummary(`Reload failed: ${message}`);
-        kernel.store.getState().actions.setStatus(`Plugin reload failed: ${message}`);
-      })
-      .finally(() => {
-        setPluginsRefreshLoading(false);
+      }
+      applyToolbarLayoutMode(nextMode);
+      if (nextMode !== toolbarLayoutModeRef.current) {
+        toolbarLayoutModeRef.current = nextMode;
+        setToolbarLayoutMode(nextMode);
+      }
+    };
+
+    const scheduleToolbarMeasurement = () => {
+      if (toolbarMeasurementFrameRef.current !== null) {
+        return;
+      }
+      toolbarMeasurementFrameRef.current = window.requestAnimationFrame(() => {
+        toolbarMeasurementFrameRef.current = null;
+        measureToolbarLayout();
       });
-  };
+    };
+    scheduleToolbarMeasurementRef.current = scheduleToolbarMeasurement;
+
+    const observer = new ResizeObserver(() => {
+      scheduleToolbarMeasurement();
+    });
+    observer.observe(toolbarEl);
+    window.addEventListener("resize", scheduleToolbarMeasurement);
+    scheduleToolbarMeasurement();
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", scheduleToolbarMeasurement);
+      scheduleToolbarMeasurementRef.current = null;
+      if (toolbarMeasurementFrameRef.current !== null) {
+        window.cancelAnimationFrame(toolbarMeasurementFrameRef.current);
+        toolbarMeasurementFrameRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    scheduleToolbarMeasurementRef.current?.();
+  });
 
   return (
-    <div className="top-toolbar">
+    <div
+      ref={toolbarRef}
+      className={`top-toolbar${toolbarLayoutMode === "compact" || toolbarLayoutMode === "wrapped" || toolbarLayoutMode === "scroll" ? " is-compact" : ""}${toolbarLayoutMode === "wrapped" ? " is-wrapped" : ""}${toolbarLayoutMode === "scroll" ? " is-scroll" : ""}`}
+      data-layout-mode={toolbarLayoutMode}
+    >
       <div className="toolbar-group">
-        <label title="Camera presets">Camera</label>
+        <label className="toolbar-group-label" title="Camera presets">Camera</label>
         <select
           onChange={(event) => {
             kernel.store.getState().actions.applyCameraPreset(event.target.value as CameraPreset);
@@ -317,7 +317,7 @@ export function TopBarPanel(props: TopBarPanelProps) {
       </div>
 
       <div className="toolbar-group">
-        <label title="Simulation controls">Time</label>
+        <label className="toolbar-group-label" title="Simulation controls">Time</label>
         <button
           type="button"
           title="Play / Pause"
@@ -377,7 +377,7 @@ export function TopBarPanel(props: TopBarPanelProps) {
       </div>
 
       <div className="toolbar-group">
-        <label title="History">Edit</label>
+        <label className="toolbar-group-label" title="History">Edit</label>
         <button type="button" title="Undo" onClick={() => kernel.store.getState().actions.undo()}>
           <FontAwesomeIcon icon={faRotateLeft} />
         </button>
@@ -387,12 +387,7 @@ export function TopBarPanel(props: TopBarPanelProps) {
       </div>
 
       <div className="toolbar-group">
-        <label title="Create Actor Browser">Create</label>
-        <AddActorMenu disabled={isReadOnly} registerGlobalShortcut />
-      </div>
-
-      <div className="toolbar-group">
-        <label title="Render">Render</label>
+        <label className="toolbar-group-label" title="Render">Render</label>
         <button type="button" title="Render video" onClick={props.onOpenRender}>
           <FontAwesomeIcon icon={faFilm} />
         </button>
@@ -420,7 +415,7 @@ export function TopBarPanel(props: TopBarPanelProps) {
       </div>
 
       <div className="toolbar-group">
-        <label title="Materials">Materials</label>
+        <label className="toolbar-group-label" title="Materials">Materials</label>
         <button
           type="button"
           title="Open material library"
@@ -432,21 +427,8 @@ export function TopBarPanel(props: TopBarPanelProps) {
         </button>
       </div>
 
-      <div className="toolbar-group">
-        <label title="Plugins">Plugins</label>
-        <button
-          type="button"
-          title="Open plugins dialog"
-          onClick={() => {
-            setPluginsModalOpen(true);
-          }}
-        >
-          <FontAwesomeIcon icon={faCube} />
-        </button>
-      </div>
-
       <div className="toolbar-group toolbar-fps-group" title="Viewport frame rate">
-        <label>FPS</label>
+        <label className="toolbar-group-label">FPS</label>
         <div className="toolbar-fps-shell" ref={fpsMenuRef}>
           <button
             ref={fpsButtonRef}
@@ -549,15 +531,6 @@ export function TopBarPanel(props: TopBarPanelProps) {
         </div>
       </div>
       <MaterialsModal open={materialsModalOpen} onClose={() => setMaterialsModalOpen(false)} />
-      <PluginsModal
-        open={pluginsModalOpen}
-        plugins={plugins}
-        loading={pluginsRefreshLoading}
-        lastRefreshSummary={pluginsRefreshSummary}
-        onRefresh={refreshPlugins}
-        onRefreshPlugin={refreshPlugin}
-        onClose={() => setPluginsModalOpen(false)}
-      />
     </div>
   );
 }

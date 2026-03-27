@@ -10,6 +10,7 @@ const SHORTCUTS = [
   { key: "Ctrl/Cmd + Shift + S", action: "Save snapshot as..." },
   { key: "Ctrl/Cmd + Z", action: "Undo" },
   { key: "Ctrl/Cmd + Shift + Z", action: "Redo" },
+  { key: "Ctrl/Cmd + F", action: "Toggle viewport fullscreen" },
   { key: "G / R / S", action: "Translate / rotate / scale selected actor" },
   { key: "?", action: "Toggle keyboard map" }
 ];
@@ -26,6 +27,7 @@ const VIEWPORT_SHORTCUTS = [
   { key: "2 / 4 / 6 / 8", action: "Step orbit around the current target" },
   { key: "5", action: "Toggle perspective / orthographic view" },
   { key: "9", action: "Flip to the opposite view around the current target" },
+  { key: "Esc", action: "Exit viewport fullscreen" },
   { key: "F", action: "Frame selected object (planned)" },
 ];
 

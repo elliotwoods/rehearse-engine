@@ -3,6 +3,7 @@ import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import { BUILD_INFO, buildInfoSummary } from "@/app/buildInfo";
 import { keyboardCommandRouter } from "@/app/keyboardCommandRouter";
+import { isMacPlatform, isViewportFullscreenShortcut } from "@/app/viewportFullscreenShortcut";
 import { registerCoreActorDescriptors, setupActorHotReload } from "@/features/actors/registerCoreActors";
 import { interpolateCameraState } from "@/features/camera/cycleTween";
 import {
@@ -115,6 +116,7 @@ export function App() {
   const [renderProgress, setRenderProgress] = useState<RenderProgress | null>(null);
   const [viewportScreenshotRequestId, setViewportScreenshotRequestId] = useState(0);
   const [viewportScreenshotBusy, setViewportScreenshotBusy] = useState(false);
+  const [viewportFullscreen, setViewportFullscreen] = useState(false);
   const renderHostElRef = useRef<HTMLDivElement | null>(null);
   const renderPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [mainViewportSuspended, setMainViewportSuspended] = useState(false);
@@ -127,10 +129,66 @@ export function App() {
   const actors = useAppStore((store) => store.state.actors);
   const selection = useAppStore((store) => store.state.selection);
   const readOnly = mode === "web-ro";
+  const macPlatform = useMemo(() => isMacPlatform(typeof navigator === "object" ? navigator.platform : ""), []);
   const selectionHistoryBackRef = useRef<SelectionEntry[][]>([]);
   const selectionHistoryForwardRef = useRef<SelectionEntry[][]>([]);
   const selectionHistorySuppressRef = useRef(false);
   const previousSelectionRef = useRef<SelectionEntry[]>(cloneSelection(selection));
+  const syncRealViewportFullscreen = useCallback(
+    async (nextFullscreen: boolean) => {
+      if (window.electronAPI?.windowSetFullscreen) {
+        try {
+          const state = await window.electronAPI.windowSetFullscreen(nextFullscreen);
+          setViewportFullscreen(state.isFullscreen);
+        } catch (error) {
+          setViewportFullscreen(false);
+          const message = error instanceof Error ? error.message : "Unknown fullscreen error";
+          kernel.store.getState().actions.setStatus(`Viewport fullscreen failed: ${message}`);
+        }
+        return;
+      }
+
+      try {
+        if (nextFullscreen) {
+          if (!document.fullscreenElement) {
+            await document.documentElement.requestFullscreen();
+          }
+        } else if (document.fullscreenElement) {
+          await document.exitFullscreen();
+        }
+        setViewportFullscreen(Boolean(document.fullscreenElement));
+      } catch (error) {
+        setViewportFullscreen(Boolean(document.fullscreenElement));
+        const message = error instanceof Error ? error.message : "Unknown fullscreen error";
+        kernel.store.getState().actions.setStatus(`Viewport fullscreen failed: ${message}`);
+      }
+    },
+    [kernel]
+  );
+
+  const requestViewportFullscreen = useCallback(
+    (nextFullscreen: boolean) => {
+      setViewportFullscreen(nextFullscreen);
+      void syncRealViewportFullscreen(nextFullscreen);
+    },
+    [syncRealViewportFullscreen]
+  );
+
+  useEffect(() => {
+    if (window.electronAPI?.onWindowStateChange) {
+      return window.electronAPI.onWindowStateChange((state) => {
+        setViewportFullscreen(state.isFullscreen);
+      });
+    }
+
+    const onFullscreenChange = () => {
+      setViewportFullscreen(Boolean(document.fullscreenElement));
+    };
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    return () => {
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+    };
+  }, []);
 
   const cancelCameraTransition = useCallback(() => {
     if (cameraTransitionRafRef.current !== null) {
@@ -828,6 +886,19 @@ export function App() {
       if (isEditableTarget(event.target)) {
         return;
       }
+      if (viewportFullscreen && event.key === "Escape") {
+        if (event.defaultPrevented) {
+          return;
+        }
+        event.preventDefault();
+        requestViewportFullscreen(false);
+        return;
+      }
+      if (isViewportFullscreenShortcut(event, macPlatform)) {
+        event.preventDefault();
+        requestViewportFullscreen(!viewportFullscreen);
+        return;
+      }
       const actions = kernel.store.getState().actions;
 
       if (event.key === " ") {
@@ -890,7 +961,7 @@ export function App() {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [activeSnapshotName, kernel, requestTextInput]);
+  }, [activeSnapshotName, kernel, macPlatform, requestTextInput, requestViewportFullscreen, viewportFullscreen]);
 
   const topBar = useMemo(
     () => (
@@ -929,6 +1000,7 @@ export function App() {
         topBar={topBar}
         pendingDropFileName={dragImportState?.fileName ?? null}
         viewportSuspended={mainViewportSuspended}
+        viewportFullscreen={viewportFullscreen}
         viewportScreenshotRequestId={viewportScreenshotRequestId}
         onViewportScreenshotBusyChange={setViewportScreenshotBusy}
       />
