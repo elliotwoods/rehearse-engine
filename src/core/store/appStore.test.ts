@@ -163,6 +163,70 @@ describe("appStore undo/redo", () => {
     });
   });
 
+  it("updates scene fly-look settings independently", () => {
+    const store = createAppStore("electron-rw");
+
+    store.getState().actions.setSceneRenderSettings({
+      cameraFlyLookInvertYaw: false,
+      cameraFlyLookSpeed: 1.75
+    });
+
+    expect(store.getState().state.scene.cameraFlyLookInvertYaw).toBe(false);
+    expect(store.getState().state.scene.cameraFlyLookSpeed).toBe(1.75);
+    expect(store.getState().state.scene.cameraNavigationSpeed).toBe(6);
+  });
+
+  it("updates scene helper settings independently", () => {
+    const store = createAppStore("electron-rw");
+
+    store.getState().actions.setSceneRenderSettings({
+      helpers: {
+        grid: {
+          visible: false,
+          divisions: 48,
+          opacity: 0.5
+        }
+      }
+    });
+
+    expect(store.getState().state.scene.helpers.grid).toEqual({
+      visible: false,
+      size: 20,
+      divisions: 48,
+      majorColor: "#2f8f9d",
+      minorColor: "#1f2430",
+      opacity: 0.5
+    });
+    expect(store.getState().state.scene.helpers.axes).toEqual({
+      visible: true,
+      size: 2.5,
+      xColor: "#ff0000",
+      yColor: "#00ff00",
+      zColor: "#0000ff",
+      opacity: 1
+    });
+
+    store.getState().actions.setSceneRenderSettings({
+      helpers: {
+        axes: {
+          visible: false,
+          size: 4,
+          zColor: "#8899aa"
+        }
+      }
+    });
+
+    expect(store.getState().state.scene.helpers.grid.divisions).toBe(48);
+    expect(store.getState().state.scene.helpers.axes).toEqual({
+      visible: false,
+      size: 4,
+      xColor: "#ff0000",
+      yColor: "#00ff00",
+      zColor: "#8899aa",
+      opacity: 1
+    });
+  });
+
   it("falls back to immediate camera updates when no transition driver is registered", () => {
     const store = createAppStore("electron-rw");
 

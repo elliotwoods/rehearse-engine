@@ -1,7 +1,7 @@
 import type { AppKernel } from "@/app/kernel";
+import type { ActorNode, FileParameterDefinition, ParameterValue, ParameterValues, SelectionEntry } from "@/core/types";
 import { createActorFromDescriptor } from "@/features/actors/actorCatalog";
-import { importFileForActorParam } from "@/features/imports/fileParameterImport";
-import type { FileParameterDefinition } from "@/core/types";
+import { importFileForActorParam, type FileImportResult } from "@/features/imports/fileParameterImport";
 
 export interface ActorFileImportOption {
   descriptorId: string;
@@ -12,6 +12,17 @@ export interface ActorFileImportOption {
   fileExtensions: string[];
   fileDefinition: FileParameterDefinition;
 }
+
+export interface SelectedActorFileImportTarget {
+  actorId: string;
+  actorName: string;
+  fileDefinition: FileParameterDefinition;
+}
+
+export type NewActorFileDropAction =
+  | { kind: "none" }
+  | { kind: "direct"; descriptorId: string }
+  | { kind: "choose"; options: ActorFileImportOption[] };
 
 function normalizeExtension(value: string): string {
   const next = value.trim().toLowerCase();
@@ -50,6 +61,19 @@ function fileDefinitionsFromDescriptor(kernel: AppKernel, descriptorId: string):
   return descriptor.schema.params.filter(
     (definition): definition is FileParameterDefinition => definition.type === "file"
   );
+}
+
+function resolveActorDescriptorId(kernel: AppKernel, actor: ActorNode): string | null {
+  const descriptor = kernel.descriptorRegistry.listByKind("actor").find((entry) => {
+    if (!entry.spawn) {
+      return false;
+    }
+    if (entry.spawn.actorType !== actor.actorType) {
+      return false;
+    }
+    return entry.spawn.pluginType === actor.pluginType;
+  });
+  return descriptor?.id ?? null;
 }
 
 function optionFromDescriptor(kernel: AppKernel, descriptorId: string): ActorFileImportOption | null {
@@ -92,6 +116,88 @@ export function listCompatibleActorFileImportOptions(kernel: AppKernel, fileName
     return [];
   }
   return listActorFileImportOptions(kernel).filter((option) => option.fileExtensions.includes(extension));
+}
+
+export function resolveNewActorFileDropAction(options: ActorFileImportOption[]): NewActorFileDropAction {
+  if (options.length === 0) {
+    return { kind: "none" };
+  }
+  if (options.length === 1) {
+    const onlyOption = options[0];
+    if (!onlyOption) {
+      return { kind: "none" };
+    }
+    return { kind: "direct", descriptorId: onlyOption.descriptorId };
+  }
+  return { kind: "choose", options };
+}
+
+export function resolveSelectedActorFileImportTarget(
+  kernel: AppKernel,
+  args: {
+    actors: Record<string, ActorNode>;
+    selection: SelectionEntry[];
+    fileName: string;
+  }
+): SelectedActorFileImportTarget | null {
+  if (args.selection.length !== 1 || args.selection[0]?.kind !== "actor") {
+    return null;
+  }
+  const actor = args.actors[args.selection[0].id];
+  if (!actor) {
+    return null;
+  }
+  const descriptorId = resolveActorDescriptorId(kernel, actor);
+  if (!descriptorId) {
+    return null;
+  }
+  const extension = fileExtensionFromName(args.fileName);
+  if (!extension) {
+    return null;
+  }
+  const compatibleDefinitions = fileDefinitionsFromDescriptor(kernel, descriptorId).filter((definition) =>
+    definition.accept.map(normalizeExtension).includes(extension)
+  );
+  if (compatibleDefinitions.length !== 1) {
+    return null;
+  }
+  const compatibleDefinition = compatibleDefinitions[0];
+  if (!compatibleDefinition) {
+    return null;
+  }
+  return {
+    actorId: actor.id,
+    actorName: actor.name,
+    fileDefinition: compatibleDefinition
+  };
+}
+
+export async function importFileIntoActor(
+  kernel: AppKernel,
+  args: {
+    actorId: string;
+    definition: FileParameterDefinition;
+    sourcePath: string;
+    projectName: string;
+  }
+): Promise<FileImportResult> {
+  const imported = await importFileForActorParam(kernel, {
+    projectName: args.projectName,
+    sourcePath: args.sourcePath,
+    definition: args.definition
+  });
+  const patch: ParameterValues = {};
+  for (const key of args.definition.clearsParams ?? []) {
+    patch[key] = null;
+  }
+  patch[args.definition.key] = imported.asset.id;
+  if (imported.extraParams) {
+    for (const [key, value] of Object.entries(imported.extraParams)) {
+      patch[key] = value as ParameterValue;
+    }
+  }
+  kernel.store.getState().actions.updateActorParams(args.actorId, patch);
+  return imported;
 }
 
 export async function importFileAsActor(

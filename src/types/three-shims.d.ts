@@ -98,6 +98,22 @@ declare module "three/examples/jsm/loaders/OBJLoader.js" {
 }
 
 declare module "three/webgpu" {
+  export class NodeMaterial extends import("three").Material {
+    public transparent: boolean;
+    public opacity: number;
+    public depthTest: boolean;
+    public depthWrite: boolean;
+    public side: number;
+    public blending: number;
+    public fog: boolean;
+    public lights: boolean;
+    public fragmentNode: any;
+    public vertexNode: any;
+    public needsUpdate: boolean;
+    public userData: Record<string, unknown>;
+    public constructor(parameters?: Record<string, unknown>);
+    public dispose(): void;
+  }
   export class WebGPURenderer {
     public domElement: HTMLCanvasElement;
     public toneMapping: number;
@@ -134,7 +150,7 @@ declare module "three/webgpu" {
     public renderAsync?(): Promise<void>;
     public dispose(): void;
   }
-  export class MeshBasicNodeMaterial {
+  export class MeshBasicNodeMaterial extends NodeMaterial {
     public color: any;
     public map: any;
     public alphaTest: number;
@@ -147,7 +163,7 @@ declare module "three/webgpu" {
     public needsUpdate: boolean;
     public constructor(parameters?: Record<string, unknown>);
   }
-  export class SpriteNodeMaterial {
+  export class SpriteNodeMaterial extends NodeMaterial {
     public color: any;
     public map: any;
     public alphaTest: number;
@@ -165,15 +181,33 @@ declare module "three/webgpu" {
 }
 
 declare module "three/tsl" {
+  export function Fn(fn: (...args: any[]) => any): (...args: any[]) => any;
+  export function attribute(name: string, type?: string): any;
+  export const cameraPosition: any;
+  export const cameraProjectionMatrix: any;
+  export const cameraViewMatrix: any;
   export function clamp(value: any, min?: any, max?: any): any;
   export function dot(a: any, b: any): any;
+  export function exp(value: any): any;
   export function float(value?: any): any;
   export function fract(value: any): any;
+  export function max(a: any, b: any): any;
+  export function min(a: any, b: any): any;
+  export function mix(a: any, b: any, c: any): any;
+  export const modelWorldMatrix: any;
+  export const normalWorld: any;
+  export const positionWorld: any;
+  export function select(condition: any, ifTrue: any, ifFalse: any): any;
+  export function sin(value: any): any;
+  export function uniform(value?: any): any;
   export function instancedBufferAttribute(attribute: any, type?: string): any;
   export function pass(scene: any, camera: any, options?: Record<string, unknown>): any;
   export function renderOutput(color: any, toneMapping?: any, outputColorSpace?: any): any;
   export const screenCoordinate: any;
   export function texture(value: any, uvNode?: any, levelNode?: any): any;
+  export function texture3D(value: any, uvNode?: any, levelNode?: any): any;
+  export function varying(node: any, name?: string): any;
+  export function varyingProperty(type: string, name: string): any;
   export function vec2(x?: any, y?: any): any;
   export function vec3(x?: any, y?: any, z?: any): any;
   export function vec4(x?: any, y?: any, z?: any, w?: any): any;

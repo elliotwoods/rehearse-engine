@@ -9,6 +9,7 @@ const DEFAULT_CAMERA_DISTANCE = 9;
 const EPSILON = 1e-6;
 const DOUBLE_MIDDLE_CLICK_WINDOW_MS = 320;
 const DOUBLE_MIDDLE_CLICK_TOLERANCE_PX = 6;
+const DRAG_ZOOM_DELTA_SCALE = 4;
 
 interface OrbitControlsTargetLike {
   enabled?: boolean;
@@ -27,7 +28,7 @@ export interface CameraInteractionControllerOptions {
   wheelZoomSpeed?: number;
 }
 
-type InteractionMode = "none" | "orbit" | "pan" | "fly";
+type InteractionMode = "none" | "orbit" | "pan" | "fly" | "zoom";
 
 interface PanState {
   plane: THREE.Plane;
@@ -128,6 +129,7 @@ export class CameraInteractionController {
   private panState: PanState | null = null;
   private middleClickCandidate = false;
   private lastMiddleClickAtMs = -Infinity;
+  private pointerDownBlocker: ((event: PointerEvent) => boolean) | null = null;
 
   public constructor(options: CameraInteractionControllerOptions) {
     this.kernel = options.kernel;
@@ -159,6 +161,10 @@ export class CameraInteractionController {
     window.removeEventListener("blur", this.onWindowBlur);
     this.navigationKeysDown.clear();
     this.clearInteractionState();
+  }
+
+  public setPointerDownBlocker(blocker: ((event: PointerEvent) => boolean) | null): void {
+    this.pointerDownBlocker = blocker;
   }
 
   public update(nowMs: number): void {
@@ -214,6 +220,9 @@ export class CameraInteractionController {
     if (event.pointerType !== "mouse" || this.controls.enabled === false) {
       return;
     }
+    if (this.pointerDownBlocker?.(event)) {
+      return;
+    }
     const camera = this.getCamera();
     if (!camera) {
       return;
@@ -241,14 +250,19 @@ export class CameraInteractionController {
     this.middleClickCandidate = isPureMiddleClick;
     this.domElement.setPointerCapture?.(event.pointerId);
 
-    if (event.buttons === 3 || event.button === 1) {
+    if (event.buttons === 3) {
       event.preventDefault();
-      this.beginPan(camera, event.clientX, event.clientY);
+      this.beginFly(camera);
       return;
     }
     if (event.button === 2) {
       event.preventDefault();
-      this.beginFly(camera);
+      this.beginPan(camera, event.clientX, event.clientY);
+      return;
+    }
+    if (event.button === 1) {
+      event.preventDefault();
+      this.beginZoom(camera);
       return;
     }
     if (event.button === 0) {
@@ -271,6 +285,12 @@ export class CameraInteractionController {
       const toleranceSq = DOUBLE_MIDDLE_CLICK_TOLERANCE_PX * DOUBLE_MIDDLE_CLICK_TOLERANCE_PX;
       if (this.pointerClient.distanceToSquared(this.pointerDownClient) > toleranceSq) {
         this.middleClickCandidate = false;
+        if (this.mode === "zoom") {
+          this.processedPointerClient.copy(this.pointerClient);
+          return;
+        }
+      } else if (this.mode === "zoom") {
+        return;
       }
     }
 
@@ -282,8 +302,8 @@ export class CameraInteractionController {
       this.endInteraction(event.pointerId);
       return;
     }
-    if (event.buttons === 3 && this.mode !== "pan") {
-      this.beginPan(camera, event.clientX, event.clientY);
+    if (event.buttons === 3 && this.mode !== "fly") {
+      this.beginFly(camera);
       this.processedPointerClient.copy(this.pointerClient);
       return;
     }
@@ -342,8 +362,21 @@ export class CameraInteractionController {
       if (dx === 0 && dy === 0) {
         return;
       }
-      const rotationScale = (Math.PI * 2) / Math.max(1, this.domElement.clientHeight);
-      this.applyFlyDelta(camera, dx * rotationScale, dy * rotationScale);
+      const scene = this.kernel.store.getState().state.scene;
+      const rotationScale =
+        ((Math.PI * 2) / Math.max(1, this.domElement.clientHeight)) * Math.max(0, Number(scene.cameraFlyLookSpeed ?? 1));
+      const yawDirection = scene.cameraFlyLookInvertYaw === false ? 1 : -1;
+      this.applyFlyDelta(camera, yawDirection * dx * rotationScale, dy * rotationScale);
+      this.processedPointerClient.copy(this.pointerClient);
+      return;
+    }
+
+    if (this.mode === "zoom") {
+      const dy = this.pointerClient.y - this.processedPointerClient.y;
+      if (dy === 0) {
+        return;
+      }
+      this.applyZoomDelta(camera, dy * DRAG_ZOOM_DELTA_SCALE);
       this.processedPointerClient.copy(this.pointerClient);
     }
   };
@@ -434,6 +467,12 @@ export class CameraInteractionController {
     updateCameraLookAt(camera, this.controls.target);
   }
 
+  private beginZoom(camera: THREE.Camera): void {
+    this.mode = "zoom";
+    this.panState = null;
+    updateCameraLookAt(camera, this.controls.target);
+  }
+
   private endInteraction(pointerId: number): void {
     if (this.pointerId !== pointerId) {
       return;
@@ -468,12 +507,7 @@ export class CameraInteractionController {
     updateCameraLookAt(camera, this.controls.target);
   }
 
-  private applyWheelZoom(event: WheelEvent): void {
-    const camera = this.getCamera();
-    if (!camera) {
-      return;
-    }
-    const delta = Number.isFinite(event.deltaY) ? event.deltaY : 0;
+  private applyZoomDelta(camera: THREE.Camera, delta: number): void {
     if (delta === 0) {
       return;
     }
@@ -499,6 +533,15 @@ export class CameraInteractionController {
     const nextDistance = Math.max(minDistance, Math.min(maxDistance, distance * zoomFactor));
     camera.position.copy(this.controls.target).add(offset.normalize().multiplyScalar(nextDistance));
     updateCameraLookAt(camera, this.controls.target);
+  }
+
+  private applyWheelZoom(event: WheelEvent): void {
+    const camera = this.getCamera();
+    if (!camera) {
+      return;
+    }
+    const delta = Number.isFinite(event.deltaY) ? event.deltaY : 0;
+    this.applyZoomDelta(camera, delta);
   }
 
   private isEventInsideViewport(event: Event): boolean {

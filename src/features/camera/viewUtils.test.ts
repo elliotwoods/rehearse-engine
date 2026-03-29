@@ -100,15 +100,28 @@ describe("viewUtils", () => {
     expect(next.position[1]).toBeGreaterThan(PERSPECTIVE_CAMERA.position[1]);
   });
 
-  it("keeps pointer orbit pitch clamped near the poles", () => {
+  it("nudges pointer orbit off the poles instead of freezing", () => {
     const nearTop: CameraState = {
       ...PERSPECTIVE_CAMERA,
       position: [1, 7, 3.01]
     };
-    const next = orbitCameraFromPointerDelta(nearTop, 0, -200, 400);
-    expect(next.position[0]).toBeCloseTo(nearTop.position[0], 6);
-    expect(next.position[1]).toBeCloseTo(nearTop.position[1], 6);
-    expect(next.position[2]).toBeCloseTo(nearTop.position[2], 6);
+    const next = orbitCameraFromPointerDelta(nearTop, 0, -20, 400);
+    expect(new THREE.Vector3(...next.position).distanceTo(new THREE.Vector3(...nearTop.position))).toBeGreaterThan(0.1);
+    expect(getCameraDistance(next)).toBeCloseTo(getCameraDistance(nearTop), 5);
+    expect(next.target).toEqual(nearTop.target);
+    expect(Math.abs(getCameraForward(next).dot(new THREE.Vector3(0, -1, 0)))).toBeLessThan(0.99995);
+  });
+
+  it("can orbit away from an exact top view", () => {
+    const top: CameraState = {
+      ...PERSPECTIVE_CAMERA,
+      position: [1, 7, 3]
+    };
+    const next = orbitCameraFromPointerDelta(top, 0, -20, 400);
+    expect(new THREE.Vector3(...next.position).distanceTo(new THREE.Vector3(...top.position))).toBeGreaterThan(0.1);
+    expect(next.position[1]).toBeLessThan(top.position[1]);
+    expect(getCameraDistance(next)).toBeCloseTo(getCameraDistance(top), 5);
+    expect(next.target).toEqual(top.target);
   });
 
   it("projects viewport-center world directions using the active viewport aspect", () => {

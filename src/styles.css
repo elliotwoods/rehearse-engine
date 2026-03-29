@@ -3285,6 +3285,10 @@ body.is-dragging-viewport-axes * {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
+.file-drop-overlay-grid.has-replace-target {
+  grid-template-columns: minmax(320px, 2fr) minmax(260px, 1fr);
+}
+
 .file-drop-target {
   border: 1px solid var(--line-strong);
   background: #122238;
@@ -3300,6 +3304,25 @@ body.is-dragging-viewport-axes * {
 .file-drop-target:hover {
   border-color: var(--accent);
   background: #173252;
+}
+
+.file-drop-target.is-disabled {
+  opacity: 0.6;
+  border-style: dashed;
+}
+
+.file-drop-target.is-disabled:hover {
+  border-color: var(--line-strong);
+  background: #122238;
+}
+
+.file-drop-target.is-replace {
+  background: #1a1630;
+}
+
+.file-drop-target.is-replace:hover {
+  border-color: var(--warning);
+  background: #231d42;
 }
 
 .file-drop-target-icon {

@@ -37,6 +37,9 @@ export interface ActorNode {
 
 export interface AppState {
   actors: Record<string, ActorNode>;
+  scene?: {
+    renderEngine?: "webgl2" | "webgpu";
+  };
   camera?: {
     position: [number, number, number];
   };

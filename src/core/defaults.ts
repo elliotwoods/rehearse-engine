@@ -5,6 +5,7 @@ import type {
   CameraState,
   Material,
   SceneFramePacingSettings,
+  SceneHelpersSettings,
   ScenePostProcessingSettings,
   SceneState,
   TimeState
@@ -191,6 +192,25 @@ export const DEFAULT_POST_PROCESSING: ScenePostProcessingSettings = {
   }
 };
 
+export const DEFAULT_SCENE_HELPERS: SceneHelpersSettings = {
+  grid: {
+    visible: true,
+    size: 20,
+    divisions: 20,
+    majorColor: "#2f8f9d",
+    minorColor: "#1f2430",
+    opacity: 0.35
+  },
+  axes: {
+    visible: true,
+    size: 2.5,
+    xColor: "#ff0000",
+    yColor: "#00ff00",
+    zColor: "#0000ff",
+    opacity: 1
+  }
+};
+
 export function createDefaultScene(): {
   scene: SceneState;
   actors: Record<string, ActorNode>;
@@ -211,8 +231,11 @@ export function createDefaultScene(): {
       dither: true
     },
     postProcessing: structuredClone(DEFAULT_POST_PROCESSING),
+    helpers: structuredClone(DEFAULT_SCENE_HELPERS),
     cameraKeyboardNavigation: true,
-    cameraNavigationSpeed: 6
+    cameraNavigationSpeed: 6,
+    cameraFlyLookInvertYaw: true,
+    cameraFlyLookSpeed: 1
   };
   return {
     scene,

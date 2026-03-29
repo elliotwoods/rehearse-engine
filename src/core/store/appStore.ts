@@ -23,6 +23,7 @@ import type {
   RenderEngine,
   RuntimeDebugState,
   SceneFramePacingSettings,
+  SceneHelpersSettings,
   ScenePostProcessingSettings,
   SceneToneMappingMode,
   SceneStats,
@@ -60,6 +61,10 @@ export interface AppActions {
           mode: SceneToneMappingMode;
           dither: boolean;
         }>;
+        helpers: Partial<{
+          grid: Partial<SceneHelpersSettings["grid"]>;
+          axes: Partial<SceneHelpersSettings["axes"]>;
+        }>;
         postProcessing: Partial<{
           bloom: Partial<ScenePostProcessingSettings["bloom"]>;
           vignette: Partial<ScenePostProcessingSettings["vignette"]>;
@@ -68,6 +73,8 @@ export interface AppActions {
         }>;
         cameraKeyboardNavigation: boolean;
         cameraNavigationSpeed: number;
+        cameraFlyLookInvertYaw: boolean;
+        cameraFlyLookSpeed: number;
       }>
   ): void;
   createActor(input: {
@@ -475,11 +482,61 @@ export function createAppStore(mode: AppMode): AppStoreApi {
                 }
               }
             }
+            if (settings.helpers) {
+              if (settings.helpers.grid) {
+                const grid = settings.helpers.grid;
+                if (typeof grid.visible === "boolean") {
+                  draft.scene.helpers.grid.visible = grid.visible;
+                }
+                if (typeof grid.size === "number" && Number.isFinite(grid.size)) {
+                  draft.scene.helpers.grid.size = Math.max(0.001, grid.size);
+                }
+                if (typeof grid.divisions === "number" && Number.isFinite(grid.divisions)) {
+                  draft.scene.helpers.grid.divisions = Math.max(1, Math.round(grid.divisions));
+                }
+                if (typeof grid.majorColor === "string") {
+                  draft.scene.helpers.grid.majorColor = grid.majorColor;
+                }
+                if (typeof grid.minorColor === "string") {
+                  draft.scene.helpers.grid.minorColor = grid.minorColor;
+                }
+                if (typeof grid.opacity === "number" && Number.isFinite(grid.opacity)) {
+                  draft.scene.helpers.grid.opacity = Math.max(0, Math.min(1, grid.opacity));
+                }
+              }
+              if (settings.helpers.axes) {
+                const axes = settings.helpers.axes;
+                if (typeof axes.visible === "boolean") {
+                  draft.scene.helpers.axes.visible = axes.visible;
+                }
+                if (typeof axes.size === "number" && Number.isFinite(axes.size)) {
+                  draft.scene.helpers.axes.size = Math.max(0.001, axes.size);
+                }
+                if (typeof axes.xColor === "string") {
+                  draft.scene.helpers.axes.xColor = axes.xColor;
+                }
+                if (typeof axes.yColor === "string") {
+                  draft.scene.helpers.axes.yColor = axes.yColor;
+                }
+                if (typeof axes.zColor === "string") {
+                  draft.scene.helpers.axes.zColor = axes.zColor;
+                }
+                if (typeof axes.opacity === "number" && Number.isFinite(axes.opacity)) {
+                  draft.scene.helpers.axes.opacity = Math.max(0, Math.min(1, axes.opacity));
+                }
+              }
+            }
             if (typeof settings.cameraKeyboardNavigation === "boolean") {
               draft.scene.cameraKeyboardNavigation = settings.cameraKeyboardNavigation;
             }
             if (typeof settings.cameraNavigationSpeed === "number" && Number.isFinite(settings.cameraNavigationSpeed)) {
               draft.scene.cameraNavigationSpeed = Math.max(0, settings.cameraNavigationSpeed);
+            }
+            if (typeof settings.cameraFlyLookInvertYaw === "boolean") {
+              draft.scene.cameraFlyLookInvertYaw = settings.cameraFlyLookInvertYaw;
+            }
+            if (typeof settings.cameraFlyLookSpeed === "number" && Number.isFinite(settings.cameraFlyLookSpeed)) {
+              draft.scene.cameraFlyLookSpeed = Math.max(0, settings.cameraFlyLookSpeed);
             }
             draft.dirty = true;
           })

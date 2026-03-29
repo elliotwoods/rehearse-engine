@@ -2,13 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 import type { AppKernel } from "@/app/kernel";
 import { createAppStore } from "@/core/store/appStore";
 import type { FileParameterDefinition } from "@/core/types";
-import { importFileAsActor } from "@/features/imports/actorFileImport";
+import {
+  type ActorFileImportOption,
+  importFileAsActor,
+  importFileIntoActor,
+  resolveNewActorFileDropAction,
+  resolveSelectedActorFileImportTarget
+} from "@/features/imports/actorFileImport";
 
 const fileDefinition: FileParameterDefinition = {
   key: "assetId",
   label: "Asset",
   type: "file",
   accept: [".obj"],
+  clearsParams: ["materialSlots"],
   import: {
     mode: "import-asset",
     kind: "generic"
@@ -32,6 +39,16 @@ const descriptor = {
   }
 };
 
+const importOption: ActorFileImportOption = {
+  descriptorId: "actor.mesh",
+  actorType: "mesh",
+  label: "Mesh",
+  description: "Mesh actor",
+  iconGlyph: "MS",
+  fileExtensions: [".obj"],
+  fileDefinition
+};
+
 function createKernelStub(): AppKernel {
   const store = createAppStore("electron-rw");
   return {
@@ -43,6 +60,16 @@ function createKernelStub(): AppKernel {
         kind: "generic",
         name: "Imported asset",
         path: "assets/imported.obj"
+      })),
+      importDae: vi.fn(async () => ({
+        asset: {
+          id: "asset-dae",
+          kind: "generic",
+          name: "Imported DAE",
+          path: "assets/imported.dae"
+        },
+        imageAssets: [],
+        materialDefs: []
       }))
     } as unknown as AppKernel["storage"],
     projectService: {
@@ -133,5 +160,69 @@ describe("importFileAsActor", () => {
 
     expect(kernel.store.getState().state.actors[firstId]?.name).toBe("Tree");
     expect(kernel.store.getState().state.actors[secondId]?.name).toBe("Tree2");
+  });
+
+  it("resolves direct-vs-picker behavior from matching actor options", () => {
+    const none = resolveNewActorFileDropAction([]);
+    const single = resolveNewActorFileDropAction([importOption]);
+    const multiple = resolveNewActorFileDropAction([
+      importOption,
+      {
+        descriptorId: "actor.alt",
+        actorType: "mesh",
+        label: "Alt Mesh",
+        description: "Alt",
+        iconGlyph: "AM",
+        fileExtensions: [".obj"],
+        fileDefinition
+      }
+    ]);
+
+    expect(none.kind).toBe("none");
+    expect(single).toEqual({ kind: "direct", descriptorId: "actor.mesh" });
+    expect(multiple.kind).toBe("choose");
+  });
+
+  it("resolves a selected actor replacement target only for a single compatible actor selection", () => {
+    const kernel = createKernelStub();
+    const actorId = kernel.store.getState().actions.createActorNoHistory({
+      actorType: "mesh",
+      name: "Selected mesh",
+      select: false
+    });
+
+    const target = resolveSelectedActorFileImportTarget(kernel, {
+      actors: kernel.store.getState().state.actors,
+      selection: [{ kind: "actor", id: actorId }],
+      fileName: "tree.obj"
+    });
+
+    expect(target?.actorId).toBe(actorId);
+    expect(target?.actorName).toBe("Selected mesh");
+    expect(target?.fileDefinition.key).toBe("assetId");
+  });
+
+  it("imports into an existing actor and applies clearsParams", async () => {
+    const kernel = createKernelStub();
+    const actorId = kernel.store.getState().actions.createActorNoHistory({
+      actorType: "mesh",
+      name: "Selected mesh",
+      select: false
+    });
+    kernel.store.getState().actions.updateActorParams(actorId, {
+      materialSlots: { existing: "old-material" }
+    });
+
+    const imported = await importFileIntoActor(kernel, {
+      actorId,
+      definition: fileDefinition,
+      sourcePath: "C:\\imports\\tree.obj",
+      projectName: "demo"
+    });
+
+    const actor = kernel.store.getState().state.actors[actorId];
+    expect(imported.asset.id).toBe("asset-imported");
+    expect(actor?.params.assetId).toBe("asset-imported");
+    expect(actor?.params.materialSlots).toBeNull();
   });
 });

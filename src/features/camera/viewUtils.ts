@@ -11,6 +11,7 @@ const HOME_CAMERA_DISTANCE = 5;
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 const EPSILON = 1e-6;
 const ORBIT_POINTER_SCALE_BASE = Math.PI * 2;
+const ORBIT_POLAR_EPSILON = 1e-4;
 
 export type CameraViewDirection = "front" | "back" | "left" | "right" | "top" | "bottom" | "isometric";
 
@@ -267,21 +268,10 @@ export function stepOrbitAroundTarget(current: CameraState, yawDelta: number, pi
   if (offset.lengthSq() <= EPSILON) {
     offset.set(0, 0, DEFAULT_PERSPECTIVE_DISTANCE);
   }
-
-  const yaw = new THREE.Quaternion().setFromAxisAngle(WORLD_UP, yawDelta);
-  offset.applyQuaternion(yaw);
-
-  const forward = offset.clone().multiplyScalar(-1).normalize();
-  const right = new THREE.Vector3().crossVectors(forward, WORLD_UP);
-  if (right.lengthSq() > EPSILON) {
-    right.normalize();
-    const pitch = new THREE.Quaternion().setFromAxisAngle(right, pitchDelta);
-    const pitchedOffset = offset.clone().applyQuaternion(pitch);
-    const pitchedForward = pitchedOffset.clone().multiplyScalar(-1).normalize();
-    if (Math.abs(pitchedForward.dot(WORLD_UP)) < 0.9995) {
-      offset.copy(pitchedOffset);
-    }
-  }
+  const spherical = new THREE.Spherical().setFromVector3(offset);
+  spherical.theta += yawDelta;
+  spherical.phi = clamp(spherical.phi + pitchDelta, ORBIT_POLAR_EPSILON, Math.PI - ORBIT_POLAR_EPSILON);
+  offset.setFromSpherical(spherical);
 
   return {
     ...current,

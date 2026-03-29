@@ -90,6 +90,8 @@ describe("beam crossover plugin descriptors", () => {
     expect(solidStatus?.find((entry) => entry.label === "Mist Active")?.value).toBe(false);
     expect(shellStatus?.find((entry) => entry.label === "Mist Applies In")?.value).toBe("Scattering Shell, Scattering Shell 2");
     expect(shellStatus?.find((entry) => entry.label === "Mist Active")?.value).toBe(true);
+    expect(solidStatus?.some((entry) => entry.label === "WebGL-Only Mode")).toBe(false);
+    expect(shellStatus?.some((entry) => entry.label === "WebGL-Only Mode")).toBe(false);
   });
 });
 

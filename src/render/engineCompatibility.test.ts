@@ -25,14 +25,24 @@ function createActor(overrides: Partial<ActorNode>): ActorNode {
 }
 
 describe("engine compatibility", () => {
-  test("marks Beam Crossover ghost mode incompatible with WebGPU", () => {
+  test("keeps Beam Crossover ghost mode compatible with WebGPU", () => {
     const actor = createActor({
       pluginType: "plugin.beamCrossover.emitter",
       params: {
         beamType: "ghost"
       }
     });
-    expect(incompatibilityReason(actor, "webgpu")).toBe("Beam Crossover ghost mode currently requires WebGL2.");
+    expect(incompatibilityReason(actor, "webgpu")).toBeNull();
+  });
+
+  test("keeps Beam Crossover normals mode compatible with WebGPU", () => {
+    const actor = createActor({
+      pluginType: "plugin.beamCrossover.emitter",
+      params: {
+        beamType: "normals"
+      }
+    });
+    expect(incompatibilityReason(actor, "webgpu")).toBeNull();
   });
 
   test("keeps Beam Crossover solid mode compatible with WebGPU", () => {
@@ -45,24 +55,24 @@ describe("engine compatibility", () => {
     expect(incompatibilityReason(actor, "webgpu")).toBeNull();
   });
 
-  test("marks Beam Crossover Scattering Shell mode incompatible with WebGPU", () => {
+  test("keeps Beam Crossover Scattering Shell mode compatible with WebGPU", () => {
     const actor = createActor({
       pluginType: "plugin.beamCrossover.emitterArray",
       params: {
         beamType: "scatteringShell"
       }
     });
-    expect(incompatibilityReason(actor, "webgpu")).toBe("Beam Crossover Scattering Shell mode currently requires WebGL2.");
+    expect(incompatibilityReason(actor, "webgpu")).toBeNull();
   });
 
-  test("marks Beam Crossover Scattering Shell 2 mode incompatible with WebGPU", () => {
+  test("keeps Beam Crossover Scattering Shell 2 mode compatible with WebGPU", () => {
     const actor = createActor({
       pluginType: "plugin.beamCrossover.emitter",
       params: {
         beamType: "scatteringShell2"
       }
     });
-    expect(incompatibilityReason(actor, "webgpu")).toBe("Beam Crossover Scattering Shell 2 mode currently requires WebGL2.");
+    expect(incompatibilityReason(actor, "webgpu")).toBeNull();
   });
 
   test("marks Mist Volume actors incompatible with WebGPU", () => {

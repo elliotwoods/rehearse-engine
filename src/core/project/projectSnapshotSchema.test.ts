@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseProjectSnapshot, serializeProjectSnapshot } from "@/core/project/projectSnapshotSchema";
-import { createInitialState } from "@/core/defaults";
+import { createInitialState, DEFAULT_SCENE_HELPERS } from "@/core/defaults";
 import { PROJECT_SCHEMA_VERSION } from "@/core/types";
 import { createId } from "@/core/ids";
 
@@ -76,6 +76,9 @@ describe("project snapshot schema", () => {
       mode: "vsync",
       targetFps: 60
     });
+    expect(parsed.scene.helpers).toEqual(state.scene.helpers);
+    expect(parsed.scene.cameraFlyLookInvertYaw).toBe(true);
+    expect(parsed.scene.cameraFlyLookSpeed).toBe(1);
     expect(parsed.actors[curveActorId]?.actorType).toBe("curve");
     expect(parsed.actors[curveActorId]?.params.curveData).toBeTruthy();
     expect(parsed.lastPerspectiveCamera).toEqual(state.lastPerspectiveCamera);
@@ -132,6 +135,9 @@ describe("project snapshot schema", () => {
       mode: "vsync",
       targetFps: 60
     });
+    expect(parsed.scene.helpers).toEqual(DEFAULT_SCENE_HELPERS);
+    expect(parsed.scene.cameraFlyLookInvertYaw).toBe(true);
+    expect(parsed.scene.cameraFlyLookSpeed).toBe(1);
     expect(parsed.lastPerspectiveCamera).toEqual(parsed.camera);
   });
 

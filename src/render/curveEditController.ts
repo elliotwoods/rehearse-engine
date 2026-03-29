@@ -168,6 +168,10 @@ export class CurveEditController {
     this.transformControls.camera = camera;
   }
 
+  public willHandlePointerDown(event: PointerEvent): boolean {
+    return this.claimsPointerDown(event);
+  }
+
   public update(): void {
     if (this.transformControls.dragging) {
       return;
@@ -411,16 +415,10 @@ export class CurveEditController {
       );
       return;
     }
-    if (this.activeControlMeta && this.transformControls.object) {
-      const pointer = this.pointerToNdc(event);
-      if (pointer) {
-        this.transformControls.pointerHover(pointer);
-        if (this.transformControls.axis) {
-          this.pendingOrbitBlock = true;
-          (this.orbitControls as any).enabled = false;
-          return;
-        }
-      }
+    if (this.isTransformGizmoHit(event)) {
+      this.pendingOrbitBlock = true;
+      (this.orbitControls as any).enabled = false;
+      return;
     }
     if (!picked) {
       if (this.activeControlMeta) {
@@ -432,6 +430,31 @@ export class CurveEditController {
       return;
     }
   };
+
+  private claimsPointerDown(event: PointerEvent): boolean {
+    if (event.button !== 0) {
+      return false;
+    }
+    if (this.transformControls.dragging) {
+      return true;
+    }
+    if (this.pickControl(event)) {
+      return true;
+    }
+    return this.isTransformGizmoHit(event);
+  }
+
+  private isTransformGizmoHit(event: PointerEvent): boolean {
+    if (!this.activeControlMeta || !this.transformControls.object) {
+      return false;
+    }
+    const pointer = this.pointerToNdc(event);
+    if (!pointer) {
+      return false;
+    }
+    this.transformControls.pointerHover(pointer);
+    return Boolean(this.transformControls.axis);
+  }
 
   private onPointerUp = (): void => {
     if (!this.pendingOrbitBlock) {

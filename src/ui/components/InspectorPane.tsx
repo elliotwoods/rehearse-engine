@@ -19,7 +19,7 @@ import {
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import { usePluginRegistryRevision } from "@/features/plugins/usePluginRegistryRevision";
-import { DEFAULT_POST_PROCESSING } from "@/core/defaults";
+import { DEFAULT_POST_PROCESSING, DEFAULT_SCENE_HELPERS } from "@/core/defaults";
 import type {
   ActorNode,
   ActorRuntimeStatus,
@@ -92,6 +92,8 @@ const VISIBILITY_OPTIONS: ActorVisibilityMode[] = ["visible", "hidden", "selecte
 const DEFAULT_SCENE_BACKGROUND = "#070b12";
 const DEFAULT_CAMERA_KEYBOARD_NAVIGATION = true;
 const DEFAULT_CAMERA_NAVIGATION_SPEED = 6;
+const DEFAULT_CAMERA_FLY_LOOK_INVERT_YAW = true;
+const DEFAULT_CAMERA_FLY_LOOK_SPEED = 1;
 const DEFAULT_CAMERA_FOV_DEGREES = 50;
 const DEFAULT_SLOW_FRAME_DIAGNOSTICS_ENABLED = false;
 const DEFAULT_SLOW_FRAME_DIAGNOSTICS_THRESHOLD_MS = 100;
@@ -649,7 +651,7 @@ interface SceneInspectorViewProps {
   kernel: ReturnType<typeof useKernel>;
 }
 
-type SceneInspectorRoute = "root" | "engine" | "camera" | "post-processing" | "diagnostics";
+type SceneInspectorRoute = "root" | "engine" | "helpers" | "camera" | "post-processing" | "diagnostics";
 
 function cloneInspectorView<T>(view: T): T {
   return { ...view };
@@ -674,6 +676,26 @@ function SceneInspectorView(props: SceneInspectorViewProps) {
   const canResetBackground = props.appState.scene.backgroundColor.toLowerCase() !== DEFAULT_SCENE_BACKGROUND;
   const canResetEngine = props.appState.scene.renderEngine !== "webgl2";
   const canResetAntialiasing = props.appState.scene.antialiasing !== true;
+  const canResetGridVisible = props.appState.scene.helpers.grid.visible !== DEFAULT_SCENE_HELPERS.grid.visible;
+  const canResetGridSize = Math.abs(props.appState.scene.helpers.grid.size - DEFAULT_SCENE_HELPERS.grid.size) > 1e-9;
+  const canResetGridDivisions =
+    props.appState.scene.helpers.grid.divisions !== DEFAULT_SCENE_HELPERS.grid.divisions;
+  const canResetGridMajorColor =
+    props.appState.scene.helpers.grid.majorColor.toLowerCase() !== DEFAULT_SCENE_HELPERS.grid.majorColor;
+  const canResetGridMinorColor =
+    props.appState.scene.helpers.grid.minorColor.toLowerCase() !== DEFAULT_SCENE_HELPERS.grid.minorColor;
+  const canResetGridOpacity =
+    Math.abs(props.appState.scene.helpers.grid.opacity - DEFAULT_SCENE_HELPERS.grid.opacity) > 1e-9;
+  const canResetAxesVisible = props.appState.scene.helpers.axes.visible !== DEFAULT_SCENE_HELPERS.axes.visible;
+  const canResetAxesSize = Math.abs(props.appState.scene.helpers.axes.size - DEFAULT_SCENE_HELPERS.axes.size) > 1e-9;
+  const canResetAxesXColor =
+    props.appState.scene.helpers.axes.xColor.toLowerCase() !== DEFAULT_SCENE_HELPERS.axes.xColor;
+  const canResetAxesYColor =
+    props.appState.scene.helpers.axes.yColor.toLowerCase() !== DEFAULT_SCENE_HELPERS.axes.yColor;
+  const canResetAxesZColor =
+    props.appState.scene.helpers.axes.zColor.toLowerCase() !== DEFAULT_SCENE_HELPERS.axes.zColor;
+  const canResetAxesOpacity =
+    Math.abs(props.appState.scene.helpers.axes.opacity - DEFAULT_SCENE_HELPERS.axes.opacity) > 1e-9;
   const canResetTonemappingMode = props.appState.scene.tonemapping.mode !== "aces";
   const canResetTonemappingDither = props.appState.scene.tonemapping.dither !== true;
   const canResetBloomEnabled = props.appState.scene.postProcessing.bloom.enabled !== DEFAULT_POST_PROCESSING.bloom.enabled;
@@ -703,6 +725,10 @@ function SceneInspectorView(props: SceneInspectorViewProps) {
     props.appState.scene.cameraKeyboardNavigation !== DEFAULT_CAMERA_KEYBOARD_NAVIGATION;
   const canResetNavigationSpeed =
     Math.abs(props.appState.scene.cameraNavigationSpeed - DEFAULT_CAMERA_NAVIGATION_SPEED) > 1e-9;
+  const canResetFlyLookInvertYaw =
+    props.appState.scene.cameraFlyLookInvertYaw !== DEFAULT_CAMERA_FLY_LOOK_INVERT_YAW;
+  const canResetFlyLookSpeed =
+    Math.abs(props.appState.scene.cameraFlyLookSpeed - DEFAULT_CAMERA_FLY_LOOK_SPEED) > 1e-9;
   const canResetCameraFov = Math.abs(props.appState.camera.fov - DEFAULT_CAMERA_FOV_DEGREES) > 1e-9;
   const canResetSlowFrameDiagnosticsEnabled =
     props.appState.runtimeDebug.slowFrameDiagnosticsEnabled !== DEFAULT_SLOW_FRAME_DIAGNOSTICS_ENABLED;
@@ -723,6 +749,9 @@ function SceneInspectorView(props: SceneInspectorViewProps) {
     props.appState.camera.mode === "orthographic"
       ? `Zoom ${props.appState.camera.zoom.toFixed(2)}`
       : `FOV ${props.appState.camera.fov.toFixed(1)}°`;
+  const helpersSummary = `Grid ${props.appState.scene.helpers.grid.visible ? "on" : "off"} Â· Axes ${
+    props.appState.scene.helpers.axes.visible ? "on" : "off"
+  }`;
   const postProcessingSummary = postProcessingEnabledCount > 0 ? `${postProcessingEnabledCount} enabled` : "All off";
   const diagnosticsSummary = props.appState.runtimeDebug.slowFrameDiagnosticsEnabled
     ? `Slow frames on · ${props.appState.runtimeDebug.slowFrameDiagnosticsThresholdMs.toFixed(0)} ms`
@@ -867,6 +896,8 @@ function SceneInspectorView(props: SceneInspectorViewProps) {
             <span className="inspector-breadcrumb-current">
               {sceneInspectorView === "engine"
                 ? "Engine"
+                : sceneInspectorView === "helpers"
+                  ? "Helpers"
                 : sceneInspectorView === "camera"
                   ? "Camera"
                   : sceneInspectorView === "post-processing"
@@ -941,6 +972,7 @@ function SceneInspectorView(props: SceneInspectorViewProps) {
             <h4>Settings</h4>
           </header>
           <DrillInRow label="Engine" summary={engineSummary} onClick={() => setSceneInspectorView("engine")} />
+          <DrillInRow label="Helpers" summary={helpersSummary} onClick={() => setSceneInspectorView("helpers")} />
           <DrillInRow label="Camera" summary={cameraSummary} onClick={() => setSceneInspectorView("camera")} />
           <DrillInRow
             label="Post Processing"
@@ -1526,6 +1558,322 @@ function SceneInspectorView(props: SceneInspectorViewProps) {
         </div>
       </section>
       ) : null}
+      {sceneInspectorView === "helpers" ? (
+      <section className="inspector-common-card">
+        <header>
+          <h4>Helpers</h4>
+        </header>
+        <div className="inspector-common-grid">
+          <ToggleField
+            label="Grid Visible"
+            checked={props.appState.scene.helpers.grid.visible}
+            disabled={props.readOnly}
+            showReset={canResetGridVisible}
+            onReset={() => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  grid: {
+                    visible: DEFAULT_SCENE_HELPERS.grid.visible
+                  }
+                }
+              });
+            }}
+            onChange={(next) => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  grid: {
+                    visible: next
+                  }
+                }
+              });
+            }}
+          />
+          <NumberField
+            label="Grid Size"
+            value={props.appState.scene.helpers.grid.size}
+            min={0.001}
+            step={0.5}
+            precision={2}
+            unit="m"
+            disabled={props.readOnly}
+            showReset={canResetGridSize}
+            onReset={() => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  grid: {
+                    size: DEFAULT_SCENE_HELPERS.grid.size
+                  }
+                }
+              });
+            }}
+            onChange={(next) => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  grid: {
+                    size: next
+                  }
+                }
+              });
+            }}
+          />
+          <NumberField
+            label="Grid Divisions"
+            value={props.appState.scene.helpers.grid.divisions}
+            min={1}
+            step={1}
+            precision={0}
+            disabled={props.readOnly}
+            showReset={canResetGridDivisions}
+            onReset={() => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  grid: {
+                    divisions: DEFAULT_SCENE_HELPERS.grid.divisions
+                  }
+                }
+              });
+            }}
+            onChange={(next) => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  grid: {
+                    divisions: next
+                  }
+                }
+              });
+            }}
+          />
+          <ColorField
+            label="Grid Major Color"
+            value={props.appState.scene.helpers.grid.majorColor}
+            disabled={props.readOnly}
+            showReset={canResetGridMajorColor}
+            onReset={() => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  grid: {
+                    majorColor: DEFAULT_SCENE_HELPERS.grid.majorColor
+                  }
+                }
+              });
+            }}
+            onChange={(next) => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  grid: {
+                    majorColor: next
+                  }
+                }
+              });
+            }}
+          />
+          <ColorField
+            label="Grid Minor Color"
+            value={props.appState.scene.helpers.grid.minorColor}
+            disabled={props.readOnly}
+            showReset={canResetGridMinorColor}
+            onReset={() => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  grid: {
+                    minorColor: DEFAULT_SCENE_HELPERS.grid.minorColor
+                  }
+                }
+              });
+            }}
+            onChange={(next) => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  grid: {
+                    minorColor: next
+                  }
+                }
+              });
+            }}
+          />
+          <NumberField
+            label="Grid Opacity"
+            value={props.appState.scene.helpers.grid.opacity}
+            min={0}
+            max={1}
+            step={0.01}
+            precision={2}
+            disabled={props.readOnly}
+            showReset={canResetGridOpacity}
+            onReset={() => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  grid: {
+                    opacity: DEFAULT_SCENE_HELPERS.grid.opacity
+                  }
+                }
+              });
+            }}
+            onChange={(next) => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  grid: {
+                    opacity: next
+                  }
+                }
+              });
+            }}
+          />
+          <ToggleField
+            label="Axes Visible"
+            checked={props.appState.scene.helpers.axes.visible}
+            disabled={props.readOnly}
+            showReset={canResetAxesVisible}
+            onReset={() => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  axes: {
+                    visible: DEFAULT_SCENE_HELPERS.axes.visible
+                  }
+                }
+              });
+            }}
+            onChange={(next) => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  axes: {
+                    visible: next
+                  }
+                }
+              });
+            }}
+          />
+          <NumberField
+            label="Axes Size"
+            value={props.appState.scene.helpers.axes.size}
+            min={0.001}
+            step={0.1}
+            precision={2}
+            unit="m"
+            disabled={props.readOnly}
+            showReset={canResetAxesSize}
+            onReset={() => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  axes: {
+                    size: DEFAULT_SCENE_HELPERS.axes.size
+                  }
+                }
+              });
+            }}
+            onChange={(next) => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  axes: {
+                    size: next
+                  }
+                }
+              });
+            }}
+          />
+          <ColorField
+            label="Axis X Color"
+            value={props.appState.scene.helpers.axes.xColor}
+            disabled={props.readOnly}
+            showReset={canResetAxesXColor}
+            onReset={() => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  axes: {
+                    xColor: DEFAULT_SCENE_HELPERS.axes.xColor
+                  }
+                }
+              });
+            }}
+            onChange={(next) => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  axes: {
+                    xColor: next
+                  }
+                }
+              });
+            }}
+          />
+          <ColorField
+            label="Axis Y Color"
+            value={props.appState.scene.helpers.axes.yColor}
+            disabled={props.readOnly}
+            showReset={canResetAxesYColor}
+            onReset={() => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  axes: {
+                    yColor: DEFAULT_SCENE_HELPERS.axes.yColor
+                  }
+                }
+              });
+            }}
+            onChange={(next) => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  axes: {
+                    yColor: next
+                  }
+                }
+              });
+            }}
+          />
+          <ColorField
+            label="Axis Z Color"
+            value={props.appState.scene.helpers.axes.zColor}
+            disabled={props.readOnly}
+            showReset={canResetAxesZColor}
+            onReset={() => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  axes: {
+                    zColor: DEFAULT_SCENE_HELPERS.axes.zColor
+                  }
+                }
+              });
+            }}
+            onChange={(next) => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  axes: {
+                    zColor: next
+                  }
+                }
+              });
+            }}
+          />
+          <NumberField
+            label="Axes Opacity"
+            value={props.appState.scene.helpers.axes.opacity}
+            min={0}
+            max={1}
+            step={0.01}
+            precision={2}
+            disabled={props.readOnly}
+            showReset={canResetAxesOpacity}
+            onReset={() => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  axes: {
+                    opacity: DEFAULT_SCENE_HELPERS.axes.opacity
+                  }
+                }
+              });
+            }}
+            onChange={(next) => {
+              props.kernel.store.getState().actions.setSceneRenderSettings({
+                helpers: {
+                  axes: {
+                    opacity: next
+                  }
+                }
+              });
+            }}
+          />
+        </div>
+      </section>
+      ) : null}
       {sceneInspectorView === "camera" ? (
       <section className="inspector-common-card">
         <header>
@@ -1585,6 +1933,66 @@ function SceneInspectorView(props: SceneInspectorViewProps) {
                 onClick={() => {
                   props.kernel.store.getState().actions.setSceneRenderSettings({
                     cameraNavigationSpeed: DEFAULT_CAMERA_NAVIGATION_SPEED
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Fly-Look Invert Yaw</span>
+            <div className="inspector-common-control-wrap">
+              <ToggleField
+                label=""
+                checked={props.appState.scene.cameraFlyLookInvertYaw}
+                disabled={props.readOnly}
+                embedded
+                onChange={(next) => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    cameraFlyLookInvertYaw: next
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className={`widget-reset-button${canResetFlyLookInvertYaw ? "" : " is-hidden"}`}
+                title="Reset Fly-Look Invert Yaw"
+                disabled={props.readOnly || !canResetFlyLookInvertYaw}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    cameraFlyLookInvertYaw: DEFAULT_CAMERA_FLY_LOOK_INVERT_YAW
+                  });
+                }}
+              >
+                <FontAwesomeIcon icon={faRotateLeft} />
+              </button>
+            </div>
+          </div>
+          <div className="inspector-common-row">
+            <span className="inspector-common-label">Fly-Look Speed</span>
+            <div className="inspector-common-control-wrap">
+              <NumberField
+                label=""
+                value={props.appState.scene.cameraFlyLookSpeed}
+                min={0}
+                step={0.05}
+                precision={2}
+                disabled={props.readOnly}
+                onChange={(next) => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    cameraFlyLookSpeed: next
+                  });
+                }}
+              />
+              <button
+                type="button"
+                className={`widget-reset-button${canResetFlyLookSpeed ? "" : " is-hidden"}`}
+                title="Reset Fly-Look Speed"
+                disabled={props.readOnly || !canResetFlyLookSpeed}
+                onClick={() => {
+                  props.kernel.store.getState().actions.setSceneRenderSettings({
+                    cameraFlyLookSpeed: DEFAULT_CAMERA_FLY_LOOK_SPEED
                   });
                 }}
               >

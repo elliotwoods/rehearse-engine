@@ -7,7 +7,17 @@ import { PLYLoader } from "three/examples/jsm/loaders/PLYLoader.js";
 import { RGBELoader } from "three/examples/jsm/loaders/RGBELoader.js";
 import { KTX2Loader } from "three/examples/jsm/loaders/KTX2Loader.js";
 import type { AppKernel } from "@/app/kernel";
-import type { ActorNode, ActorRuntimeStatus, AppState, DxfDrawingPlane, DxfInputUnits, DxfLayerStateMap, DxfSourcePlane } from "@/core/types";
+import type {
+  ActorNode,
+  ActorRuntimeStatus,
+  AppState,
+  DxfDrawingPlane,
+  DxfInputUnits,
+  DxfLayerStateMap,
+  DxfSourcePlane,
+  SceneAxesSettings,
+  SceneGridSettings
+} from "@/core/types";
 import type { ReloadableDescriptor } from "@/core/hotReload/types";
 import { getEffectiveCurveHandlesAt } from "@/features/curves/handles";
 import { curveDataWithOverrides, getCurveSamplesPerSegmentFromActor } from "@/features/curves/model";
@@ -194,6 +204,52 @@ function normalizeBackgroundColor(value: unknown): string {
   return "#070b12";
 }
 
+function normalizeHelperOpacity(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.max(0, Math.min(1, value));
+}
+
+function applyLineOpacity(target: { material?: THREE.Material | THREE.Material[] }, opacity: number): void {
+  const materials = Array.isArray(target.material) ? target.material : target.material ? [target.material] : [];
+  const nextOpacity = normalizeHelperOpacity(opacity);
+  for (const material of materials) {
+    const lineMaterial = material as THREE.LineBasicMaterial;
+    lineMaterial.transparent = nextOpacity < 1;
+    lineMaterial.opacity = nextOpacity;
+    lineMaterial.needsUpdate = true;
+  }
+}
+
+function applyAxesColors(axes: THREE.AxesHelper, settings: SceneAxesSettings): void {
+  const colorAttribute = axes.geometry.getAttribute("color");
+  if (!colorAttribute || typeof colorAttribute.setXYZ !== "function") {
+    return;
+  }
+  const xColor = new THREE.Color(normalizeBackgroundColor(settings.xColor));
+  const yColor = new THREE.Color(normalizeBackgroundColor(settings.yColor));
+  const zColor = new THREE.Color(normalizeBackgroundColor(settings.zColor));
+  colorAttribute.setXYZ(0, xColor.r, xColor.g, xColor.b);
+  colorAttribute.setXYZ(1, xColor.r, xColor.g, xColor.b);
+  colorAttribute.setXYZ(2, yColor.r, yColor.g, yColor.b);
+  colorAttribute.setXYZ(3, yColor.r, yColor.g, yColor.b);
+  colorAttribute.setXYZ(4, zColor.r, zColor.g, zColor.b);
+  colorAttribute.setXYZ(5, zColor.r, zColor.g, zColor.b);
+  colorAttribute.needsUpdate = true;
+}
+
+function disposeHelper(target: { geometry?: THREE.BufferGeometry; material?: THREE.Material | THREE.Material[] } | null): void {
+  if (!target) {
+    return;
+  }
+  target.geometry?.dispose();
+  const materials = Array.isArray(target.material) ? target.material : target.material ? [target.material] : [];
+  for (const material of materials) {
+    material.dispose();
+  }
+}
+
 function getDxfInputUnits(actor: ActorNode): DxfInputUnits {
   switch (actor.params.inputUnits) {
     case "centimeters":
@@ -330,8 +386,10 @@ function extractPlyVertexPropertyNames(bytes: Uint8Array): Set<string> {
 
 export class SceneController {
   public readonly scene = new THREE.Scene();
-  private readonly gridHelper: any;
-  private readonly axesHelper: any;
+  private gridHelper: THREE.GridHelper | null = null;
+  private axesHelper: THREE.AxesHelper | null = null;
+  private gridHelperSignature = "";
+  private axesHelperSignature = "";
   private readonly actorObjects = new Map<string, any>();
   private readonly pluginDescriptorByActorId = new Map<string, ReloadableDescriptor | null>();
   private readonly gaussianAssetByActorId = new Map<string, string>();
@@ -382,18 +440,10 @@ export class SceneController {
   public constructor(private readonly kernel: AppKernel, options: SceneControllerOptions = {}) {
     this.showDebugHelpers = options.showDebugHelpers ?? true;
     this.debugHelpersVisible = this.showDebugHelpers;
-    const initialBackground = normalizeBackgroundColor(this.kernel.store.getState().state.scene.backgroundColor);
+    const initialState = this.kernel.store.getState().state;
+    const initialBackground = normalizeBackgroundColor(initialState.scene.backgroundColor);
     this.scene.background = new THREE.Color(initialBackground);
-    const grid = new THREE.GridHelper(20, 20, 0x2f8f9d, 0x1f2430);
-    (grid.material as any).transparent = true;
-    (grid.material as any).opacity = 0.35;
-    grid.visible = this.showDebugHelpers;
-    this.scene.add(grid);
-    this.gridHelper = grid;
-    const axes = new THREE.AxesHelper(2.5);
-    axes.visible = this.showDebugHelpers;
-    this.scene.add(axes);
-    this.axesHelper = axes;
+    this.syncSceneHelpers(initialState.scene.helpers);
     const light = new THREE.DirectionalLight(0xffffff, 1.2);
     light.position.set(8, 12, 6);
     this.scene.add(light);
@@ -412,8 +462,7 @@ export class SceneController {
 
   public setDebugHelpersVisible(visible: boolean): void {
     this.debugHelpersVisible = visible;
-    this.gridHelper.visible = visible;
-    this.axesHelper.visible = visible;
+    this.applySceneHelperVisibility();
     for (const helper of this.gaussianBoundsHelpers.values()) {
       helper.visible = visible;
     }
@@ -426,6 +475,73 @@ export class SceneController {
         object.visible = visible;
       }
     }
+  }
+
+  private applySceneHelperVisibility(): void {
+    const helperSettings = this.kernel.store.getState().state.scene.helpers;
+    if (this.gridHelper) {
+      this.gridHelper.visible = this.debugHelpersVisible && helperSettings.grid.visible;
+    }
+    if (this.axesHelper) {
+      this.axesHelper.visible = this.debugHelpersVisible && helperSettings.axes.visible;
+    }
+  }
+
+  private buildGridHelper(settings: SceneGridSettings): THREE.GridHelper {
+    const grid = new THREE.GridHelper(
+      Math.max(0.001, settings.size),
+      Math.max(1, Math.round(settings.divisions)),
+      normalizeBackgroundColor(settings.majorColor),
+      normalizeBackgroundColor(settings.minorColor)
+    );
+    applyLineOpacity(grid, settings.opacity);
+    return grid;
+  }
+
+  private buildAxesHelper(settings: SceneAxesSettings): THREE.AxesHelper {
+    const axes = new THREE.AxesHelper(Math.max(0.001, settings.size));
+    applyAxesColors(axes, settings);
+    applyLineOpacity(axes, settings.opacity);
+    return axes;
+  }
+
+  private syncSceneHelpers(settings: AppState["scene"]["helpers"]): void {
+    const gridSignature = JSON.stringify({
+      size: Math.max(0.001, settings.grid.size),
+      divisions: Math.max(1, Math.round(settings.grid.divisions)),
+      majorColor: normalizeBackgroundColor(settings.grid.majorColor),
+      minorColor: normalizeBackgroundColor(settings.grid.minorColor),
+      opacity: normalizeHelperOpacity(settings.grid.opacity)
+    });
+    if (gridSignature !== this.gridHelperSignature || !this.gridHelper) {
+      this.gridHelper?.removeFromParent();
+      disposeHelper(this.gridHelper);
+      this.gridHelper = this.buildGridHelper(settings.grid);
+      this.scene.add(this.gridHelper);
+      this.gridHelperSignature = gridSignature;
+    } else {
+      applyLineOpacity(this.gridHelper, settings.grid.opacity);
+    }
+
+    const axesSignature = JSON.stringify({
+      size: Math.max(0.001, settings.axes.size),
+      xColor: normalizeBackgroundColor(settings.axes.xColor),
+      yColor: normalizeBackgroundColor(settings.axes.yColor),
+      zColor: normalizeBackgroundColor(settings.axes.zColor),
+      opacity: normalizeHelperOpacity(settings.axes.opacity)
+    });
+    if (axesSignature !== this.axesHelperSignature || !this.axesHelper) {
+      this.axesHelper?.removeFromParent();
+      disposeHelper(this.axesHelper);
+      this.axesHelper = this.buildAxesHelper(settings.axes);
+      this.scene.add(this.axesHelper);
+      this.axesHelperSignature = axesSignature;
+    } else {
+      applyAxesColors(this.axesHelper, settings.axes);
+      applyLineOpacity(this.axesHelper, settings.axes.opacity);
+    }
+
+    this.applySceneHelperVisibility();
   }
 
   private shouldLogPerformanceDiagnostics(): boolean {
@@ -442,6 +558,7 @@ export class SceneController {
   public async syncFromState(): Promise<void> {
     const t0 = performance.now();
     const state = this.kernel.store.getState().state;
+    this.syncSceneHelpers(state.scene.helpers);
     const actorIds = new Set(Object.keys(state.actors));
     const simTimeSeconds = Number.isFinite(state.time.elapsedSimSeconds) ? state.time.elapsedSimSeconds : 0;
     const dtSeconds = Math.max(0, simTimeSeconds - this.previousSimTimeSeconds);

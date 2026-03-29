@@ -1,4 +1,26 @@
 import * as THREE from "three";
+import { NodeMaterial } from "three/webgpu";
+import {
+  Fn,
+  attribute,
+  cameraPosition,
+  clamp,
+  dot,
+  exp,
+  float,
+  max,
+  mix,
+  modelWorldMatrix,
+  normalWorld,
+  positionWorld,
+  select,
+  texture,
+  texture3D,
+  uniform,
+  varying,
+  vec3,
+  vec4
+} from "three/tsl";
 import type {
   ActorNode,
   ActorRuntimeStatus,
@@ -59,7 +81,57 @@ const EMPTY_MIST_TEXTURE = (() => {
   return texture;
 })();
 
-type BeamMaterial = THREE.MeshBasicMaterial | THREE.ShaderMaterial;
+type BeamMaterial = THREE.MeshBasicMaterial | THREE.ShaderMaterial | NodeMaterial;
+
+type NodeUniform = any;
+
+interface WebGpuGhostUniforms {
+  beamColor: NodeUniform;
+  beamAlpha: NodeUniform;
+}
+
+interface WebGpuNormalsUniforms {}
+
+interface WebGpuMistUniforms {
+  mistEnabled: NodeUniform;
+  mistDensityTex: NodeUniform;
+  mistWorldToLocal: NodeUniform;
+  mistDensityScale: NodeUniform;
+  mistTimeSeconds: NodeUniform;
+}
+
+interface WebGpuScatteringShellUniforms extends WebGpuMistUniforms {
+  beamColor: NodeUniform;
+  baseAlpha: NodeUniform;
+  beamDivergenceRad: NodeUniform;
+  beamApertureDiameter: NodeUniform;
+  hazeIntensity: NodeUniform;
+  scatteringCoeff: NodeUniform;
+  extinctionCoeff: NodeUniform;
+  anisotropyG: NodeUniform;
+  distanceFalloffExponent: NodeUniform;
+  pathLengthGain: NodeUniform;
+  pathLengthExponent: NodeUniform;
+  phaseGain: NodeUniform;
+  scanDuty: NodeUniform;
+  nearFadeStart: NodeUniform;
+  nearFadeEnd: NodeUniform;
+  softClampKnee: NodeUniform;
+}
+
+interface WebGpuScatteringShell2Uniforms extends WebGpuMistUniforms {
+  beamColor: NodeUniform;
+  baseAlpha: NodeUniform;
+  alongBeamPower: NodeUniform;
+  scatteringFactor: NodeUniform;
+}
+
+type WebGpuBeamUniforms =
+  | WebGpuGhostUniforms
+  | WebGpuNormalsUniforms
+  | WebGpuScatteringShellUniforms
+  | WebGpuScatteringShell2Uniforms
+  | null;
 
 interface BeamObjectState {
   mesh: THREE.Mesh;
@@ -67,6 +139,8 @@ interface BeamObjectState {
   geometry: THREE.BufferGeometry;
   lastGeometrySignature: string;
   lastMaterialSignature: string;
+  materialBackend: "classic" | "webgpu";
+  webGpuUniforms: WebGpuBeamUniforms;
 }
 
 interface BeamRuntime {
@@ -89,7 +163,9 @@ function createBeamRoot(): THREE.Group {
     material,
     geometry,
     lastGeometrySignature: "",
-    lastMaterialSignature: ""
+    lastMaterialSignature: "",
+    materialBackend: "classic",
+    webGpuUniforms: null
   };
   return group;
 }
@@ -370,7 +446,6 @@ function buildSingleStatus(actor: ActorNode, runtimeStatus?: ActorRuntimeStatus)
     { label: "Normals Shading Active", value: params.beamType === NORMALS_BEAM_TYPE },
     { label: "Scattering Shell Active", value: params.beamType === SCATTERING_SHELL_BEAM_TYPE },
     { label: "Scattering Shell 2 Active", value: params.beamType === SCATTERING_SHELL2_BEAM_TYPE },
-    { label: "WebGL-Only Mode", value: params.beamType === SCATTERING_SHELL_BEAM_TYPE || params.beamType === SCATTERING_SHELL2_BEAM_TYPE },
     { label: "Target Actor", value: runtimeStatus?.values.targetActorName ?? "n/a" },
     { label: "Mist Volume", value: runtimeStatus?.values.mistVolumeName ?? "n/a" },
     { label: "Mist Applies In", value: "Scattering Shell, Scattering Shell 2" },
@@ -405,7 +480,6 @@ function buildArrayStatus(actor: ActorNode, runtimeStatus?: ActorRuntimeStatus):
     { label: "Normals Shading Active", value: params.beamType === NORMALS_BEAM_TYPE },
     { label: "Scattering Shell Active", value: params.beamType === SCATTERING_SHELL_BEAM_TYPE },
     { label: "Scattering Shell 2 Active", value: params.beamType === SCATTERING_SHELL2_BEAM_TYPE },
-    { label: "WebGL-Only Mode", value: params.beamType === SCATTERING_SHELL_BEAM_TYPE || params.beamType === SCATTERING_SHELL2_BEAM_TYPE },
     { label: "Emitter Curve", value: runtimeStatus?.values.emitterCurveName ?? "n/a" },
     { label: "Target Actor", value: runtimeStatus?.values.targetActorName ?? "n/a" },
     { label: "Mist Volume", value: runtimeStatus?.values.mistVolumeName ?? "n/a" },
@@ -496,6 +570,56 @@ function createGhostMaterial(): THREE.ShaderMaterial {
   return material;
 }
 
+function configureWebGpuMaterial(material: NodeMaterial): NodeMaterial {
+  material.transparent = true;
+  material.depthWrite = false;
+  material.depthTest = true;
+  material.side = THREE.DoubleSide;
+  material.blending = THREE.AdditiveBlending;
+  material.fog = false;
+  material.lights = false;
+  return material;
+}
+
+function configureWebGpuOpaqueMaterial(material: NodeMaterial): NodeMaterial {
+  material.transparent = false;
+  material.opacity = 1;
+  material.depthWrite = true;
+  material.depthTest = true;
+  material.side = THREE.DoubleSide;
+  material.blending = THREE.NormalBlending;
+  material.fog = false;
+  material.lights = false;
+  return material;
+}
+
+function assignBeamMaterial(state: BeamObjectState, material: BeamMaterial): void {
+  state.material = material;
+  state.mesh.material = material as unknown as THREE.Material;
+}
+
+function createWebGpuGhostMaterial(): { material: NodeMaterial; uniforms: WebGpuGhostUniforms } {
+  const beamColor: any = uniform(new THREE.Color(DEFAULT_BEAM_COLOR) as any);
+  const beamAlpha: any = uniform(DEFAULT_BEAM_ALPHA);
+  const material = configureWebGpuMaterial(new NodeMaterial());
+
+  material.fragmentNode = Fn(() => {
+    const viewDir: any = cameraPosition.sub(positionWorld).normalize();
+    const normalDir: any = normalWorld.normalize();
+    const ghost: any = clamp(viewDir.cross(normalDir).length(), float(0), float(1));
+    return vec4(beamColor.r, beamColor.g, beamColor.b, beamAlpha.mul(ghost));
+  })();
+
+  material.userData.beamMaterialKind = GHOST_BEAM_TYPE;
+  return {
+    material,
+    uniforms: {
+      beamColor,
+      beamAlpha
+    }
+  };
+}
+
 function createNormalsMaterial(): THREE.ShaderMaterial {
   const material = new THREE.ShaderMaterial({
     transparent: false,
@@ -523,13 +647,27 @@ function createNormalsMaterial(): THREE.ShaderMaterial {
   return material;
 }
 
+function createWebGpuNormalsMaterial(): { material: NodeMaterial; uniforms: WebGpuNormalsUniforms } {
+  const material = configureWebGpuOpaqueMaterial(new NodeMaterial());
+
+  material.fragmentNode = Fn(() => {
+    const encodedNormal: any = normalWorld.normalize().mul(0.5).add(0.5);
+    return vec4(encodedNormal, float(1));
+  })();
+
+  material.userData.beamMaterialKind = NORMALS_BEAM_TYPE;
+  return {
+    material,
+    uniforms: {}
+  };
+}
+
 type GhostMaterialUniforms = {
   beamColor: { value: THREE.Color };
   beamAlpha: { value: number };
 };
 
 type ScatteringShellUniforms = {
-  uEmitterPos: { value: THREE.Vector3 };
   uBeamColor: { value: THREE.Color };
   uBaseAlpha: { value: number };
   uBeamDivergenceRad: { value: number };
@@ -642,6 +780,23 @@ const MIST_LOOKUP_GLSL = `
       }
 `;
 
+function sampleMistDensityNode(
+  worldPositionNode: any,
+  uniforms: WebGpuMistUniforms
+): any {
+  const localPosition: any = uniforms.mistWorldToLocal.mul(vec4(worldPositionNode, 1.0)).xyz.toVar("mistLocalPosition");
+  const uvw: any = localPosition.add(vec3(0.5)).toVar("mistUvw");
+  const inBounds: any = uvw.x.greaterThanEqual(float(0))
+    .and(uvw.y.greaterThanEqual(float(0)))
+    .and(uvw.z.greaterThanEqual(float(0)))
+    .and(uvw.x.lessThanEqual(float(1)))
+    .and(uvw.y.lessThanEqual(float(1)))
+    .and(uvw.z.lessThanEqual(float(1)));
+  const densitySample: any = uniforms.mistDensityTex.sample(uvw).r.mul(uniforms.mistDensityScale);
+  const boundedDensity: any = select(inBounds, clamp(densitySample, float(0), float(1)), float(0));
+  return mix(float(1), boundedDensity, clamp(uniforms.mistEnabled, float(0), float(1)));
+}
+
 function createScatteringShellMaterial(): THREE.ShaderMaterial {
   const material = new THREE.ShaderMaterial({
     transparent: true,
@@ -650,7 +805,6 @@ function createScatteringShellMaterial(): THREE.ShaderMaterial {
     side: THREE.DoubleSide,
     blending: THREE.AdditiveBlending,
     uniforms: {
-      uEmitterPos: { value: new THREE.Vector3() },
       uBeamColor: { value: new THREE.Color(DEFAULT_BEAM_COLOR) },
       uBaseAlpha: { value: DEFAULT_BEAM_ALPHA },
       uBeamDivergenceRad: { value: DEFAULT_BEAM_DIVERGENCE_RAD },
@@ -699,7 +853,6 @@ function createScatteringShellMaterial(): THREE.ShaderMaterial {
     fragmentShader: `
       precision highp sampler3D;
 
-      uniform vec3 uEmitterPos;
       uniform vec3 uBeamColor;
       uniform float uBaseAlpha;
       uniform float uBeamDivergenceRad;
@@ -829,6 +982,121 @@ ${MIST_LOOKUP_GLSL}
   return material;
 }
 
+function createWebGpuScatteringShellMaterial(): { material: NodeMaterial; uniforms: WebGpuScatteringShellUniforms } {
+  const beamColor: any = uniform(new THREE.Color(DEFAULT_BEAM_COLOR) as any);
+  const baseAlpha: any = uniform(DEFAULT_BEAM_ALPHA);
+  const beamDivergenceRad: any = uniform(DEFAULT_BEAM_DIVERGENCE_RAD);
+  const beamApertureDiameter: any = uniform(DEFAULT_BEAM_APERTURE_DIAMETER);
+  const hazeIntensity: any = uniform(DEFAULT_HAZE_INTENSITY);
+  const scatteringCoeff: any = uniform(DEFAULT_SCATTERING_COEFFICIENT);
+  const extinctionCoeff: any = uniform(DEFAULT_EXTINCTION_COEFFICIENT);
+  const anisotropyG: any = uniform(DEFAULT_ANISOTROPY_G);
+  const distanceFalloffExponent: any = uniform(DEFAULT_DISTANCE_FALLOFF_EXPONENT);
+  const pathLengthGain: any = uniform(DEFAULT_PATH_LENGTH_GAIN);
+  const pathLengthExponent: any = uniform(DEFAULT_PATH_LENGTH_EXPONENT);
+  const phaseGain: any = uniform(DEFAULT_PHASE_GAIN);
+  const scanDuty: any = uniform(DEFAULT_SCAN_DUTY);
+  const nearFadeStart: any = uniform(DEFAULT_NEAR_FADE_START);
+  const nearFadeEnd: any = uniform(DEFAULT_NEAR_FADE_END);
+  const softClampKnee: any = uniform(DEFAULT_SOFT_CLAMP_KNEE);
+  const mistEnabled: any = uniform(0);
+  const mistDensityTex: any = texture3D(EMPTY_MIST_TEXTURE as any);
+  const mistWorldToLocal: any = uniform(new THREE.Matrix4() as any);
+  const mistDensityScale: any = uniform(1);
+  const mistTimeSeconds: any = uniform(0);
+  const emitterAttribute: any = attribute("beamEmitterPosition", "vec3");
+  const material = configureWebGpuMaterial(new NodeMaterial());
+  const emitterWorldPosition: any = varying(
+    modelWorldMatrix.mul(vec4(emitterAttribute, 1.0)).xyz,
+    "vBeamEmitterPosition"
+  );
+
+  material.fragmentNode = Fn(() => {
+    const worldPos: any = positionWorld.toVar("worldPos");
+    const emitterPos: any = emitterWorldPosition.toVar("emitterPos");
+    const beamVector: any = worldPos.sub(emitterPos).toVar("beamVector");
+    const z: any = max(beamVector.length(), float(1e-4)).toVar("beamDistance");
+    const beamDir: any = beamVector.div(z).toVar("beamDir");
+    const viewDir: any = cameraPosition.sub(worldPos).normalize().toVar("viewDir");
+    const worldNorm: any = normalWorld.normalize().toVar("worldNorm");
+    const ndv: any = clamp(dot(worldNorm, viewDir), float(-1), float(1)).toVar("ndv");
+    const grazing: any = max(float(1).sub(ndv.mul(ndv)), float(0)).sqrt().toVar("grazing");
+    const pathLengthTerm: any = float(1)
+      .add(pathLengthGain.mul(grazing.pow(max(pathLengthExponent, float(0)))))
+      .div(float(1).add(float(1).add(pathLengthGain.mul(grazing.pow(max(pathLengthExponent, float(0))))).mul(softClampKnee)))
+      .toVar("pathLengthTerm");
+    const normalViewTerm: any = float(1).sub(float(0.5).mul(ndv.abs())).toVar("normalViewTerm");
+    const g: any = clamp(anisotropyG, float(-0.99), float(0.99)).toVar("anisotropy");
+    const cosTheta: any = clamp(dot(beamDir, viewDir), float(-1), float(1)).toVar("cosTheta");
+    const phaseDenominator: any = max(float(1).add(g.mul(g)).sub(float(2).mul(g).mul(cosTheta)), float(1e-4)).toVar("phaseDenominator");
+    const phase: any = float(1).sub(g.mul(g)).div(phaseDenominator.pow(float(1.5))).mul(phaseGain).toVar("phase");
+    const beamRadius: any = float(0.5).mul(max(beamApertureDiameter, float(0))).add(z.mul(max(beamDivergenceRad, float(0))));
+    const distanceTerm: any = float(1).div(max(z, float(1e-4)).pow(max(distanceFalloffExponent, float(0))));
+    const extinctionTerm: any = exp((max(extinctionCoeff, float(0)).negate().mul(z)) as any);
+    const nearFadeEnabled: any = nearFadeEnd.greaterThan(nearFadeStart);
+    const nearFadeTerm: any = select(
+      nearFadeEnabled,
+      clamp(z.sub(nearFadeStart).div(max(nearFadeEnd.sub(nearFadeStart), float(1e-4))), float(0), float(1)),
+      float(1)
+    ).toVar("nearFadeTerm");
+    const visibilityLinear: any = max(hazeIntensity, float(0))
+      .mul(max(scatteringCoeff, float(0)))
+      .mul(max(scanDuty, float(0)))
+      .mul(distanceTerm)
+      .mul(phase)
+      .mul(pathLengthTerm)
+      .mul(normalViewTerm)
+      .mul(extinctionTerm)
+      .mul(nearFadeTerm)
+      .toVar("visibilityLinear");
+    const softVisibility: any = max(visibilityLinear, float(0))
+      .div(float(1).add(max(visibilityLinear, float(0)).mul(softClampKnee)))
+      .mul(sampleMistDensityNode(worldPos, {
+        mistEnabled,
+        mistDensityTex,
+        mistWorldToLocal,
+        mistDensityScale,
+        mistTimeSeconds
+      }))
+      .toVar("visibility");
+    const alpha: any = clamp(baseAlpha, float(0), float(1)).mul(softVisibility);
+    const rgb: any = beamColor.mul(softVisibility);
+    return select(
+      beamRadius.lessThan(float(0)),
+      vec4(float(0), float(0), float(0), float(0)),
+      vec4(rgb.x, rgb.y, rgb.z, alpha)
+    );
+  })();
+
+  material.userData.beamMaterialKind = SCATTERING_SHELL_BEAM_TYPE;
+  return {
+    material,
+    uniforms: {
+      beamColor,
+      baseAlpha,
+      beamDivergenceRad,
+      beamApertureDiameter,
+      hazeIntensity,
+      scatteringCoeff,
+      extinctionCoeff,
+      anisotropyG,
+      distanceFalloffExponent,
+      pathLengthGain,
+      pathLengthExponent,
+      phaseGain,
+      scanDuty,
+      nearFadeStart,
+      nearFadeEnd,
+      softClampKnee,
+      mistEnabled,
+      mistDensityTex,
+      mistWorldToLocal,
+      mistDensityScale,
+      mistTimeSeconds
+    }
+  };
+}
+
 function createScatteringShell2Material(): THREE.ShaderMaterial {
   const material = new THREE.ShaderMaterial({
     transparent: true,
@@ -951,12 +1219,80 @@ ${MIST_LOOKUP_GLSL}
   return material;
 }
 
+function createWebGpuScatteringShell2Material(): { material: NodeMaterial; uniforms: WebGpuScatteringShell2Uniforms } {
+  const beamColor: any = uniform(new THREE.Color(DEFAULT_BEAM_COLOR) as any);
+  const baseAlpha: any = uniform(DEFAULT_BEAM_ALPHA);
+  const alongBeamPower: any = uniform(DEFAULT_ALONG_BEAM_POWER);
+  const scatteringFactor: any = uniform(DEFAULT_SCATTERING_FACTOR);
+  const mistEnabled: any = uniform(0);
+  const mistDensityTex: any = texture3D(EMPTY_MIST_TEXTURE as any);
+  const mistWorldToLocal: any = uniform(new THREE.Matrix4() as any);
+  const mistDensityScale: any = uniform(1);
+  const mistTimeSeconds: any = uniform(0);
+  const emitterAttribute: any = attribute("beamEmitterPosition", "vec3");
+  const material = configureWebGpuMaterial(new NodeMaterial());
+  const emitterWorldPosition: any = varying(
+    modelWorldMatrix.mul(vec4(emitterAttribute, 1.0)).xyz,
+    "vBeamEmitterPosition"
+  );
+
+  material.fragmentNode = Fn(() => {
+    const worldPos: any = positionWorld.toVar("worldPos");
+    const worldNorm: any = normalWorld.normalize().toVar("worldNorm");
+    const lookVector: any = cameraPosition.sub(worldPos).toVar("lookVector");
+    const lookDistance: any = max(lookVector.length(), float(1e-4)).toVar("lookDistance");
+    const lookDir: any = lookVector.div(lookDistance).toVar("lookDir");
+    const alongBeamShapeFactor: any = max(float(1).sub(dot(worldNorm, lookDir).abs()), float(0))
+      .pow(max(alongBeamPower, float(0)))
+      .toVar("alongBeamShapeFactor");
+    const distanceToEmitter: any = max(
+      worldPos.sub(emitterWorldPosition).length(),
+      float(SCATTERING_SHELL2_DISTANCE_CLAMP_METERS)
+    ).toVar("distanceToEmitter");
+    const distanceFactor: any = float(1).div(distanceToEmitter).toVar("distanceFactor");
+    const visibility: any = max(scatteringFactor, float(0))
+      .mul(alongBeamShapeFactor)
+      .mul(distanceFactor)
+      .mul(sampleMistDensityNode(worldPos, {
+        mistEnabled,
+        mistDensityTex,
+        mistWorldToLocal,
+        mistDensityScale,
+        mistTimeSeconds
+      }))
+      .toVar("visibility");
+    const alpha: any = clamp(baseAlpha, float(0), float(1)).mul(visibility);
+    const rgb: any = beamColor.mul(visibility);
+    return vec4(rgb.x, rgb.y, rgb.z, alpha);
+  })();
+
+  material.userData.beamMaterialKind = SCATTERING_SHELL2_BEAM_TYPE;
+  return {
+    material,
+    uniforms: {
+      beamColor,
+      baseAlpha,
+      alongBeamPower,
+      scatteringFactor,
+      mistEnabled,
+      mistDensityTex,
+      mistWorldToLocal,
+      mistDensityScale,
+      mistTimeSeconds
+    }
+  };
+}
+
 function readCameraPosition(state: SceneHookContext["state"]): THREE.Vector3 {
   const position = state.camera?.position;
   if (Array.isArray(position) && position.length === 3) {
     return new THREE.Vector3(position[0] ?? 0, position[1] ?? 0, position[2] ?? 0);
   }
   return new THREE.Vector3();
+}
+
+function readRenderEngine(state: SceneHookContext["state"]): "webgl2" | "webgpu" {
+  return state.scene?.renderEngine === "webgpu" ? "webgpu" : "webgl2";
 }
 
 function applyMistUniforms(
@@ -988,14 +1324,36 @@ function applyMistUniforms(
   uniforms.uMistNoiseSeed!.value = enabled ? mistResource!.lookupNoiseSeed : 1;
 }
 
+function applyWebGpuMistUniforms(
+  uniforms: WebGpuMistUniforms,
+  mistResource: ReturnType<SceneHookContext["getMistVolumeResource"]>,
+  simTimeSeconds: number
+): void {
+  const enabled = Boolean(
+    mistResource &&
+    mistResource.densityTexture instanceof THREE.Data3DTexture &&
+    Array.isArray(mistResource.worldToLocalElements) &&
+    mistResource.worldToLocalElements.length === 16
+  );
+  uniforms.mistEnabled.value = enabled ? 1 : 0;
+  uniforms.mistDensityTex.value = enabled
+    ? (mistResource!.densityTexture as THREE.Data3DTexture)
+    : EMPTY_MIST_TEXTURE;
+  uniforms.mistWorldToLocal.value.fromArray(enabled ? mistResource!.worldToLocalElements : new THREE.Matrix4().elements);
+  uniforms.mistDensityScale.value = enabled ? mistResource!.densityScale : 1;
+  uniforms.mistTimeSeconds.value = simTimeSeconds;
+}
+
 function updateMaterial(
   state: BeamObjectState,
   params: BeamParams,
   cameraPosition: THREE.Vector3,
   simTimeSeconds: number,
-  mistResource: ReturnType<SceneHookContext["getMistVolumeResource"]>
+  mistResource: ReturnType<SceneHookContext["getMistVolumeResource"]>,
+  renderEngine: "webgl2" | "webgpu"
 ): void {
   const materialSignature = JSON.stringify({
+    renderEngine,
     beamType: params.beamType,
     beamColor: params.beamColor,
     beamAlpha: params.beamAlpha,
@@ -1014,15 +1372,115 @@ function updateMaterial(
     scanDuty: params.scanDuty,
     nearFadeStart: params.nearFadeStart,
     nearFadeEnd: params.nearFadeEnd,
-    softClampKnee: params.softClampKnee
+    softClampKnee: params.softClampKnee,
+    hasMist: Boolean(mistResource),
+    mistDensityScale: mistResource?.densityScale ?? null
   });
+
+  const useWebGpuCustomMaterial =
+    renderEngine === "webgpu" &&
+    (params.beamType === GHOST_BEAM_TYPE ||
+      params.beamType === NORMALS_BEAM_TYPE ||
+      params.beamType === SCATTERING_SHELL_BEAM_TYPE ||
+      params.beamType === SCATTERING_SHELL2_BEAM_TYPE);
+
+  if (useWebGpuCustomMaterial) {
+    if (params.beamType === GHOST_BEAM_TYPE) {
+      if (!(state.material instanceof NodeMaterial) || state.material.userData.beamMaterialKind !== GHOST_BEAM_TYPE) {
+        state.material.dispose();
+        const next = createWebGpuGhostMaterial();
+        assignBeamMaterial(state, next.material);
+        state.webGpuUniforms = next.uniforms;
+        state.materialBackend = "webgpu";
+      }
+      const uniforms = state.webGpuUniforms as WebGpuGhostUniforms;
+      uniforms.beamColor.value.set(params.beamColor);
+      uniforms.beamAlpha.value = params.beamAlpha;
+      state.material.needsUpdate = materialSignature !== state.lastMaterialSignature;
+      state.lastMaterialSignature = materialSignature;
+      state.mesh.renderOrder = LATE_RENDER_ORDER;
+      return;
+    }
+
+    if (params.beamType === NORMALS_BEAM_TYPE) {
+      if (!(state.material instanceof NodeMaterial) || state.material.userData.beamMaterialKind !== NORMALS_BEAM_TYPE) {
+        state.material.dispose();
+        const next = createWebGpuNormalsMaterial();
+        assignBeamMaterial(state, next.material);
+        state.webGpuUniforms = next.uniforms;
+        state.materialBackend = "webgpu";
+      }
+      state.material.transparent = false;
+      state.material.opacity = 1;
+      state.material.depthWrite = true;
+      state.material.depthTest = true;
+      state.material.side = THREE.DoubleSide;
+      state.material.blending = THREE.NormalBlending;
+      state.material.needsUpdate = materialSignature !== state.lastMaterialSignature;
+      state.lastMaterialSignature = materialSignature;
+      state.mesh.renderOrder = 0;
+      return;
+    }
+
+    if (params.beamType === SCATTERING_SHELL_BEAM_TYPE) {
+      if (!(state.material instanceof NodeMaterial) || state.material.userData.beamMaterialKind !== SCATTERING_SHELL_BEAM_TYPE) {
+        state.material.dispose();
+        const next = createWebGpuScatteringShellMaterial();
+        assignBeamMaterial(state, next.material);
+        state.webGpuUniforms = next.uniforms;
+        state.materialBackend = "webgpu";
+      }
+      const uniforms = state.webGpuUniforms as WebGpuScatteringShellUniforms;
+      uniforms.beamColor.value.set(params.beamColor);
+      uniforms.baseAlpha.value = params.beamAlpha;
+      uniforms.beamDivergenceRad.value = params.beamDivergenceRad;
+      uniforms.beamApertureDiameter.value = params.beamApertureDiameter;
+      uniforms.hazeIntensity.value = params.hazeIntensity;
+      uniforms.scatteringCoeff.value = params.scatteringCoeff;
+      uniforms.extinctionCoeff.value = params.extinctionCoeff;
+      uniforms.anisotropyG.value = params.anisotropyG;
+      uniforms.distanceFalloffExponent.value = params.distanceFalloffExponent;
+      uniforms.pathLengthGain.value = params.pathLengthGain;
+      uniforms.pathLengthExponent.value = params.pathLengthExponent;
+      uniforms.phaseGain.value = params.phaseGain;
+      uniforms.scanDuty.value = params.scanDuty;
+      uniforms.nearFadeStart.value = params.nearFadeStart;
+      uniforms.nearFadeEnd.value = params.nearFadeEnd;
+      uniforms.softClampKnee.value = params.softClampKnee;
+      applyWebGpuMistUniforms(uniforms, mistResource, simTimeSeconds);
+      state.material.needsUpdate = materialSignature !== state.lastMaterialSignature;
+      state.lastMaterialSignature = materialSignature;
+      state.mesh.renderOrder = LATE_RENDER_ORDER;
+      return;
+    }
+
+    if (!(state.material instanceof NodeMaterial) || state.material.userData.beamMaterialKind !== SCATTERING_SHELL2_BEAM_TYPE) {
+      state.material.dispose();
+      const next = createWebGpuScatteringShell2Material();
+      assignBeamMaterial(state, next.material);
+      state.webGpuUniforms = next.uniforms;
+      state.materialBackend = "webgpu";
+    }
+    const uniforms = state.webGpuUniforms as WebGpuScatteringShell2Uniforms;
+    uniforms.beamColor.value.set(params.beamColor);
+    uniforms.baseAlpha.value = params.beamAlpha;
+    uniforms.alongBeamPower.value = params.alongBeamPower;
+    uniforms.scatteringFactor.value = params.scatteringFactor;
+    applyWebGpuMistUniforms(uniforms, mistResource, simTimeSeconds);
+    state.material.needsUpdate = materialSignature !== state.lastMaterialSignature;
+    state.lastMaterialSignature = materialSignature;
+    state.mesh.renderOrder = LATE_RENDER_ORDER;
+    return;
+  }
+
+  state.materialBackend = "classic";
+  state.webGpuUniforms = null;
   if (params.beamType === GHOST_BEAM_TYPE) {
     if (!(state.material instanceof THREE.ShaderMaterial) || state.material.userData.beamMaterialKind !== GHOST_BEAM_TYPE) {
       state.material.dispose();
-      state.material = createGhostMaterial();
-      state.mesh.material = state.material;
+      assignBeamMaterial(state, createGhostMaterial());
     }
-    const material = state.material;
+    const material = state.material as THREE.ShaderMaterial;
     const uniforms = material.uniforms as GhostMaterialUniforms;
     uniforms.beamColor.value.set(params.beamColor);
     uniforms.beamAlpha.value = params.beamAlpha;
@@ -1034,10 +1492,9 @@ function updateMaterial(
   } else if (params.beamType === NORMALS_BEAM_TYPE) {
     if (!(state.material instanceof THREE.ShaderMaterial) || state.material.userData.beamMaterialKind !== NORMALS_BEAM_TYPE) {
       state.material.dispose();
-      state.material = createNormalsMaterial();
-      state.mesh.material = state.material;
+      assignBeamMaterial(state, createNormalsMaterial());
     }
-    const material = state.material;
+    const material = state.material as THREE.ShaderMaterial;
     material.transparent = false;
     material.opacity = 1;
     material.blending = THREE.NormalBlending;
@@ -1047,10 +1504,9 @@ function updateMaterial(
   } else if (params.beamType === SCATTERING_SHELL_BEAM_TYPE) {
     if (!(state.material instanceof THREE.ShaderMaterial) || state.material.userData.beamMaterialKind !== SCATTERING_SHELL_BEAM_TYPE) {
       state.material.dispose();
-      state.material = createScatteringShellMaterial();
-      state.mesh.material = state.material;
+      assignBeamMaterial(state, createScatteringShellMaterial());
     }
-    const material = state.material;
+    const material = state.material as THREE.ShaderMaterial;
     const uniforms = material.uniforms as ScatteringShellUniforms;
     uniforms.uBeamColor.value.set(params.beamColor);
     uniforms.uBaseAlpha.value = params.beamAlpha;
@@ -1069,7 +1525,6 @@ function updateMaterial(
     uniforms.uNearFadeEnd.value = params.nearFadeEnd;
     uniforms.uSoftClampKnee.value = params.softClampKnee;
     uniforms.uCameraPos.value.copy(cameraPosition);
-    uniforms.uEmitterPos.value.set(0, 0, 0);
     applyMistUniforms(material, mistResource, simTimeSeconds);
     material.transparent = true;
     material.depthWrite = false;
@@ -1080,10 +1535,9 @@ function updateMaterial(
   } else if (params.beamType === SCATTERING_SHELL2_BEAM_TYPE) {
     if (!(state.material instanceof THREE.ShaderMaterial) || state.material.userData.beamMaterialKind !== SCATTERING_SHELL2_BEAM_TYPE) {
       state.material.dispose();
-      state.material = createScatteringShell2Material();
-      state.mesh.material = state.material;
+      assignBeamMaterial(state, createScatteringShell2Material());
     }
-    const material = state.material;
+    const material = state.material as THREE.ShaderMaterial;
     const uniforms = material.uniforms as ScatteringShell2Uniforms;
     uniforms.uBeamColor.value.set(params.beamColor);
     uniforms.uBaseAlpha.value = params.beamAlpha;
@@ -1100,10 +1554,9 @@ function updateMaterial(
   } else {
     if (!(state.material instanceof THREE.MeshBasicMaterial) || state.material.userData.beamMaterialKind !== SOLID_BEAM_TYPE) {
       state.material.dispose();
-      state.material = createSolidMaterial();
-      state.mesh.material = state.material;
+      assignBeamMaterial(state, createSolidMaterial());
     }
-    const material = state.material;
+    const material = state.material as THREE.MeshBasicMaterial;
     material.color.set(params.beamColor);
     material.transparent = true;
     material.opacity = params.beamAlpha;
@@ -1215,7 +1668,7 @@ function syncSingleEmitter(context: SceneHookContext, root: THREE.Group, state: 
     return;
   }
 
-  updateMaterial(state, params, readCameraPosition(context.state), context.simTimeSeconds, mistResource);
+  updateMaterial(state, params, readCameraPosition(context.state), context.simTimeSeconds, mistResource, readRenderEngine(context.state));
 
   const signature = buildSingleGeometrySignature(params, root, targetObject, targetActor);
   if (signature === state.lastGeometrySignature) {
@@ -1223,10 +1676,6 @@ function syncSingleEmitter(context: SceneHookContext, root: THREE.Group, state: 
   }
 
   const emitterWorld = getWorldPosition(root);
-  if (params.beamType === SCATTERING_SHELL_BEAM_TYPE && state.material instanceof THREE.ShaderMaterial) {
-    const uniforms = state.material.uniforms as Partial<ScatteringShellUniforms>;
-    uniforms.uEmitterPos?.value.copy(emitterWorld);
-  }
   targetObject.updateWorldMatrix(true, false);
   const silhouette = computeSilhouetteWorld({
     shape,
@@ -1310,7 +1759,7 @@ function syncEmitterArray(context: SceneHookContext, root: THREE.Group, state: B
     return;
   }
 
-  updateMaterial(state, params, readCameraPosition(context.state), context.simTimeSeconds, mistResource);
+  updateMaterial(state, params, readCameraPosition(context.state), context.simTimeSeconds, mistResource, readRenderEngine(context.state));
 
   const signature = buildArrayGeometrySignature(params, targetObject, targetActor, curveActor);
   if (signature === state.lastGeometrySignature) {
@@ -1382,10 +1831,6 @@ function syncEmitterArray(context: SceneHookContext, root: THREE.Group, state: B
   }
 
   const geometry = buildCombinedBeamGeometryWorld(placements, params.beamLength, getWorldInverse(root));
-  if (params.beamType === SCATTERING_SHELL_BEAM_TYPE && state.material instanceof THREE.ShaderMaterial) {
-    const uniforms = state.material.uniforms as Partial<ScatteringShellUniforms>;
-    uniforms.uEmitterPos?.value.copy(placements[0]?.emitterWorld ?? new THREE.Vector3());
-  }
   state.geometry.dispose();
   state.geometry = geometry;
   state.mesh.geometry = geometry;

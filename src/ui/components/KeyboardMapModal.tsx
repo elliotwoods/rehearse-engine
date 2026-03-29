@@ -18,9 +18,10 @@ const SHORTCUTS = [
 const VIEWPORT_SHORTCUTS = [
   { key: "LMB", action: "Orbit around the point under the cursor" },
   { key: "Wheel", action: "Zoom around the point under the cursor" },
-  { key: "RMB", action: "Fly-look camera rotation" },
-  { key: "RMB + W / A / S / D / Q / E", action: "Fly camera while right mouse is held" },
-  { key: "MMB or LMB + RMB", action: "Pan in the camera plane" },
+  { key: "RMB", action: "Pan in the camera plane" },
+  { key: "MMB", action: "Zoom in / out while dragging vertically" },
+  { key: "LMB + RMB", action: "Fly-look camera rotation" },
+  { key: "LMB + RMB + W / A / S / D / Q / E", action: "Fly camera while both mouse buttons are held" },
   { key: "Double MMB", action: "Home the viewport to the fixed isometric perspective view" },
   { key: "1 / 3 / 7", action: "Front / right / top orthographic view when the mouse is over the viewport" },
   { key: "Press 1 / 3 / 7 again", action: "Flip to back / left / bottom" },

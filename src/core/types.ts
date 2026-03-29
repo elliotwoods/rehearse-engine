@@ -109,6 +109,29 @@ export interface SceneGrainSettings {
   intensity: number;
 }
 
+export interface SceneGridSettings {
+  visible: boolean;
+  size: number;
+  divisions: number;
+  majorColor: string;
+  minorColor: string;
+  opacity: number;
+}
+
+export interface SceneAxesSettings {
+  visible: boolean;
+  size: number;
+  xColor: string;
+  yColor: string;
+  zColor: string;
+  opacity: number;
+}
+
+export interface SceneHelpersSettings {
+  grid: SceneGridSettings;
+  axes: SceneAxesSettings;
+}
+
 export interface ScenePostProcessingSettings {
   bloom: SceneBloomSettings;
   vignette: SceneVignetteSettings;
@@ -263,8 +286,11 @@ export interface SceneState extends SceneNodeBase {
   framePacing: SceneFramePacingSettings;
   tonemapping: SceneTonemappingSettings;
   postProcessing: ScenePostProcessingSettings;
+  helpers: SceneHelpersSettings;
   cameraKeyboardNavigation: boolean;
   cameraNavigationSpeed: number;
+  cameraFlyLookInvertYaw: boolean;
+  cameraFlyLookSpeed: number;
 }
 
 export interface CameraState {

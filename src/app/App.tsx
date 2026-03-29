@@ -13,7 +13,15 @@ import {
   registerCameraTransitionDriver,
   type CameraTransitionRequestOptions
 } from "@/features/camera/transitionController";
-import { importFileAsActor, listCompatibleActorFileImportOptions, type ActorFileImportOption } from "@/features/imports/actorFileImport";
+import {
+  importFileAsActor,
+  importFileIntoActor,
+  listCompatibleActorFileImportOptions,
+  resolveNewActorFileDropAction,
+  resolveSelectedActorFileImportTarget,
+  type ActorFileImportOption,
+  type SelectedActorFileImportTarget
+} from "@/features/imports/actorFileImport";
 import { discoverAndLoadLocalPlugins, formatPluginDiscoverySummary, startLocalPluginAutoReload } from "@/features/plugins/discovery";
 import { FlexLayoutHost } from "@/ui/FlexLayoutHost";
 import { TopBarPanel } from "@/ui/panels/TopBarPanel";
@@ -38,6 +46,14 @@ import { WebGlViewport } from "@/render/webglRenderer";
 import { WebGpuViewport } from "@/render/webgpuRenderer";
 
 const RENDER_QUEUE_BUDGET_BYTES = 512 * 1024 * 1024;
+
+interface DragImportState {
+  fileName: string;
+  fileExtension: string;
+  sourcePath: string | null;
+  options: ActorFileImportOption[];
+  replacementTarget: SelectedActorFileImportTarget | null;
+}
 
 function dataTransferHasFiles(dataTransfer: DataTransfer | null): boolean {
   if (!dataTransfer) {
@@ -93,18 +109,8 @@ export function App() {
   } | null>(null);
   const cameraTransitionRafRef = useRef<number | null>(null);
   const [keyboardMapOpen, setKeyboardMapOpen] = useState(false);
-  const [dragImportState, setDragImportState] = useState<{
-    fileName: string;
-    fileExtension: string;
-    sourcePath: string | null;
-    options: ActorFileImportOption[];
-  } | null>(null);
-  const [fileImportModalState, setFileImportModalState] = useState<{
-    fileName: string;
-    fileExtension: string;
-    sourcePath: string | null;
-    options: ActorFileImportOption[];
-  } | null>(null);
+  const [dragImportState, setDragImportState] = useState<DragImportState | null>(null);
+  const [fileImportModalState, setFileImportModalState] = useState<DragImportState | null>(null);
   const [textInputRequest, setTextInputRequest] = useState<{
     title: string;
     label: string;
@@ -249,21 +255,28 @@ export function App() {
           fileName: "Pending file import",
           fileExtension: "",
           sourcePath: null,
-          options: [] as ActorFileImportOption[]
+          options: [] as ActorFileImportOption[],
+          replacementTarget: null
         };
       }
       const fileName = file.name;
       const fileExtension = fileExtensionFromName(fileName);
       const sourcePath = resolveDroppedFileSourcePath(file, window.electronAPI);
       const options = listCompatibleActorFileImportOptions(kernel, fileName);
+      const replacementTarget = resolveSelectedActorFileImportTarget(kernel, {
+        actors,
+        selection,
+        fileName
+      });
       return {
         fileName,
         fileExtension,
         sourcePath,
-        options
+        options,
+        replacementTarget
       };
     },
-    [kernel]
+    [actors, kernel, selection]
   );
 
   const performImport = useCallback(
@@ -287,6 +300,56 @@ export function App() {
       }
     },
     [activeProjectName, kernel]
+  );
+
+  const performReplacementImport = useCallback(
+    async (input: { target: SelectedActorFileImportTarget; fileName: string; sourcePath: string | null }) => {
+      if (!input.sourcePath) {
+        kernel.store
+          .getState()
+          .actions.setStatus("Unable to import dropped file: local file path could not be resolved from Electron.");
+        return;
+      }
+      try {
+        const imported = await importFileIntoActor(kernel, {
+          actorId: input.target.actorId,
+          definition: input.target.fileDefinition,
+          sourcePath: input.sourcePath,
+          projectName: activeProjectName
+        });
+        kernel.store
+          .getState()
+          .actions.setStatus(`${input.target.actorName}: replaced ${input.target.fileDefinition.label} with ${imported.asset.sourceFileName}`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown file import error";
+        kernel.store.getState().actions.setStatus(`Unable to replace ${input.target.actorName}: ${message}`);
+      }
+    },
+    [activeProjectName, kernel]
+  );
+
+  const handleNewActorDrop = useCallback(
+    (input: DragImportState) => {
+      const action = resolveNewActorFileDropAction(input.options);
+      if (action.kind === "none") {
+        kernel.store.getState().actions.setStatus(
+          input.fileExtension
+            ? `No actor types can load ${input.fileExtension} files.`
+            : "No actor types can load this file."
+        );
+        return;
+      }
+      if (action.kind === "direct") {
+        void performImport({
+          descriptorId: action.descriptorId,
+          fileName: input.fileName,
+          sourcePath: input.sourcePath
+        });
+        return;
+      }
+      setFileImportModalState(input);
+    },
+    [kernel, performImport]
   );
 
   const handleDragEnter = useCallback(
@@ -347,9 +410,52 @@ export function App() {
       if (!current) {
         return;
       }
-      setFileImportModalState(current);
+      handleNewActorDrop(current);
     },
-    [createDragImportState, dragImportState, readOnly]
+    [createDragImportState, dragImportState, handleNewActorDrop, readOnly]
+  );
+
+  const handleImportZoneDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (readOnly || !dataTransferHasFiles(event.dataTransfer)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      dragDepthRef.current = 0;
+      const droppedFile = event.dataTransfer.files?.[0];
+      const current = droppedFile ? createDragImportState(droppedFile) : dragImportState;
+      setDragImportState(null);
+      if (!current) {
+        return;
+      }
+      handleNewActorDrop(current);
+    },
+    [createDragImportState, dragImportState, handleNewActorDrop, readOnly]
+  );
+
+  const handleReplacementZoneDrop = useCallback(
+    (event: React.DragEvent<HTMLDivElement>) => {
+      if (readOnly || !dataTransferHasFiles(event.dataTransfer)) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      dragDepthRef.current = 0;
+      const droppedFile = event.dataTransfer.files?.[0];
+      const current = droppedFile ? createDragImportState(droppedFile) : dragImportState;
+      setDragImportState(null);
+      if (!current?.replacementTarget) {
+        handleNewActorDrop(current ?? createDragImportState(droppedFile));
+        return;
+      }
+      void performReplacementImport({
+        target: current.replacementTarget,
+        fileName: current.fileName,
+        sourcePath: current.sourcePath
+      });
+    },
+    [createDragImportState, dragImportState, handleNewActorDrop, performReplacementImport, readOnly]
   );
 
   const requestTextInput = useCallback(
@@ -1026,7 +1132,56 @@ export function App() {
           <div className="file-drop-overlay-head">
             <h2>Drop File To Import</h2>
             <p>{dragImportState.fileName || "Pending file import"}</p>
-            <small>Release anywhere to open the import picker.</small>
+            <small>
+              {dragImportState.replacementTarget
+                ? "Drop on the inspector zone to replace the selected actor, or on the import zone to add a new actor."
+                : "Drop on the import zone below to add a new actor."}
+            </small>
+          </div>
+          <div
+            className={`file-drop-overlay-grid${dragImportState.replacementTarget ? " has-replace-target" : ""}`}
+          >
+            <div
+              className={`file-drop-target${dragImportState.options.length === 0 ? " is-disabled" : ""}`}
+              onDragOver={(event) => {
+                if (!dataTransferHasFiles(event.dataTransfer)) {
+                  return;
+                }
+                event.preventDefault();
+                event.stopPropagation();
+                event.dataTransfer.dropEffect = dragImportState.options.length === 0 ? "none" : "copy";
+              }}
+              onDrop={handleImportZoneDrop}
+            >
+              <div className="file-drop-target-icon">NEW</div>
+              <strong>Import As New Actor</strong>
+              <span>
+                {dragImportState.options.length === 0
+                  ? "No actor types can create a new actor from this file."
+                  : dragImportState.options.length === 1
+                    ? `Auto-import as ${dragImportState.options[0]?.label ?? "actor"}.`
+                    : `Choose from ${dragImportState.options.length} compatible actor types.`}
+              </span>
+            </div>
+            {dragImportState.replacementTarget ? (
+              <div
+                className="file-drop-target is-replace"
+                onDragOver={(event) => {
+                  if (!dataTransferHasFiles(event.dataTransfer)) {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.stopPropagation();
+                  event.dataTransfer.dropEffect = "copy";
+                }}
+                onDrop={handleReplacementZoneDrop}
+              >
+                <div className="file-drop-target-icon">REPLACE</div>
+                <strong>Replace Selected Actor Asset</strong>
+                <span>{dragImportState.replacementTarget.actorName}</span>
+                <small>{dragImportState.replacementTarget.fileDefinition.label}</small>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}

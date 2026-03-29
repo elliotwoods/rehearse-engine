@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { DEFAULT_SCENE_HELPERS } from "@/core/defaults";
 import { PROJECT_SCHEMA_VERSION } from "@/core/types";
 import type { ProjectSnapshotManifest } from "@/core/types";
 
@@ -240,8 +241,34 @@ const projectSnapshotSchema = z.object({
           intensity: 0.02
         }
       }),
+    helpers: z
+      .object({
+        grid: z
+          .object({
+            visible: z.boolean().default(DEFAULT_SCENE_HELPERS.grid.visible),
+            size: z.number().default(DEFAULT_SCENE_HELPERS.grid.size),
+            divisions: z.number().default(DEFAULT_SCENE_HELPERS.grid.divisions),
+            majorColor: z.string().default(DEFAULT_SCENE_HELPERS.grid.majorColor),
+            minorColor: z.string().default(DEFAULT_SCENE_HELPERS.grid.minorColor),
+            opacity: z.number().default(DEFAULT_SCENE_HELPERS.grid.opacity)
+          })
+          .default(structuredClone(DEFAULT_SCENE_HELPERS.grid)),
+        axes: z
+          .object({
+            visible: z.boolean().default(DEFAULT_SCENE_HELPERS.axes.visible),
+            size: z.number().default(DEFAULT_SCENE_HELPERS.axes.size),
+            xColor: z.string().default(DEFAULT_SCENE_HELPERS.axes.xColor),
+            yColor: z.string().default(DEFAULT_SCENE_HELPERS.axes.yColor),
+            zColor: z.string().default(DEFAULT_SCENE_HELPERS.axes.zColor),
+            opacity: z.number().default(DEFAULT_SCENE_HELPERS.axes.opacity)
+          })
+          .default(structuredClone(DEFAULT_SCENE_HELPERS.axes))
+      })
+      .default(structuredClone(DEFAULT_SCENE_HELPERS)),
     cameraKeyboardNavigation: z.boolean().default(true),
-    cameraNavigationSpeed: z.number().default(6)
+    cameraNavigationSpeed: z.number().default(6),
+    cameraFlyLookInvertYaw: z.boolean().default(true),
+    cameraFlyLookSpeed: z.number().default(1)
   }),
   actors: z.record(actorSchema),
   components: z.record(componentSchema),
