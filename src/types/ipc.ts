@@ -128,6 +128,16 @@ export interface RendererDebugBridge {
   sessionInfo(): RendererDebugSessionInfo;
 }
 
+export interface RenderPipeState {
+  pipeId: string;
+  acceptedFrameCount: number;
+  writtenFrameCount: number;
+  queuedBytes: number;
+  queueBudgetBytes: number;
+  error?: string;
+  closed?: boolean;
+}
+
 export interface ElectronApi {
   mode: AppMode;
   getPathForFile(file: File): string | null;
@@ -162,10 +172,15 @@ export interface ElectronApi {
   openDirectoryDialog(args: DirectoryDialogArgs): Promise<string | null>;
   discoverLocalPlugins(): Promise<LocalPluginCandidate[]>;
   writeClipboardImagePng(args: { pngBytes: Uint8Array }): Promise<void>;
-  renderPipeOpen(args: { outputPath: string; fps: number; bitrateMbps: number }): Promise<{ pipeId: string; encoder: string }>;
-  renderPipeWriteFrame(args: { pipeId: string; framePngBytes: Uint8Array }): Promise<void>;
+  renderPipeOpen(args: {
+    outputPath: string;
+    fps: number;
+    bitrateMbps: number;
+  }): Promise<{ pipeId: string; encoder: string; queueBudgetBytes: number }>;
+  renderPipeWriteFrame(args: { pipeId: string; framePngBytes: Uint8Array }): void;
   renderPipeClose(args: { pipeId: string }): Promise<{ summary: string }>;
   renderPipeAbort(args: { pipeId: string }): Promise<void>;
+  onRenderPipeState(listener: (state: RenderPipeState) => void): () => void;
   renderTempInit(args: {
     folderPath: string;
     fps: number;

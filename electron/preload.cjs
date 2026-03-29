@@ -71,9 +71,29 @@ const api = {
   discoverLocalPlugins: () => ipcRenderer.invoke("plugins:discover-local"),
   writeClipboardImagePng: (args) => ipcRenderer.invoke("clipboard:write-image-png", args),
   renderPipeOpen: (args) => ipcRenderer.invoke("render:pipe-open", args),
-  renderPipeWriteFrame: (args) => ipcRenderer.invoke("render:pipe-write-frame", args),
+  renderPipeWriteFrame: (args) => {
+    const bytes = args?.framePngBytes;
+    if (!(bytes instanceof Uint8Array)) {
+      throw new Error("renderPipeWriteFrame requires Uint8Array frame bytes.");
+    }
+    const framePngBytes =
+      bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+        ? bytes
+        : bytes.slice();
+    ipcRenderer.send("render:pipe-write-frame", {
+      pipeId: args.pipeId,
+      framePngBytes
+    });
+  },
   renderPipeClose: (args) => ipcRenderer.invoke("render:pipe-close", args),
   renderPipeAbort: (args) => ipcRenderer.invoke("render:pipe-abort", args),
+  onRenderPipeState: (listener) => {
+    const handler = (_event, state) => listener(state);
+    ipcRenderer.on("render:pipe-state", handler);
+    return () => {
+      ipcRenderer.removeListener("render:pipe-state", handler);
+    };
+  },
   renderTempInit: (args) => ipcRenderer.invoke("render:temp-init", args),
   renderTempWriteFrame: (args) => ipcRenderer.invoke("render:temp-write-frame", args),
   renderTempFinalize: (args) => ipcRenderer.invoke("render:temp-finalize", args),

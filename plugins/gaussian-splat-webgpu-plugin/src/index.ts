@@ -12,7 +12,7 @@ export interface ReloadableDescriptor {
   version: number;
   schema: ParameterSchema;
   spawn?: {
-    actorType: "plugin" | "empty" | "environment" | "gaussian-splat" | "gaussian-splat-spark" | "mesh" | "primitive" | "curve";
+    actorType: "plugin" | "empty" | "environment" | "gaussian-splat" | "mesh" | "primitive" | "curve";
     pluginType?: string;
     label?: string;
     description?: string;
@@ -69,10 +69,10 @@ export interface PluginHandshakeModule {
 const handshake: PluginHandshakeModule = {
   manifest: {
     handshakeVersion: 1,
-    id: "gaussianSplat.webgpu",
-    name: "Gaussian Splat (WebGPU)",
+    id: "gaussianSplat",
+    name: "Gaussian Splat",
     version: "0.1.0",
-    description: "Renders Gaussian splats using the WebGPU pipeline with proper 3D-to-2D covariance projection.",
+    description: "Renders Gaussian splats using the active scene render engine.",
     engine: {
       minApiVersion: 1,
       maxApiVersion: 1
@@ -80,8 +80,8 @@ const handshake: PluginHandshakeModule = {
   },
   createPlugin() {
     return {
-      id: "gaussianSplat.webgpu",
-      name: "Gaussian Splat (WebGPU)",
+      id: "gaussianSplat",
+      name: "Gaussian Splat",
       actorDescriptors: [createGaussianSplatDescriptor()],
       componentDescriptors: []
     };

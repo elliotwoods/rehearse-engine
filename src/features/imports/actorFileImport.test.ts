@@ -49,6 +49,35 @@ const importOption: ActorFileImportOption = {
   fileDefinition
 };
 
+const multiFileDescriptor = {
+  id: "actor.multi",
+  kind: "actor",
+  schema: {
+    id: "actor.multi",
+    title: "Multi File",
+    params: [
+      fileDefinition,
+      {
+        key: "secondaryAssetId",
+        label: "Secondary Asset",
+        type: "file",
+        accept: [".mtl"],
+        import: {
+          mode: "import-asset",
+          kind: "generic"
+        }
+      } satisfies FileParameterDefinition
+    ]
+  },
+  spawn: {
+    actorType: "multi-file",
+    label: "Multi File",
+    description: "Actor with multiple file params",
+    iconGlyph: "MF",
+    fileExtensions: [".obj", ".mtl"]
+  }
+};
+
 function createKernelStub(): AppKernel {
   const store = createAppStore("electron-rw");
   return {
@@ -80,8 +109,16 @@ function createKernelStub(): AppKernel {
       listPlugins: () => []
     } as unknown as AppKernel["pluginApi"],
     descriptorRegistry: {
-      get: (id: string) => (id === descriptor.id ? descriptor : null),
-      listByKind: (kind: string) => (kind === "actor" ? [descriptor] : [])
+      get: (id: string) => {
+        if (id === descriptor.id) {
+          return descriptor;
+        }
+        if (id === multiFileDescriptor.id) {
+          return multiFileDescriptor;
+        }
+        return null;
+      },
+      listByKind: (kind: string) => (kind === "actor" ? [descriptor, multiFileDescriptor] : [])
     } as unknown as AppKernel["descriptorRegistry"],
     clock: {} as AppKernel["clock"]
   };
@@ -183,7 +220,7 @@ describe("importFileAsActor", () => {
     expect(multiple.kind).toBe("choose");
   });
 
-  it("resolves a selected actor replacement target only for a single compatible actor selection", () => {
+  it("resolves a selected actor replacement target for a single selected actor with one file parameter", () => {
     const kernel = createKernelStub();
     const actorId = kernel.store.getState().actions.createActorNoHistory({
       actorType: "mesh",
@@ -193,13 +230,45 @@ describe("importFileAsActor", () => {
 
     const target = resolveSelectedActorFileImportTarget(kernel, {
       actors: kernel.store.getState().state.actors,
-      selection: [{ kind: "actor", id: actorId }],
-      fileName: "tree.obj"
+      selection: [{ kind: "actor", id: actorId }]
     });
 
     expect(target?.actorId).toBe(actorId);
     expect(target?.actorName).toBe("Selected mesh");
     expect(target?.fileDefinition.key).toBe("assetId");
+  });
+
+  it("does not gate selected actor replacement on the dragged file extension", () => {
+    const kernel = createKernelStub();
+    const actorId = kernel.store.getState().actions.createActorNoHistory({
+      actorType: "mesh",
+      name: "Selected mesh",
+      select: false
+    });
+
+    const target = resolveSelectedActorFileImportTarget(kernel, {
+      actors: kernel.store.getState().state.actors,
+      selection: [{ kind: "actor", id: actorId }]
+    });
+
+    expect(target?.actorId).toBe(actorId);
+    expect(target?.fileDefinition.accept).toEqual([".obj"]);
+  });
+
+  it("does not expose a replacement target when the selected actor has multiple file parameters", () => {
+    const kernel = createKernelStub();
+    const actorId = kernel.store.getState().actions.createActorNoHistory({
+      actorType: "multi-file",
+      name: "Multi file actor",
+      select: false
+    });
+
+    const target = resolveSelectedActorFileImportTarget(kernel, {
+      actors: kernel.store.getState().state.actors,
+      selection: [{ kind: "actor", id: actorId }]
+    });
+
+    expect(target).toBeNull();
   });
 
   it("imports into an existing actor and applies clearsParams", async () => {

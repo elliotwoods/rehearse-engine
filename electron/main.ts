@@ -5,6 +5,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import { normalizeRenderPipeFrameBytes } from "./renderPipeFrameBytes.js";
 import type {
   DefaultProjectPointer,
   DaeImportResult,
@@ -37,7 +38,24 @@ const MIN_WINDOW_WIDTH = 1200;
 const MIN_WINDOW_HEIGHT = 720;
 const APP_ICON_FILE_NAME = "icon.png";
 const CODEX_DEBUG_MANIFEST_FILE_NAME = "codex-debug-session.json";
-const renderPipeJobs = new Map<string, { child: ReturnType<typeof spawn>; encoder: string; outputPath: string }>();
+const RENDER_PIPE_QUEUE_BUDGET_BYTES = 256 * 1024 * 1024;
+interface RenderPipeJob {
+  child: ReturnType<typeof spawn>;
+  encoder: string;
+  outputPath: string;
+  sender: Electron.WebContents;
+  queue: Buffer[];
+  queuedBytes: number;
+  queueBudgetBytes: number;
+  acceptedFrameCount: number;
+  writtenFrameCount: number;
+  acceptingFrames: boolean;
+  aborted: boolean;
+  error: Error | null;
+  pumpPromise: Promise<void> | null;
+  childClosePromise: Promise<void>;
+}
+const renderPipeJobs = new Map<string, RenderPipeJob>();
 const renderTempJobs = new Map<
   string,
   {
@@ -47,6 +65,7 @@ const renderTempJobs = new Map<
     fps: number;
     bitrateMbps: number;
     encoder: string;
+    pendingWrites: Set<Promise<void>>;
   }
 >();
 
@@ -495,6 +514,104 @@ function bitrateArg(bitrateMbps: number): string {
   return `${String(safe)}M`;
 }
 
+function emitRenderPipeState(jobId: string, job: RenderPipeJob): void {
+  if (job.sender.isDestroyed()) {
+    return;
+  }
+  job.sender.send("render:pipe-state", {
+    pipeId: jobId,
+    acceptedFrameCount: job.acceptedFrameCount,
+    writtenFrameCount: job.writtenFrameCount,
+    queuedBytes: job.queuedBytes,
+    queueBudgetBytes: job.queueBudgetBytes,
+    error: job.error?.message,
+    closed: !job.acceptingFrames
+  });
+}
+
+function writeChildStdin(
+  writable: NodeJS.WritableStream & { destroyed?: boolean },
+  chunk: Buffer
+): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    if (writable.destroyed) {
+      reject(new Error("Render pipe stdin is unavailable."));
+      return;
+    }
+    let settled = false;
+    let callbackDone = false;
+    let drainDone = false;
+    const finish = (error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      writable.off("error", onError);
+      writable.off("drain", onDrain);
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    };
+    const maybeResolve = () => {
+      if (callbackDone && drainDone) {
+        finish();
+      }
+    };
+    const onError = (error: Error) => finish(error);
+    const onDrain = () => {
+      drainDone = true;
+      maybeResolve();
+    };
+    writable.on("error", onError);
+    const ok = writable.write(chunk, (error) => {
+      if (error) {
+        finish(error);
+        return;
+      }
+      callbackDone = true;
+      maybeResolve();
+    });
+    if (ok) {
+      drainDone = true;
+    } else {
+      writable.once("drain", onDrain);
+    }
+  });
+}
+
+function scheduleRenderPipePump(jobId: string, job: RenderPipeJob): void {
+  if (job.pumpPromise || job.aborted || job.error) {
+    return;
+  }
+  job.pumpPromise = (async () => {
+    while (!job.aborted && !job.error) {
+      const next = job.queue.shift();
+      if (!next) {
+        break;
+      }
+      job.queuedBytes = Math.max(0, job.queuedBytes - next.byteLength);
+      emitRenderPipeState(jobId, job);
+      const writable = job.child.stdin;
+      if (!writable || writable.destroyed) {
+        throw new Error("Render pipe stdin is unavailable.");
+      }
+      await writeChildStdin(writable, next);
+      job.writtenFrameCount += 1;
+      emitRenderPipeState(jobId, job);
+    }
+  })().catch((error) => {
+    job.error = error instanceof Error ? error : new Error(String(error));
+    emitRenderPipeState(jobId, job);
+  }).finally(() => {
+    job.pumpPromise = null;
+    if (job.queue.length > 0 && !job.aborted && !job.error) {
+      scheduleRenderPipePump(jobId, job);
+    }
+  });
+}
+
 function pipeEncodeArgs(args: {
   fps: number;
   bitrateMbps: number;
@@ -845,7 +962,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle(
     "render:pipe-open",
     async (
-      _event,
+      event,
       args: {
         outputPath: string;
         fps: number;
@@ -871,48 +988,75 @@ function registerIpcHandlers(): void {
         void writeRuntimeLog("render:pipe", "ffmpeg spawn failed", error);
       });
       (child as any).__stderrTextRef = () => stderrText;
+      const childClosePromise = new Promise<void>((resolve, reject) => {
+        child.once("close", (code) => {
+          if (code === 0) {
+            resolve();
+            return;
+          }
+          reject(new Error(`ffmpeg exited with code ${String(code)}. ${stderrText}`.trim()));
+        });
+      });
       renderPipeJobs.set(pipeId, {
         child,
         encoder,
-        outputPath: args.outputPath
+        outputPath: args.outputPath,
+        sender: event.sender,
+        queue: [],
+        queuedBytes: 0,
+        queueBudgetBytes: RENDER_PIPE_QUEUE_BUDGET_BYTES,
+        acceptedFrameCount: 0,
+        writtenFrameCount: 0,
+        acceptingFrames: true,
+        aborted: false,
+        error: null,
+        pumpPromise: null,
+        childClosePromise
       });
+      emitRenderPipeState(pipeId, renderPipeJobs.get(pipeId)!);
       return {
         pipeId,
-        encoder
+        encoder,
+        queueBudgetBytes: RENDER_PIPE_QUEUE_BUDGET_BYTES
       };
     }
   );
-  ipcMain.handle(
+  ipcMain.on(
     "render:pipe-write-frame",
-    async (
+    (
       _event,
       args: {
         pipeId: string;
-        framePngBytes: Uint8Array;
+        framePngBytes: Uint8Array | ArrayBuffer;
       }
     ) => {
       const job = renderPipeJobs.get(args.pipeId);
       if (!job) {
-        throw new Error("Render pipe job not found.");
+        return;
       }
-      const buffer = Buffer.from(args.framePngBytes);
-      await new Promise<void>((resolve, reject) => {
-        const writable = job.child.stdin;
-        if (!writable || writable.destroyed) {
-          reject(new Error("Render pipe stdin is unavailable."));
-          return;
-        }
-        const ok = writable.write(buffer, (error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-        if (!ok) {
-          writable.once("drain", () => resolve());
-        }
-      });
+      if (!job.acceptingFrames || job.aborted || job.error) {
+        emitRenderPipeState(args.pipeId, job);
+        return;
+      }
+      let buffer: Buffer;
+      try {
+        buffer = normalizeRenderPipeFrameBytes(args.framePngBytes);
+      } catch (error) {
+        job.error = error instanceof Error ? error : new Error(String(error));
+        job.acceptingFrames = false;
+        emitRenderPipeState(args.pipeId, job);
+        return;
+      }
+      job.queue.push(buffer);
+      job.queuedBytes += buffer.byteLength;
+      job.acceptedFrameCount += 1;
+      emitRenderPipeState(args.pipeId, job);
+      if (job.queuedBytes > job.queueBudgetBytes) {
+        job.error = new Error("Render pipe queue exceeded its budget.");
+        emitRenderPipeState(args.pipeId, job);
+        return;
+      }
+      scheduleRenderPipePump(args.pipeId, job);
     }
   );
   ipcMain.handle(
@@ -928,20 +1072,19 @@ function registerIpcHandlers(): void {
         throw new Error("Render pipe job not found.");
       }
       renderPipeJobs.delete(args.pipeId);
-      const stderrReader = (job.child as any).__stderrTextRef as (() => string) | undefined;
-      await new Promise<void>((resolve, reject) => {
-        const stdin = job.child.stdin;
-        if (stdin && !stdin.destroyed) {
-          stdin.end();
-        }
-        job.child.once("close", (code) => {
-          if (code === 0) {
-            resolve();
-            return;
-          }
-          reject(new Error(`ffmpeg exited with code ${String(code)}. ${stderrReader?.() ?? ""}`.trim()));
-        });
-      });
+      job.acceptingFrames = false;
+      emitRenderPipeState(args.pipeId, job);
+      while (job.pumpPromise) {
+        await job.pumpPromise;
+      }
+      if (job.error) {
+        throw job.error;
+      }
+      const stdin = job.child.stdin;
+      if (stdin && !stdin.destroyed) {
+        stdin.end();
+      }
+      await job.childClosePromise;
       return {
         summary: `Saved ${job.outputPath} (${job.encoder})`
       };
@@ -960,6 +1103,7 @@ function registerIpcHandlers(): void {
         return;
       }
       renderPipeJobs.delete(args.pipeId);
+      job.acceptingFrames = false;
       job.child.kill("SIGTERM");
     }
   );
@@ -995,7 +1139,8 @@ function registerIpcHandlers(): void {
         outputPath,
         fps: Math.max(1, Math.floor(args.fps)),
         bitrateMbps: Math.max(1, Math.floor(args.bitrateMbps)),
-        encoder
+        encoder,
+        pendingWrites: new Set()
       });
       return {
         jobId,
@@ -1021,7 +1166,13 @@ function registerIpcHandlers(): void {
       }
       const frameName = `frame_${String(Math.max(0, Math.floor(args.frameIndex))).padStart(6, "0")}.png`;
       const framePath = path.join(job.frameFolderPath, frameName);
-      await fs.writeFile(framePath, Buffer.from(args.framePngBytes));
+      while (job.pendingWrites.size >= 4) {
+        await Promise.race(job.pendingWrites);
+      }
+      const pending = fs.writeFile(framePath, Buffer.from(args.framePngBytes)).finally(() => {
+        job.pendingWrites.delete(pending);
+      });
+      job.pendingWrites.add(pending);
     }
   );
   ipcMain.handle(
@@ -1037,6 +1188,9 @@ function registerIpcHandlers(): void {
         throw new Error("Render temp job not found.");
       }
       renderTempJobs.delete(args.jobId);
+      if (job.pendingWrites.size > 0) {
+        await Promise.all([...job.pendingWrites]);
+      }
       const ffmpegArgs = tempEncodeArgs({
         fps: job.fps,
         bitrateMbps: job.bitrateMbps,

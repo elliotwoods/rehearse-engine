@@ -77,12 +77,45 @@ async function createElectronPipeExporter(settings: RenderSettings): Promise<Ren
     bitrateMbps: settings.bitrateMbps
   });
   let closed = false;
+  let remoteQueuedBytes = 0;
+  let remoteError: Error | null = null;
+  let waiters: Array<() => void> = [];
+  const wakeWaiters = () => {
+    const current = waiters;
+    waiters = [];
+    for (const resolve of current) {
+      resolve();
+    }
+  };
+  const unsubscribe = window.electronAPI.onRenderPipeState((state) => {
+    if (state.pipeId !== open.pipeId) {
+      return;
+    }
+    remoteQueuedBytes = state.queuedBytes;
+    remoteError = state.error ? new Error(state.error) : null;
+    wakeWaiters();
+  });
+  const waitForRemoteSpace = async (incomingBytes: number) => {
+    while (!closed && !remoteError && remoteQueuedBytes + incomingBytes > open.queueBudgetBytes) {
+      await new Promise<void>((resolve) => {
+        waiters.push(resolve);
+      });
+    }
+    if (remoteError) {
+      throw remoteError;
+    }
+  };
   return {
     writeFrame: async (framePngBytes) => {
       if (closed) {
         throw new Error("Render pipe is closed.");
       }
-      await window.electronAPI!.renderPipeWriteFrame({
+      if (remoteError) {
+        throw remoteError;
+      }
+      await waitForRemoteSpace(framePngBytes.byteLength);
+      remoteQueuedBytes += framePngBytes.byteLength;
+      window.electronAPI!.renderPipeWriteFrame({
         pipeId: open.pipeId,
         framePngBytes
       });
@@ -92,6 +125,11 @@ async function createElectronPipeExporter(settings: RenderSettings): Promise<Ren
         return { summary: `Saved ${outputPath}` };
       }
       closed = true;
+      unsubscribe();
+      wakeWaiters();
+      if (remoteError) {
+        throw remoteError;
+      }
       const done = await window.electronAPI!.renderPipeClose({ pipeId: open.pipeId });
       return { summary: done.summary };
     },
@@ -100,6 +138,8 @@ async function createElectronPipeExporter(settings: RenderSettings): Promise<Ren
         return;
       }
       closed = true;
+      unsubscribe();
+      wakeWaiters();
       await window.electronAPI!.renderPipeAbort({ pipeId: open.pipeId });
     }
   };

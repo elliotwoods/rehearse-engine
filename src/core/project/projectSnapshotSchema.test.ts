@@ -186,6 +186,103 @@ describe("project snapshot schema", () => {
     expect(parsed.actors.actor_1?.pluginType).toBe("plugin.dxfDrawing.actor");
   });
 
+  it("migrates legacy Spark gaussian splat actors into the merged plugin actor", () => {
+    const payload = {
+      schemaVersion: PROJECT_SCHEMA_VERSION - 1,
+      appMode: "electron-rw",
+      projectName: "demo",
+      snapshotName: "main",
+      createdAtIso: "2026-03-02T00:00:00.000Z",
+      updatedAtIso: "2026-03-02T00:00:00.000Z",
+      scene: createInitialState("electron-rw", "demo", "main").scene,
+      actors: {
+        actor_1: {
+          id: "actor_1",
+          name: "Legacy Spark Splat",
+          enabled: true,
+          kind: "actor",
+          actorType: "gaussian-splat-spark",
+          visibilityMode: "visible",
+          parentActorId: null,
+          childActorIds: [],
+          componentIds: [],
+          transform: {
+            position: [1, 2, 3],
+            rotation: [0, 0, 0],
+            scale: [1, 1, 1]
+          },
+          params: {
+            assetId: "asset_1",
+            scaleFactor: 2,
+            opacity: 0.5,
+            brightness: 1.2,
+            colorInputSpace: "iphone-sdr",
+            stochasticDepth: true
+          }
+        }
+      },
+      components: {},
+      camera: createInitialState("electron-rw", "demo", "main").camera,
+      time: createInitialState("electron-rw", "demo", "main").time,
+      materials: {},
+      assets: []
+    };
+
+    const parsed = parseProjectSnapshot(JSON.stringify(payload));
+    expect(parsed.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
+    expect(parsed.actors.actor_1?.actorType).toBe("plugin");
+    expect(parsed.actors.actor_1?.pluginType).toBe("plugin.gaussianSplat");
+    expect(parsed.actors.actor_1?.params.assetId).toBe("asset_1");
+    expect(parsed.actors.actor_1?.params.brightness).toBe(1.2);
+    expect(parsed.actors.actor_1?.params.stochasticDepth).toBeUndefined();
+  });
+
+  it("migrates legacy WebGPU gaussian splat plugin actors into the merged plugin actor", () => {
+    const payload = {
+      schemaVersion: PROJECT_SCHEMA_VERSION - 1,
+      appMode: "electron-rw",
+      projectName: "demo",
+      snapshotName: "main",
+      createdAtIso: "2026-03-02T00:00:00.000Z",
+      updatedAtIso: "2026-03-02T00:00:00.000Z",
+      scene: createInitialState("electron-rw", "demo", "main").scene,
+      actors: {
+        actor_1: {
+          id: "actor_1",
+          name: "Legacy WebGPU Splat",
+          enabled: true,
+          kind: "actor",
+          actorType: "plugin",
+          pluginType: "plugin.gaussianSplat.webgpu",
+          visibilityMode: "visible",
+          parentActorId: null,
+          childActorIds: [],
+          componentIds: [],
+          transform: {
+            position: [0, 0, 0],
+            rotation: [0, 0, 0],
+            scale: [1, 1, 1]
+          },
+          params: {
+            assetId: "asset_1",
+            splatSizeScale: 1.5
+          }
+        }
+      },
+      components: {},
+      camera: createInitialState("electron-rw", "demo", "main").camera,
+      time: createInitialState("electron-rw", "demo", "main").time,
+      materials: {},
+      assets: []
+    };
+
+    const parsed = parseProjectSnapshot(JSON.stringify(payload));
+    expect(parsed.schemaVersion).toBe(PROJECT_SCHEMA_VERSION);
+    expect(parsed.actors.actor_1?.actorType).toBe("plugin");
+    expect(parsed.actors.actor_1?.pluginType).toBe("plugin.gaussianSplat");
+    expect(parsed.actors.actor_1?.params.splatSizeScale).toBe(1.5);
+  });
+
   it("rejects removed native gaussian splat content with a clear error", () => {
     const payload = {
       schemaVersion: PROJECT_SCHEMA_VERSION,

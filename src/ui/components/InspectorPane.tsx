@@ -749,7 +749,7 @@ function SceneInspectorView(props: SceneInspectorViewProps) {
     props.appState.camera.mode === "orthographic"
       ? `Zoom ${props.appState.camera.zoom.toFixed(2)}`
       : `FOV ${props.appState.camera.fov.toFixed(1)}°`;
-  const helpersSummary = `Grid ${props.appState.scene.helpers.grid.visible ? "on" : "off"} Â· Axes ${
+  const helpersSummary = `Grid ${props.appState.scene.helpers.grid.visible ? "on" : "off"} \u00b7 Axes ${
     props.appState.scene.helpers.axes.visible ? "on" : "off"
   }`;
   const postProcessingSummary = postProcessingEnabledCount > 0 ? `${postProcessingEnabledCount} enabled` : "All off";
@@ -1559,9 +1559,10 @@ function SceneInspectorView(props: SceneInspectorViewProps) {
       </section>
       ) : null}
       {sceneInspectorView === "helpers" ? (
+      <>
       <section className="inspector-common-card">
         <header>
-          <h4>Helpers</h4>
+          <h4>Grid</h4>
         </header>
         <div className="inspector-common-grid">
           <ToggleField
@@ -1719,6 +1720,13 @@ function SceneInspectorView(props: SceneInspectorViewProps) {
               });
             }}
           />
+        </div>
+      </section>
+      <section className="inspector-common-card">
+        <header>
+          <h4>Axes</h4>
+        </header>
+        <div className="inspector-common-grid">
           <ToggleField
             label="Axes Visible"
             checked={props.appState.scene.helpers.axes.visible}
@@ -1873,6 +1881,7 @@ function SceneInspectorView(props: SceneInspectorViewProps) {
           />
         </div>
       </section>
+      </>
       ) : null}
       {sceneInspectorView === "camera" ? (
       <section className="inspector-common-card">

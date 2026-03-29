@@ -50,6 +50,7 @@ export class WebGpuViewport {
   private resizeObservedElements: HTMLElement[] = [];
   private readonly maxRenderDimension = 4096;
   private readonly isExportViewport: boolean;
+  private readonly manualFrameControl: boolean;
   private readonly fixedViewportSize: { width: number; height: number } | null;
   private previousMainRenderSample: RenderStatsSample | null = null;
   private lastOutputSignature = "";
@@ -63,6 +64,7 @@ export class WebGpuViewport {
       showDebugHelpers?: boolean;
       editorOverlays?: boolean;
       viewportSize?: { width: number; height: number };
+      manualFrameControl?: boolean;
     }
   ) {
     if (!("gpu" in navigator)) {
@@ -70,6 +72,7 @@ export class WebGpuViewport {
     }
 
     this.isExportViewport = options.qualityMode === "export";
+    this.manualFrameControl = options.manualFrameControl === true;
     this.fixedViewportSize = options.viewportSize
       ? {
           width: Math.max(1, Math.round(options.viewportSize.width)),
@@ -171,7 +174,9 @@ export class WebGpuViewport {
         this.resizeObserver.observe(element);
       }
     }
-    this.animate();
+    if (!this.manualFrameControl) {
+      this.animate();
+    }
   }
 
   public stop(): void {
@@ -493,6 +498,7 @@ export class WebGpuViewport {
         framesInWindow
       );
       this.previousMainRenderSample = mainRenderStatsCumulative;
+      const splatStats = this.readGaussianSplatStats();
       const actorCounts = countActorStats(this.kernel.store.getState().state.actors);
       const currentStats = this.kernel.store.getState().state.stats;
 
@@ -501,9 +507,9 @@ export class WebGpuViewport {
         frameMs,
         drawCalls: Math.max(0, Math.floor(mainRenderStats.drawCalls)),
         triangles: Math.max(0, Math.floor(mainRenderStats.triangles)),
-        splatDrawCalls: 0,
+        splatDrawCalls: splatStats.drawCalls,
         splatTriangles: 0,
-        splatVisibleCount: 0,
+        splatVisibleCount: splatStats.visibleCount,
         actorCount: actorCounts.actorCount,
         actorCountEnabled: actorCounts.actorCountEnabled,
         cameraDistance: this.activeCamera.position.distanceTo(this.controls.target),
@@ -691,5 +697,28 @@ export class WebGpuViewport {
 
   private isWheelZoomEnabled(): boolean {
     return Boolean(this.activeCamera);
+  }
+
+  private readGaussianSplatStats(): { drawCalls: number; visibleCount: number; actorCount: number } {
+    const statuses = Object.values(this.kernel.store.getState().state.actorStatusByActorId);
+    let actorCount = 0;
+    let visibleCount = 0;
+    for (const status of statuses) {
+      const backend = typeof status?.values?.backend === "string" ? status.values.backend : "";
+      const loadState = typeof status?.values?.loadState === "string" ? status.values.loadState : "";
+      if ((backend !== "spark-webgl" && backend !== "webgpu-tsl") || loadState !== "loaded") {
+        continue;
+      }
+      actorCount += 1;
+      const pointCount = status.values.pointCount;
+      if (typeof pointCount === "number" && Number.isFinite(pointCount)) {
+        visibleCount += Math.max(0, Math.floor(pointCount));
+      }
+    }
+    return {
+      drawCalls: actorCount,
+      visibleCount,
+      actorCount
+    };
   }
 }

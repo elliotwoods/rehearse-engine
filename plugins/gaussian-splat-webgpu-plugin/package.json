@@ -1,5 +1,5 @@
 {
-  "name": "@simularca/gaussian-splat-webgpu-plugin",
+  "name": "@simularca/gaussian-splat-plugin",
   "version": "0.1.0",
   "private": true,
   "type": "module",

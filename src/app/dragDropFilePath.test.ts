@@ -1,5 +1,45 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveDroppedFileSourcePath } from "@/app/dragDropFilePath";
+import { resolveDraggedPreviewFile, resolveDroppedFileSourcePath } from "@/app/dragDropFilePath";
+
+describe("resolveDraggedPreviewFile", () => {
+  it("prefers DataTransfer.files when a preview file is already exposed", () => {
+    const file = new File(["mesh"], "tree.fbx");
+    const dataTransfer = {
+      files: [file],
+      items: []
+    } as unknown as DataTransfer;
+
+    expect(resolveDraggedPreviewFile(dataTransfer)).toBe(file);
+  });
+
+  it("falls back to DataTransfer.items.getAsFile() before drop", () => {
+    const file = new File(["splat"], "scene.splat");
+    const item = {
+      kind: "file",
+      getAsFile: vi.fn(() => file)
+    };
+    const dataTransfer = {
+      files: [],
+      items: [item]
+    } as unknown as DataTransfer;
+
+    expect(resolveDraggedPreviewFile(dataTransfer)).toBe(file);
+    expect(item.getAsFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns null when Electron has not exposed file metadata yet", () => {
+    const item = {
+      kind: "file",
+      getAsFile: vi.fn(() => null)
+    };
+    const dataTransfer = {
+      files: [],
+      items: [item]
+    } as unknown as DataTransfer;
+
+    expect(resolveDraggedPreviewFile(dataTransfer)).toBeNull();
+  });
+});
 
 describe("resolveDroppedFileSourcePath", () => {
   it("prefers the Electron getPathForFile bridge when available", () => {

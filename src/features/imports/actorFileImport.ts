@@ -137,7 +137,6 @@ export function resolveSelectedActorFileImportTarget(
   args: {
     actors: Record<string, ActorNode>;
     selection: SelectionEntry[];
-    fileName: string;
   }
 ): SelectedActorFileImportTarget | null {
   if (args.selection.length !== 1 || args.selection[0]?.kind !== "actor") {
@@ -151,17 +150,11 @@ export function resolveSelectedActorFileImportTarget(
   if (!descriptorId) {
     return null;
   }
-  const extension = fileExtensionFromName(args.fileName);
-  if (!extension) {
+  const fileDefinitions = fileDefinitionsFromDescriptor(kernel, descriptorId);
+  if (fileDefinitions.length !== 1) {
     return null;
   }
-  const compatibleDefinitions = fileDefinitionsFromDescriptor(kernel, descriptorId).filter((definition) =>
-    definition.accept.map(normalizeExtension).includes(extension)
-  );
-  if (compatibleDefinitions.length !== 1) {
-    return null;
-  }
-  const compatibleDefinition = compatibleDefinitions[0];
+  const compatibleDefinition = fileDefinitions[0];
   if (!compatibleDefinition) {
     return null;
   }

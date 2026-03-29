@@ -145,6 +145,7 @@ export class SplatController {
   }
 
   dispose(): void {
+    this.loadToken++;
     this.disposeRendering();
     this.loadedAssetId = "";
     this.pendingAssetId = "";

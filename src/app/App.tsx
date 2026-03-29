@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import { BUILD_INFO, buildInfoSummary } from "@/app/buildInfo";
-import { resolveDroppedFileSourcePath } from "@/app/dragDropFilePath";
+import { resolveDraggedPreviewFile, resolveDroppedFileSourcePath } from "@/app/dragDropFilePath";
 import { installRendererDebugBridge } from "@/app/liveDebugBridge";
 import { keyboardCommandRouter } from "@/app/keyboardCommandRouter";
 import { isMacPlatform, isViewportFullscreenShortcut } from "@/app/viewportFullscreenShortcut";
@@ -46,8 +46,17 @@ import { WebGlViewport } from "@/render/webglRenderer";
 import { WebGpuViewport } from "@/render/webgpuRenderer";
 
 const RENDER_QUEUE_BUDGET_BYTES = 512 * 1024 * 1024;
+const RENDER_PROGRESS_UPDATE_INTERVAL_MS = 125;
+const RENDER_PREVIEW_UPDATE_INTERVAL_MS = 125;
+
+interface ExportViewportRuntime {
+  start(): Promise<void>;
+  stop(): void;
+  renderOnce(): Promise<void>;
+}
 
 interface DragImportState {
+  hasResolvedFileMetadata: boolean;
   fileName: string;
   fileExtension: string;
   sourcePath: string | null;
@@ -250,25 +259,26 @@ export function App() {
 
   const createDragImportState = useCallback(
     (file?: File | null) => {
+      const replacementTarget = resolveSelectedActorFileImportTarget(kernel, {
+        actors,
+        selection
+      });
       if (!file) {
         return {
-          fileName: "Pending file import",
+          hasResolvedFileMetadata: false,
+          fileName: "",
           fileExtension: "",
           sourcePath: null,
           options: [] as ActorFileImportOption[],
-          replacementTarget: null
+          replacementTarget
         };
       }
       const fileName = file.name;
       const fileExtension = fileExtensionFromName(fileName);
       const sourcePath = resolveDroppedFileSourcePath(file, window.electronAPI);
       const options = listCompatibleActorFileImportOptions(kernel, fileName);
-      const replacementTarget = resolveSelectedActorFileImportTarget(kernel, {
-        actors,
-        selection,
-        fileName
-      });
       return {
+        hasResolvedFileMetadata: true,
         fileName,
         fileExtension,
         sourcePath,
@@ -359,11 +369,10 @@ export function App() {
       }
       event.preventDefault();
       dragDepthRef.current += 1;
-      if (dragImportState) {
-        return;
+      if (!dragImportState) {
+        const file = resolveDraggedPreviewFile(event.dataTransfer);
+        setDragImportState(createDragImportState(file));
       }
-      const file = event.dataTransfer.files?.[0];
-      setDragImportState(createDragImportState(file));
     },
     [createDragImportState, dragImportState, readOnly]
   );
@@ -375,9 +384,14 @@ export function App() {
       }
       event.preventDefault();
       event.dataTransfer.dropEffect = "copy";
-      if (!dragImportState) {
-        const file = event.dataTransfer.files?.[0];
-        setDragImportState(createDragImportState(file));
+      const file = resolveDraggedPreviewFile(event.dataTransfer);
+      const nextState = createDragImportState(file);
+      if (
+        !dragImportState ||
+        dragImportState.hasResolvedFileMetadata !== nextState.hasResolvedFileMetadata ||
+        dragImportState.fileName !== nextState.fileName
+      ) {
+        setDragImportState(nextState);
       }
     },
     [createDragImportState, dragImportState, readOnly]
@@ -404,7 +418,7 @@ export function App() {
       }
       event.preventDefault();
       dragDepthRef.current = 0;
-      const droppedFile = event.dataTransfer.files?.[0];
+      const droppedFile = resolveDraggedPreviewFile(event.dataTransfer);
       const current = droppedFile ? createDragImportState(droppedFile) : dragImportState;
       setDragImportState(null);
       if (!current) {
@@ -423,7 +437,7 @@ export function App() {
       event.preventDefault();
       event.stopPropagation();
       dragDepthRef.current = 0;
-      const droppedFile = event.dataTransfer.files?.[0];
+      const droppedFile = resolveDraggedPreviewFile(event.dataTransfer);
       const current = droppedFile ? createDragImportState(droppedFile) : dragImportState;
       setDragImportState(null);
       if (!current) {
@@ -442,7 +456,7 @@ export function App() {
       event.preventDefault();
       event.stopPropagation();
       dragDepthRef.current = 0;
-      const droppedFile = event.dataTransfer.files?.[0];
+      const droppedFile = resolveDraggedPreviewFile(event.dataTransfer);
       const current = droppedFile ? createDragImportState(droppedFile) : dragImportState;
       setDragImportState(null);
       if (!current?.replacementTarget) {
@@ -548,21 +562,12 @@ export function App() {
       let latestPhaseIndex = 0;
       let latestPhaseCount = Math.max(1, warmupStepCount || renderFrameCount || 1);
       let latestMessage = "Preparing...";
-      const pushProgress = (
-        patch?: Partial<Pick<RenderProgress, "phase" | "phaseIndex" | "phaseCount" | "message">>
-      ) => {
-        if (patch?.phase) {
-          latestPhase = patch.phase;
-        }
-        if (typeof patch?.phaseIndex === "number") {
-          latestPhaseIndex = patch.phaseIndex;
-        }
-        if (typeof patch?.phaseCount === "number") {
-          latestPhaseCount = patch.phaseCount;
-        }
-        if (typeof patch?.message === "string") {
-          latestMessage = patch.message;
-        }
+      let progressTimer: number | null = null;
+      let lastProgressCommitAt = 0;
+      let previewLastDrawAt = 0;
+      const commitProgress = () => {
+        progressTimer = null;
+        lastProgressCommitAt = performance.now();
         setRenderProgress({
           phase: latestPhase,
           phaseIndex: latestPhaseIndex,
@@ -580,8 +585,47 @@ export function App() {
           message: latestMessage
         });
       };
-      pushProgress();
-      let viewport: { start(): Promise<void>; stop(): void } | null = null;
+      const pushProgress = (
+        patch?: Partial<Pick<RenderProgress, "phase" | "phaseIndex" | "phaseCount" | "message">>,
+        options?: { immediate?: boolean }
+      ) => {
+        if (patch?.phase) {
+          latestPhase = patch.phase;
+        }
+        if (typeof patch?.phaseIndex === "number") {
+          latestPhaseIndex = patch.phaseIndex;
+        }
+        if (typeof patch?.phaseCount === "number") {
+          latestPhaseCount = patch.phaseCount;
+        }
+        if (typeof patch?.message === "string") {
+          latestMessage = patch.message;
+        }
+        const immediate = options?.immediate === true || performance.now() - lastProgressCommitAt >= RENDER_PROGRESS_UPDATE_INTERVAL_MS;
+        if (immediate) {
+          if (progressTimer !== null) {
+            window.clearTimeout(progressTimer);
+            progressTimer = null;
+          }
+          commitProgress();
+          return;
+        }
+        if (progressTimer === null) {
+          progressTimer = window.setTimeout(() => {
+            commitProgress();
+          }, RENDER_PROGRESS_UPDATE_INTERVAL_MS);
+        }
+      };
+      const updatePreview = (canvas: HTMLCanvasElement, immediate = false) => {
+        const now = performance.now();
+        if (!immediate && now - previewLastDrawAt < RENDER_PREVIEW_UPDATE_INTERVAL_MS) {
+          return;
+        }
+        previewLastDrawAt = now;
+        drawRenderPreview(canvas);
+      };
+      pushProgress(undefined, { immediate: true });
+      let viewport: ExportViewportRuntime | null = null;
       let exporter: { abort(): Promise<void> } | null = null;
       try {
         let waitCount = 0;
@@ -600,6 +644,7 @@ export function App() {
             ? new WebGlViewport(kernel, hostEl, {
                 antialias: sceneAntialiasing,
                 qualityMode: "export",
+                manualFrameControl: true,
                 showDebugHelpers: settings.showDebugViews,
                 editorOverlays: false,
                 viewportSize: {
@@ -610,6 +655,7 @@ export function App() {
             : new WebGpuViewport(kernel, hostEl, {
                 antialias: sceneAntialiasing,
                 qualityMode: "export",
+                manualFrameControl: true,
                 showDebugHelpers: settings.showDebugViews,
                 editorOverlays: false,
                 viewportSize: {
@@ -618,6 +664,7 @@ export function App() {
                 }
               });
         await viewport.start();
+        await viewport.renderOnce();
         const startTime = settings.startTimeMode === "zero" ? 0 : previousTime.elapsedSimSeconds;
         const simulationStartTime = startTime + settings.preRunSeconds;
         const baseExporter = await createRenderExporter(settings, {
@@ -651,15 +698,13 @@ export function App() {
               phaseIndex: warmupIndex + 1,
               phaseCount: warmupStepCount,
               message: "Pre-running simulation..."
-            });
-            await nextAnimationFrame();
+            }, { immediate: warmupIndex === 0 || warmupIndex + 1 === warmupStepCount });
+            await viewport.renderOnce();
             const previewCanvas = hostEl.querySelector("canvas");
             if (previewCanvas instanceof HTMLCanvasElement) {
-              drawRenderPreview(previewCanvas);
+              updatePreview(previewCanvas);
             }
           }
-          await nextAnimationFrame();
-          await nextAnimationFrame();
         }
 
         for (let frameIndex = 0; frameIndex < renderFrameCount; frameIndex += 1) {
@@ -682,14 +727,13 @@ export function App() {
             phaseIndex: frameIndex + 1,
             phaseCount: renderFrameCount,
             message: "Rendering frame..."
-          });
-          await nextAnimationFrame();
-          await nextAnimationFrame();
+          }, { immediate: frameIndex === 0 });
+          await viewport.renderOnce();
           const canvas = hostEl.querySelector("canvas");
           if (!(canvas instanceof HTMLCanvasElement)) {
             throw new Error("Render canvas is unavailable.");
           }
-          drawRenderPreview(canvas);
+          updatePreview(canvas);
           const bytes = await canvasToPngBytes(canvas, {
             width: settings.width,
             height: settings.height
@@ -700,7 +744,7 @@ export function App() {
             phaseIndex: renderedFrameCount,
             phaseCount: renderFrameCount,
             message: "Queueing frame for output..."
-          });
+          }, { immediate: frameIndex + 1 === renderFrameCount });
           await queuedExporter.enqueueFrame(bytes, frameIndex);
         }
         pushProgress({
@@ -708,7 +752,7 @@ export function App() {
           phaseIndex: writtenFrameCount,
           phaseCount: renderFrameCount,
           message: "Draining output queue..."
-        });
+        }, { immediate: true });
         const result = await queuedExporter.finalize();
         kernel.store.getState().actions.setStatus(`Render finished. ${result.summary}`);
         viewport.stop();
@@ -729,6 +773,9 @@ export function App() {
         kernel.store.getState().actions.setElapsedSimSeconds(previousTime.elapsedSimSeconds);
         kernel.store.getState().actions.setTimeRunning(previousTime.running);
         kernel.store.getState().actions.setTimeSpeed(previousTime.speed);
+        if (progressTimer !== null) {
+          window.clearTimeout(progressTimer);
+        }
         setMainViewportSuspended(false);
         setRenderOverlayOpen(false);
         setRenderProgress(null);
@@ -1128,35 +1175,44 @@ export function App() {
         onViewportScreenshotBusyChange={setViewportScreenshotBusy}
       />
       {dragImportState ? (
-        <div className="file-drop-overlay">
+        <div className={`file-drop-overlay${dragImportState.hasResolvedFileMetadata ? "" : " is-pending"}`}>
           <div className="file-drop-overlay-head">
             <h2>Drop File To Import</h2>
-            <p>{dragImportState.fileName || "Pending file import"}</p>
+            <p>{dragImportState.hasResolvedFileMetadata ? dragImportState.fileName : "Release to inspect import options"}</p>
             <small>
-              {dragImportState.replacementTarget
-                ? "Drop on the inspector zone to replace the selected actor, or on the import zone to add a new actor."
-                : "Drop on the import zone below to add a new actor."}
+              {!dragImportState.hasResolvedFileMetadata
+                ? dragImportState.replacementTarget
+                  ? "Drop on the inspector zone to replace the selected actor now, or keep dragging until import options resolve."
+                  : "Electron has not exposed the dragged filename yet. Keep dragging or release to continue."
+                : dragImportState.replacementTarget
+                  ? "Drop on the inspector zone to replace the selected actor, or on the import zone to add a new actor."
+                  : "Drop on the import zone below to add a new actor."}
             </small>
           </div>
           <div
             className={`file-drop-overlay-grid${dragImportState.replacementTarget ? " has-replace-target" : ""}`}
           >
             <div
-              className={`file-drop-target${dragImportState.options.length === 0 ? " is-disabled" : ""}`}
+              className={`file-drop-target${
+                dragImportState.hasResolvedFileMetadata && dragImportState.options.length === 0 ? " is-disabled" : ""
+              }${dragImportState.hasResolvedFileMetadata ? "" : " is-pending"}`}
               onDragOver={(event) => {
                 if (!dataTransferHasFiles(event.dataTransfer)) {
                   return;
                 }
                 event.preventDefault();
                 event.stopPropagation();
-                event.dataTransfer.dropEffect = dragImportState.options.length === 0 ? "none" : "copy";
+                event.dataTransfer.dropEffect =
+                  dragImportState.hasResolvedFileMetadata && dragImportState.options.length === 0 ? "none" : "copy";
               }}
               onDrop={handleImportZoneDrop}
             >
               <div className="file-drop-target-icon">NEW</div>
               <strong>Import As New Actor</strong>
               <span>
-                {dragImportState.options.length === 0
+                {!dragImportState.hasResolvedFileMetadata
+                  ? "Release to inspect compatible actor types."
+                  : dragImportState.options.length === 0
                   ? "No actor types can create a new actor from this file."
                   : dragImportState.options.length === 1
                     ? `Auto-import as ${dragImportState.options[0]?.label ?? "actor"}.`
@@ -1246,12 +1302,6 @@ export function App() {
       />
     </div>
   );
-}
-
-function nextAnimationFrame(): Promise<void> {
-  return new Promise((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
 }
 
 function buildDefaultRenderSettings(

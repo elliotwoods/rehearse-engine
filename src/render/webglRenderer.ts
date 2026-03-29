@@ -15,7 +15,6 @@ import { FramePacer } from "@/render/framePacing";
 import { SceneController } from "@/render/sceneController";
 import { reportSlowFrame } from "@/render/slowFrameDiagnostics";
 import type { MistVolumeQualityMode } from "@/render/mistVolumeController";
-import { SparkSplatController } from "@/render/sparkSplatController";
 import { countActorStats, summarizeMemory, type RenderStatsSample } from "@/render/stats";
 import { SceneOutputPass, threeToneMappingForMode } from "@/render/tonemapping";
 import { captureViewportScreenshotFromCanvas, type ViewportScreenshotResult } from "@/features/render/viewportScreenshot";
@@ -37,7 +36,6 @@ export class WebGlViewport {
   private readonly sceneController: SceneController;
   private readonly curveEditController: CurveEditController | null;
   private readonly actorTransformController: ActorTransformController | null;
-  private readonly sparkSplatController: SparkSplatController;
   private frameHandle = 0;
   private frameCount = 0;
   private frameTimeAccumulatorMs = 0;
@@ -54,6 +52,7 @@ export class WebGlViewport {
   private resizeObservedElements: HTMLElement[] = [];
   private readonly maxRenderDimension = 4096;
   private readonly isExportViewport: boolean;
+  private readonly manualFrameControl: boolean;
   private readonly fixedViewportSize: { width: number; height: number } | null;
   private previousMainRenderSample: RenderStatsSample | null = null;
   private readonly framePacer: FramePacer;
@@ -67,9 +66,11 @@ export class WebGlViewport {
       showDebugHelpers?: boolean;
       editorOverlays?: boolean;
       viewportSize?: { width: number; height: number };
+      manualFrameControl?: boolean;
     }
   ) {
     this.isExportViewport = options.qualityMode === "export";
+    this.manualFrameControl = options.manualFrameControl === true;
     this.fixedViewportSize = options.viewportSize
       ? {
           width: Math.max(1, Math.round(options.viewportSize.width)),
@@ -80,7 +81,6 @@ export class WebGlViewport {
       qualityMode: options.qualityMode ?? "interactive",
       showDebugHelpers: options.showDebugHelpers ?? true
     });
-    this.sparkSplatController = new SparkSplatController(kernel, this.sceneController);
     this.framePacer = new FramePacer(kernel.store.getState().state.scene.framePacing);
     this.renderer = new THREE.WebGLRenderer({ antialias: options.antialias, alpha: false });
     this.sceneController.setWebGlRenderer(this.renderer);
@@ -179,7 +179,9 @@ export class WebGlViewport {
         this.resizeObserver.observe(element);
       }
     }
-    this.animate();
+    if (!this.manualFrameControl) {
+      this.animate();
+    }
   }
 
   public stop(): void {
@@ -199,7 +201,6 @@ export class WebGlViewport {
     this.controls.dispose();
     this.actorTransformController?.dispose();
     this.curveEditController?.dispose();
-    this.sparkSplatController.dispose();
     this.sceneController.setWebGlRenderer(null);
     this.sceneController.dispose();
     this.bloomPass.dispose();
@@ -282,8 +283,7 @@ export class WebGlViewport {
     const _rf0 = performance.now();
     await this.sceneController.syncFromState();
     const _rf1 = performance.now();
-    await this.sparkSplatController.syncFromState();
-    const _rf2 = performance.now();
+    const _rf2 = _rf1;
     this.enforceActorCompatibility("webgl2");
     this.syncCameraState();
     this.cameraController.update(performance.now());
@@ -311,7 +311,7 @@ export class WebGlViewport {
         backend: "webgl2",
         totalMs: _rf4 - _rf0,
         sceneSyncMs: _rf1 - _rf0,
-        sparkSyncMs: _rf2 - _rf1,
+        sparkSyncMs: 0,
         controlsMs: _rf3 - _rf2,
         renderMs: _rf4 - _rf3
       });
@@ -512,7 +512,7 @@ export class WebGlViewport {
         framesInWindow
       );
       this.previousMainRenderSample = mainRenderStatsCumulative;
-      const splatStats = this.sparkSplatController.getRenderStats();
+      const splatStats = this.readGaussianSplatStats();
       const actorCounts = countActorStats(this.kernel.store.getState().state.actors);
       const currentStats = this.kernel.store.getState().state.stats;
 
@@ -556,6 +556,29 @@ export class WebGlViewport {
 
   private isWheelZoomEnabled(): boolean {
     return Boolean(this.activeCamera);
+  }
+
+  private readGaussianSplatStats(): { drawCalls: number; visibleCount: number; actorCount: number } {
+    const statuses = Object.values(this.kernel.store.getState().state.actorStatusByActorId);
+    let actorCount = 0;
+    let visibleCount = 0;
+    for (const status of statuses) {
+      const backend = typeof status?.values?.backend === "string" ? status.values.backend : "";
+      const loadState = typeof status?.values?.loadState === "string" ? status.values.loadState : "";
+      if ((backend !== "spark-webgl" && backend !== "webgpu-tsl") || loadState !== "loaded") {
+        continue;
+      }
+      actorCount += 1;
+      const pointCount = status.values.pointCount;
+      if (typeof pointCount === "number" && Number.isFinite(pointCount)) {
+        visibleCount += Math.max(0, Math.floor(pointCount));
+      }
+    }
+    return {
+      drawCalls: actorCount,
+      visibleCount,
+      actorCount
+    };
   }
 
   private readMainRenderStats(): RenderStatsSample {

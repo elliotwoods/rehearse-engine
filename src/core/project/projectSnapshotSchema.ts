@@ -71,6 +71,64 @@ function migrateLegacyDxfActors(input: unknown): unknown {
   };
 }
 
+function migrateLegacyGaussianSplatActors(input: unknown): unknown {
+  if (!input || typeof input !== "object") {
+    return input;
+  }
+  const payload = input as {
+    actors?: Record<string, {
+      actorType?: unknown;
+      pluginType?: unknown;
+      params?: Record<string, unknown>;
+    }>;
+    schemaVersion?: unknown;
+  };
+  if (!payload.actors) {
+    return input;
+  }
+  let changed = false;
+  const actors = Object.fromEntries(
+    Object.entries(payload.actors).map(([actorId, actor]) => {
+      if (!actor || typeof actor !== "object") {
+        return [actorId, actor];
+      }
+      if (actor.actorType === "gaussian-splat-spark") {
+        changed = true;
+        const nextParams = { ...(actor.params ?? {}) };
+        delete nextParams.stochasticDepth;
+        return [
+          actorId,
+          {
+            ...actor,
+            actorType: "plugin",
+            pluginType: "plugin.gaussianSplat",
+            params: nextParams
+          }
+        ];
+      }
+      if (actor.actorType === "plugin" && actor.pluginType === "plugin.gaussianSplat.webgpu") {
+        changed = true;
+        return [
+          actorId,
+          {
+            ...actor,
+            pluginType: "plugin.gaussianSplat"
+          }
+        ];
+      }
+      return [actorId, actor];
+    })
+  );
+  if (!changed) {
+    return input;
+  }
+  return {
+    ...payload,
+    schemaVersion: typeof payload.schemaVersion === "number" ? Math.max(payload.schemaVersion, PROJECT_SCHEMA_VERSION) : PROJECT_SCHEMA_VERSION,
+    actors
+  };
+}
+
 const actorSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -79,7 +137,6 @@ const actorSchema = z.object({
   actorType: z.enum([
     "empty",
     "environment",
-    "gaussian-splat-spark",
     "mist-volume",
     "mesh",
     "dxf-reference",
@@ -326,7 +383,7 @@ const projectSnapshotSchema = z.object({
 
 export function parseProjectSnapshot(payload: string): ProjectSnapshotManifest {
   const input = JSON.parse(payload) as unknown;
-  const migratedInput = migrateLegacyDxfActors(input);
+  const migratedInput = migrateLegacyGaussianSplatActors(migrateLegacyDxfActors(input));
   assertNoRemovedNativeGaussianSplatContent(migratedInput);
   const parsed = projectSnapshotSchema.safeParse(migratedInput);
   if (!parsed.success) {

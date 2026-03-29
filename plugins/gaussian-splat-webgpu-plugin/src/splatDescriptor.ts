@@ -1,19 +1,20 @@
 /**
- * Gaussian Splat actor descriptor for WebGPU rendering.
- * Phase 2: Loads PLY, builds GPU storage buffers, renders with TSL NodeMaterial.
+ * Unified Gaussian Splat actor descriptor.
+ * Uses the WebGPU backend when the scene render engine is WebGPU and
+ * falls back to the Spark/WebGL2 backend otherwise.
  */
 
 import * as THREE from "three";
 import type { ReloadableDescriptor, ParameterSchema } from "./index";
-import { SplatController } from "./splatController";
+import { UnifiedSplatController } from "./unifiedSplatController";
 
-const DESCRIPTOR_ID = "plugin.gaussianSplat.webgpu";
+const DESCRIPTOR_ID = "plugin.gaussianSplat";
 
 const COORDINATE_CORRECTION_EULER = new THREE.Euler(-Math.PI / 2, 0, 0, "XYZ");
 
 const schema: ParameterSchema = {
   id: DESCRIPTOR_ID,
-  title: "Gaussian Splat (WebGPU)",
+  title: "Gaussian Splat",
   params: [
     {
       key: "assetId",
@@ -90,9 +91,9 @@ export function createGaussianSplatDescriptor(): ReloadableDescriptor {
     spawn: {
       actorType: "plugin",
       pluginType: DESCRIPTOR_ID,
-      label: "Gaussian Splat (WebGPU)",
-      description: "Renders imported PLY Gaussian splats using the WebGPU pipeline.",
-      iconGlyph: "GW",
+      label: "Gaussian Splat",
+      description: "Renders imported PLY Gaussian splats using the active scene render engine.",
+      iconGlyph: "GS",
       fileExtensions: [".ply"]
     },
     createRuntime: ({ params }): GaussianSplatRuntime => ({
@@ -115,22 +116,22 @@ export function createGaussianSplatDescriptor(): ReloadableDescriptor {
     sceneHooks: {
       createObject() {
         const container = new THREE.Group();
-        container.name = "gsplat-webgpu-container";
+        container.name = "gsplat-container";
         const correctedRoot = new THREE.Group();
-        correctedRoot.name = "gsplat-webgpu-render-root";
+        correctedRoot.name = "gsplat-render-root";
         correctedRoot.rotation.copy(COORDINATE_CORRECTION_EULER);
         container.add(correctedRoot);
-        // Attach controller for load/render lifecycle
-        container.userData.splatController = new SplatController(correctedRoot);
+        container.userData.splatController = new UnifiedSplatController(correctedRoot);
         return container;
       },
       syncObject(context) {
         const container = context.object as THREE.Group;
-        const controller = container.userData.splatController as SplatController;
+        const controller = container.userData.splatController as UnifiedSplatController;
         if (controller) {
           const actor = context.actor as { id: string; params: Record<string, unknown> };
           controller.sync({
             actor,
+            state: context.state,
             object: context.object,
             setActorStatus: context.setActorStatus,
             readAssetBytes: context.readAssetBytes
@@ -139,7 +140,7 @@ export function createGaussianSplatDescriptor(): ReloadableDescriptor {
       },
       disposeObject({ object }) {
         const container = object as THREE.Group;
-        const controller = container.userData.splatController as SplatController | undefined;
+        const controller = container.userData.splatController as UnifiedSplatController | undefined;
         if (controller) {
           controller.dispose();
           container.userData.splatController = undefined;
@@ -159,12 +160,17 @@ export function createGaussianSplatDescriptor(): ReloadableDescriptor {
       }
     },
     status: {
-      build({ actor, runtimeStatus }) {
+      build({ actor, state, runtimeStatus }) {
         const a = actor as { params: Record<string, unknown> };
+        const appState = state as { assets?: Array<{ id: string; sourceFileName: string }> } | undefined;
         const rs = runtimeStatus as { values?: Record<string, unknown>; error?: string; updatedAtIso?: string } | undefined;
+        const assetId = typeof a.params.assetId === "string" ? a.params.assetId : "";
+        const asset = appState?.assets?.find((entry) => entry.id === assetId);
+        const warning = typeof rs?.values?.warning === "string" ? rs.values.warning : null;
         return [
-          { label: "Type", value: "Gaussian Splat (WebGPU)" },
-          { label: "Backend", value: rs?.values?.backend ?? "webgpu-tsl" },
+          { label: "Type", value: "Gaussian Splat" },
+          { label: "Asset", value: asset?.sourceFileName ?? (assetId ? "Missing asset reference" : "Not set") },
+          { label: "Backend", value: rs?.values?.backend ?? "n/a" },
           { label: "Load State", value: rs?.values?.loadState ?? "n/a" },
           { label: "Point Count", value: rs?.values?.pointCount ?? "n/a" },
           {
@@ -185,13 +191,18 @@ export function createGaussianSplatDescriptor(): ReloadableDescriptor {
           },
           { label: "Bounds Min (m)", value: rs?.values?.boundsMin ?? "n/a" },
           { label: "Bounds Max (m)", value: rs?.values?.boundsMax ?? "n/a" },
-          { label: "Projection", value: rs?.values?.projectionPrepass ? "compute pre-pass" : "vertex shader" },
-          { label: "Camera Near", value: rs?.values?.cameraNear ?? "n/a" },
-          { label: "Sort Mode", value: rs?.values?.sortMode ?? "n/a" },
-          { label: "Sort Dispatches", value: rs?.values?.sortDispatches ?? "n/a" },
-          { label: "Frames Since Sort", value: rs?.values?.framesSinceFullSort ?? "n/a" },
-          { label: "Sort Angle (rad)", value: rs?.values?.angleSinceSort ?? "n/a" },
-          { label: "Visible Chunks", value: rs?.values?.visibleChunks ?? "n/a" },
+          ...(rs?.values?.backend === "webgpu-tsl"
+            ? [
+                { label: "Projection", value: rs?.values?.projectionPrepass ? "compute pre-pass" : "vertex shader" },
+                { label: "Camera Near", value: rs?.values?.cameraNear ?? "n/a" },
+                { label: "Sort Mode", value: rs?.values?.sortMode ?? "n/a" },
+                { label: "Sort Dispatches", value: rs?.values?.sortDispatches ?? "n/a" },
+                { label: "Frames Since Sort", value: rs?.values?.framesSinceFullSort ?? "n/a" },
+                { label: "Sort Angle (rad)", value: rs?.values?.angleSinceSort ?? "n/a" },
+                { label: "Visible Chunks", value: rs?.values?.visibleChunks ?? "n/a" }
+              ]
+            : []),
+          ...(warning ? [{ label: "Warning", value: warning, tone: "warning" as const }] : []),
           {
             label: "Last Update",
             value: rs?.updatedAtIso ? new Date(rs.updatedAtIso).toLocaleString() : "n/a"

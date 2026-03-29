@@ -12,24 +12,12 @@ export function LeftPanel(props: LeftPanelProps) {
   const kernel = useKernel();
   usePluginRegistryRevision();
   const mode = useAppStore((store) => store.state.mode);
-  const actorIds = useAppStore((store) => store.state.scene.actorIds);
-  const actors = useAppStore((store) => store.state.actors);
   const readOnly = mode === "web-ro";
   const plugins = kernel.pluginApi.listPlugins();
-  const rootActorCount = actorIds.reduce((count, actorId) => (actors[actorId] ? count + 1 : count), 0);
-
-  const onDropSceneGraphSection = (event: React.DragEvent<HTMLElement>) => {
-    event.preventDefault();
-    const actorId = event.dataTransfer.getData("text/plain");
-    if (!actorId) {
-      return;
-    }
-    kernel.store.getState().actions.reorderActor(actorId, null, rootActorCount);
-  };
 
   return (
     <div className="left-panel">
-      <section className="panel-section" onDrop={onDropSceneGraphSection} onDragOver={(event) => event.preventDefault()}>
+      <section className="panel-section">
         <header>
           <h3>Scene Graph</h3>
           <div className="inline-actions">
