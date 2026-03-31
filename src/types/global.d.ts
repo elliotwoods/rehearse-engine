@@ -4,10 +4,10 @@ import type { BuildInfo } from "../app/buildVersion";
 declare global {
   interface Window {
     electronAPI?: ElectronApi;
-    __SIMULARCA_DEBUG__?: RendererDebugBridge;
+    __REHEARSE_ENGINE_DEBUG__?: RendererDebugBridge;
   }
 
-  const __SIMULARCA_BUILD_INFO__: BuildInfo;
+  const __REHEARSE_ENGINE_BUILD_INFO__: BuildInfo;
 }
 
 export {};

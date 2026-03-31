@@ -1,5 +1,5 @@
 {
-  "name": "@simularca/gaussian-splat-plugin",
+  "name": "@rehearse-engine/gaussian-splat-plugin",
   "version": "0.1.0",
   "private": true,
   "type": "module",

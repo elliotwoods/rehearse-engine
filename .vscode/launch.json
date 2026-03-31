@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Simularca: Desktop",
+      "name": "Rehearse Engine: Desktop",
       "type": "node",
       "request": "launch",
       "cwd": "${workspaceFolder}",
@@ -14,7 +14,7 @@
       "env": {
         "VITE_DEV_SERVER_URL": "http://localhost:5180"
       },
-      "preLaunchTask": "Simularca: Desktop Prereqs",
+      "preLaunchTask": "Rehearse Engine: Desktop Prereqs",
       "outFiles": [
         "${workspaceFolder}/dist-electron/**/*.js"
       ],
@@ -25,25 +25,25 @@
       "console": "integratedTerminal",
       "outputCapture": "std",
       "presentation": {
-        "group": "simularca",
+        "group": "rehearse-engine",
         "order": 1
       }
     },
     {
-      "name": "Simularca: Web",
+      "name": "Rehearse Engine: Web",
       "type": "pwa-chrome",
       "request": "launch",
-      "preLaunchTask": "Simularca: Web",
+      "preLaunchTask": "Rehearse Engine: Web",
       "url": "http://localhost:5180",
       "webRoot": "${workspaceFolder}",
       "sourceMaps": true,
       "presentation": {
-        "group": "simularca",
+        "group": "rehearse-engine",
         "order": 2
       }
     },
     {
-      "name": "Simularca: Web (No Task)",
+      "name": "Rehearse Engine: Web (No Task)",
       "type": "pwa-chrome",
       "request": "launch",
       "url": "http://localhost:5180",
@@ -56,14 +56,14 @@
   ],
   "compounds": [
     {
-      "name": "Simularca: Full Dev",
+      "name": "Rehearse Engine: Full Dev",
       "configurations": [
-        "Simularca: Desktop",
-        "Simularca: Web (No Task)"
+        "Rehearse Engine: Desktop",
+        "Rehearse Engine: Web (No Task)"
       ],
       "stopAll": true,
       "presentation": {
-        "group": "simularca",
+        "group": "rehearse-engine",
         "order": 3
       }
     }

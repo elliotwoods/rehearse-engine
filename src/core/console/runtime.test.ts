@@ -63,7 +63,7 @@ describe("console runtime", () => {
     }
     expect(result.result).toEqual({
       available: false,
-      backend: "webgl2",
+      backend: kernel.store.getState().state.scene.renderEngine,
       storeCamera: kernel.store.getState().state.camera
     });
   });

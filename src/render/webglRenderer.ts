@@ -277,7 +277,7 @@ export class WebGlViewport {
     void this.renderFrame()
       .catch((error) => {
         if (!this.disposed) {
-          console.warn("[simularca] WebGL2 render frame failed:", error);
+          console.warn("[rehearse-engine] WebGL2 render frame failed:", error);
         }
       })
       .finally(() => {

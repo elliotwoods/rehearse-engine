@@ -1,5 +1,5 @@
 {
-  "name": "@simularca/dxf-drawing-plugin",
+  "name": "@rehearse-engine/dxf-drawing-plugin",
   "version": "0.1.0",
   "private": true,
   "type": "module",

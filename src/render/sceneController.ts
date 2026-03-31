@@ -28,6 +28,10 @@ import type { BuiltDxfScene, ParsedDxfDocument } from "@/features/dxf/dxfTypes";
 import { PluginActorRuntimeController } from "@/features/plugins/pluginActorRuntimeController";
 import { tryParseSplatBinary } from "@/features/splats/splatBinaryFormat";
 import { getGaussianFilterMode, getGaussianFilterRegionActorIds } from "@/render/gaussianFilter";
+import {
+  environmentProbeCaptureIncompatibilityReason,
+  formatEnvironmentProbeSkippedWarning
+} from "@/render/environmentProbeCompatibility";
 import { MistVolumeController, type MistVolumeQualityMode } from "@/render/mistVolumeController";
 import { collectActorRenderOrder } from "@/render/sceneRenderOrder";
 import { pruneInvalidSceneGraph } from "@/render/sceneGraphUtils";
@@ -703,7 +707,7 @@ export class SceneController {
         const needsReload = assetId !== (this.meshAssetByActorId.get(actor.id) ?? "")
           || reloadToken !== (this.meshReloadTokenByActorId.get(actor.id) ?? 0);
         const _precheckDt = performance.now() - _tPrecheck;
-        if (_precheckDt > 5) this.warnPerformance("[simularca] mesh precheck slow:", _precheckDt.toFixed(1), "ms");
+        if (_precheckDt > 5) this.warnPerformance("[rehearse-engine] mesh precheck slow:", _precheckDt.toFixed(1), "ms");
         if (needsReload) {
           await this.syncMeshAsset(actor);
         }
@@ -734,7 +738,7 @@ export class SceneController {
       const _ta6 = performance.now();
       if (_ta6 - _ta0 > 50) {
         this.warnPerformance(
-          "[simularca] actor slow:", actor.actorType, actor.id,
+          "[rehearse-engine] actor slow:", actor.actorType, actor.id,
           "| clone:", (_ta1 - _ta0).toFixed(0), "ms",
           "| ensure:", (_ta2 - _ta1).toFixed(0), "ms",
           "| pluginRefresh:", (_ta2b - _ta2).toFixed(0), "ms",
@@ -768,7 +772,7 @@ export class SceneController {
       const dt = performance.now() - t0;
       if (dt > 100) {
         this.warnPerformance(
-          "[simularca] syncFromState slow:", dt.toFixed(0), "ms |",
+          "[rehearse-engine] syncFromState slow:", dt.toFixed(0), "ms |",
           "actorLoop:", (tB - tA).toFixed(0), "ms |",
           "parentSync:", (tC - tB).toFixed(0), "ms |",
           "orderSync:", (tC2 - tC).toFixed(0), "ms |",
@@ -1582,6 +1586,7 @@ export class SceneController {
     const actorIds = Array.isArray(actor.params.actorIds)
       ? actor.params.actorIds.filter((entry): entry is string => typeof entry === "string")
       : [];
+    const renderEngine = state.scene.renderEngine;
     const selectedActorSignatures = actorIds
       .map((actorId) => {
         const target = state.actors[actorId];
@@ -1600,6 +1605,17 @@ export class SceneController {
         });
       })
       .join("|");
+    const compatibilitySummary = actorIds
+      .map((actorId) => {
+        const target = state.actors[actorId];
+        if (!target) {
+          return `${actorId}:missing`;
+        }
+        const actorObject = this.actorObjects.get(actorId);
+        const reason = environmentProbeCaptureIncompatibilityReason(target, actorObject ?? null, renderEngine);
+        return `${actorId}:${reason ?? "ok"}`;
+      })
+      .join("|");
     return JSON.stringify({
       actor: {
         enabled: actor.enabled,
@@ -1608,8 +1624,10 @@ export class SceneController {
         resolution: actor.params.resolution,
         renderMode: actor.params.renderMode
       },
+      renderEngine,
       actorIds,
       selectedActorSignatures,
+      compatibilitySummary,
       manualToken
     });
   }
@@ -1629,8 +1647,11 @@ export class SceneController {
       ? actor.params.actorIds.filter((entry): entry is string => typeof entry === "string")
       : [];
     const captureActorIds = new Set(actorIds.filter((actorId) => state.actors[actorId]?.enabled));
+    const renderEngine = state.scene.renderEngine;
     const background = this.resolveEnvironmentProbeBackground(actor, captureActorIds, state);
     const previousVisibility = new Map<any, boolean>();
+    const skippedActors: Array<{ actorId: string; name: string; reason: string }> = [];
+    let compatibleCaptureActorCount = 0;
     const previousBackground = this.scene.background;
     const previousEnvironment = this.scene.environment;
     const renderReason =
@@ -1651,11 +1672,31 @@ export class SceneController {
           continue;
         }
         const targetActor = state.actors[actorId];
+        const incompatibilityReason = targetActor
+          ? environmentProbeCaptureIncompatibilityReason(targetActor, actorObject ?? null, renderEngine)
+          : null;
         const includeGeometry =
           captureActorIds.has(actorId)
           && targetActor?.enabled !== false
           && targetActor?.actorType !== "environment"
-          && targetActor?.actorType !== "environment-probe";
+          && targetActor?.actorType !== "environment-probe"
+          && incompatibilityReason === null;
+        if (
+          captureActorIds.has(actorId)
+          && targetActor?.enabled !== false
+          && targetActor?.actorType !== "environment"
+          && targetActor?.actorType !== "environment-probe"
+          && incompatibilityReason !== null
+        ) {
+          skippedActors.push({
+            actorId,
+            name: targetActor?.name ?? actorId,
+            reason: incompatibilityReason
+          });
+        }
+        if (includeGeometry) {
+          compatibleCaptureActorCount += 1;
+        }
         actorObject.visible = includeGeometry;
       }
 
@@ -1672,6 +1713,9 @@ export class SceneController {
       probeState.lastCaptureSignature = captureSignature;
       probeState.lastManualToken = manualToken;
       this.syncEnvironmentProbePreviewObject(actor);
+      const warning = formatEnvironmentProbeSkippedWarning(
+        skippedActors.map((entry) => ({ name: entry.name, reason: entry.reason }))
+      );
       this.kernel.store.getState().actions.setActorStatus(actor.id, {
         values: {
           loadState: "captured",
@@ -1680,7 +1724,10 @@ export class SceneController {
           previewFaces: Object.fromEntries(
             ENVIRONMENT_PROBE_FACE_KEYS.map((key, index) => [key, probeState.previewFaceUrls[index] ?? ""])
           ),
-          capturedActorCount: captureActorIds.size
+          capturedActorCount: compatibleCaptureActorCount,
+          skippedActorCount: skippedActors.length,
+          skippedActors: skippedActors.map((entry) => entry.name),
+          warning
         },
         updatedAtIso: new Date().toISOString()
       });
@@ -1822,7 +1869,7 @@ export class SceneController {
   }
 
   private buildAssetUrl(projectName: string, relativePath: string): string {
-    return `simularcaasset://${encodeURIComponent(projectName)}/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
+    return `rehearse-engine-asset://${encodeURIComponent(projectName)}/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
   }
 
   private loadCachedTexture(url: string, colorSpace: THREE.ColorSpace = THREE.LinearSRGBColorSpace): THREE.Texture {
@@ -2024,14 +2071,14 @@ export class SceneController {
       .join("|");
     const sig = JSON.stringify({ slots: materialSlots, override: materialId, mats: materialHash, environment: env.actorId });
     const _tsm1 = performance.now();
-    if (_tsm1 - _tsm0 > 10) this.warnPerformance("[simularca] syncMeshMaterials sig slow:", (_tsm1 - _tsm0).toFixed(0), "ms | slots:", Object.keys(materialSlots as object ?? {}).length);
+    if (_tsm1 - _tsm0 > 10) this.warnPerformance("[rehearse-engine] syncMeshMaterials sig slow:", (_tsm1 - _tsm0).toFixed(0), "ms | slots:", Object.keys(materialSlots as object ?? {}).length);
 
     if (sig === this.meshMaterialSigByActorId.get(actor.id)) return;
     this.meshMaterialSigByActorId.set(actor.id, sig);
     const _tsm2 = performance.now();
     this.reapplyMeshMaterials(actor);
     const _tsm3 = performance.now();
-    if (_tsm3 - _tsm2 > 5) this.warnPerformance("[simularca] reapplyMeshMaterials slow:", (_tsm3 - _tsm2).toFixed(0), "ms");
+    if (_tsm3 - _tsm2 > 5) this.warnPerformance("[rehearse-engine] reapplyMeshMaterials slow:", (_tsm3 - _tsm2).toFixed(0), "ms");
   }
 
   private createPrimitiveMesh(actor: ActorNode): any {
@@ -2699,7 +2746,7 @@ export class SceneController {
       .filter((part) => part.length > 0)
       .map((part) => encodeURIComponent(part))
       .join("/");
-    const url = `simularcaasset://${encodedProject}/${encodedPath}`;
+    const url = `rehearse-engine-asset://${encodedProject}/${encodedPath}`;
     // Defer "loading" status to a macrotask so the React re-render (useSyncExternalStore) does
     // not queue a microtask that runs before syncFromState's continuation microtask.
     const actorIdForLoading = actor.id;
@@ -2727,7 +2774,7 @@ export class SceneController {
       const _tAL0 = performance.now();
       this.applyMeshMaterials(actor, loadedObject, extension);
       const _tAL1 = performance.now();
-      if (_tAL1 - _tAL0 > 5) this.warnPerformance("[simularca] applyMeshMaterials slow:", (_tAL1 - _tAL0).toFixed(0), "ms");
+      if (_tAL1 - _tAL0 > 5) this.warnPerformance("[rehearse-engine] applyMeshMaterials slow:", (_tAL1 - _tAL0).toFixed(0), "ms");
       const bounds = new THREE.Box3().setFromObject(loadedObject);
       const size = new THREE.Vector3();
       bounds.getSize(size);
@@ -2781,7 +2828,7 @@ export class SceneController {
     };
 
     const onError = (error: unknown) => {
-      console.error("[simularca] ColladaLoader error for", url, error);
+      console.error("[rehearse-engine] ColladaLoader error for", url, error);
       const message = formatLoadError(error);
       this.kernel.store.getState().actions.setActorStatus(actor.id, {
         values: {

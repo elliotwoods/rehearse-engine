@@ -98,9 +98,9 @@ const DEFAULT_CAMERA_FLY_LOOK_SPEED = 1;
 const DEFAULT_CAMERA_FOV_DEGREES = 50;
 const DEFAULT_SLOW_FRAME_DIAGNOSTICS_ENABLED = false;
 const DEFAULT_SLOW_FRAME_DIAGNOSTICS_THRESHOLD_MS = 100;
-const CURVE_VERTEX_SELECT_EVENT = "simularca:curve-vertex-select";
-const NAVIGATE_BACK_REQUEST_EVENT = "simularca:navigate-back-request";
-const NAVIGATE_FORWARD_REQUEST_EVENT = "simularca:navigate-forward-request";
+const CURVE_VERTEX_SELECT_EVENT = "rehearse-engine:curve-vertex-select";
+const NAVIGATE_BACK_REQUEST_EVENT = "rehearse-engine:navigate-back-request";
+const NAVIGATE_FORWARD_REQUEST_EVENT = "rehearse-engine:navigate-forward-request";
 type CurveControlType = "anchor" | "handleIn" | "handleOut";
 const CURVE_HANDLE_MODE_OPTIONS = [
   {
@@ -2427,7 +2427,7 @@ export function InspectorPane() {
 
   const publishCurveVertexHover = useCallback((actorId: string | null, pointIndex: number | null): void => {
     window.dispatchEvent(
-      new CustomEvent("simularca:curve-vertex-hover", {
+      new CustomEvent("rehearse-engine:curve-vertex-hover", {
         detail: {
           actorId,
           pointIndex

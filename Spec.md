@@ -1,4 +1,4 @@
-# Simularca Spec
+# Rehearse Engine Spec
 
 ## 1. Purpose
 Build a pre-visualization simulation environment for kinetic artworks with a large interactive 3D viewport and fast local iteration.

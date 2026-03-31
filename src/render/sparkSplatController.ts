@@ -153,13 +153,7 @@ export class SparkSplatController {
       existingEntry && existingEntry.assetId === assetId && existingEntry.reloadToken === reloadToken && existingEntry.mesh;
     if (isLoaded) {
       this.applySparkRuntimeParams(existingEntry, actor);
-      this.reportLoadedStatus(
-        actor,
-        undefined,
-        undefined,
-        undefined,
-        this.kernel.store.getState().actions.setActorStatus
-      );
+      this.reportLoadedStatus(actor, undefined, undefined, undefined);
       return;
     }
 
@@ -223,7 +217,7 @@ export class SparkSplatController {
           }
         : null;
       this.entriesByActorId.set(actor.id, entry);
-      this.reportLoadedStatus(actor, asset.sourceFileName, pointCount, bounds, this.kernel.store.getState().actions.setActorStatus);
+      this.reportLoadedStatus(actor, asset.sourceFileName, pointCount, this.bounds);
       this.kernel.store.getState().actions.setStatus(
         `Gaussian splat loaded (Spark): ${asset.sourceFileName} | points: ${pointCount.toLocaleString()}`
       );
@@ -297,23 +291,22 @@ export class SparkSplatController {
     actor: ActorNode,
     assetFileName: string | undefined,
     pointCount: number | undefined,
-    bounds: { min: [number, number, number]; max: [number, number, number] } | null | undefined,
-    setActorStatus: (status: unknown) => void
+    bounds: { min: [number, number, number]; max: [number, number, number] } | null | undefined
   ): void {
     const warning = readUnsupportedWarning(actor);
     if (warning === this.lastWarning && assetFileName === undefined) {
       return;
     }
     this.lastWarning = warning;
-    setActorStatus({
+    this.kernel.store.getState().actions.setActorStatus(actor.id, {
       values: {
         backend: "spark-webgl",
         loadState: "loaded",
         assetFileName,
         pointCount: pointCount ?? this.pointCount,
         transparencyMode: isSparkStochasticDepthEnabled(actor) ? "stochastic-depth" : "alpha-blended",
-        boundsMin: bounds ? [bounds.min.x, bounds.min.y, bounds.min.z] : this.bounds?.min ?? undefined,
-        boundsMax: bounds ? [bounds.max.x, bounds.max.y, bounds.max.z] : this.bounds?.max ?? undefined,
+        boundsMin: bounds?.min ?? this.bounds?.min ?? undefined,
+        boundsMax: bounds?.max ?? this.bounds?.max ?? undefined,
         warning
       },
       updatedAtIso: new Date().toISOString()

@@ -1,5 +1,5 @@
 {
-  "name": "@simularca/beam-crossover-plugin",
+  "name": "@rehearse-engine/beam-crossover-plugin",
   "version": "0.1.0",
   "private": true,
   "type": "module",

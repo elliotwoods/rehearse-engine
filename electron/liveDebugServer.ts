@@ -127,7 +127,7 @@ async function executeRendererCommand(request: RendererDebugExecuteRequest): Pro
   try {
     const result = (await targetWindow.webContents.executeJavaScript(
       `(() => {
-        const bridge = window.__SIMULARCA_DEBUG__;
+        const bridge = window.__REHEARSE_ENGINE_DEBUG__;
         if (!bridge || typeof bridge.${methodName} !== "function") {
           return {
             ok: false,
@@ -154,7 +154,7 @@ async function executeRendererSessionInfo(): Promise<unknown> {
   try {
     return await targetWindow.webContents.executeJavaScript(
       `(() => {
-        const bridge = window.__SIMULARCA_DEBUG__;
+        const bridge = window.__REHEARSE_ENGINE_DEBUG__;
         if (!bridge || typeof bridge.sessionInfo !== "function") {
           return null;
         }

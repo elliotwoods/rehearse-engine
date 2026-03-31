@@ -33,13 +33,13 @@ if (IS_DEV) {
   process.env.ELECTRON_DISABLE_SECURITY_WARNINGS = "true";
 }
 
-const APP_DISPLAY_NAME = "Simularca";
+const APP_DISPLAY_NAME = "Rehearse Engine";
 const DEFAULTS_FILE_NAME = "defaults.json";
 const LEGACY_PROJECT_FILE_NAME = "session.json";
 const SNAPSHOT_DIRECTORY_NAME = "snapshots";
 const RUNTIME_LOG_FILE_NAME = "electron-runtime.log";
 const WINDOW_STATE_FILE_NAME = "window-state.json";
-const ASSET_PROTOCOL = "simularcaasset";
+const ASSET_PROTOCOL = "rehearse-engine-asset";
 const DEFAULT_WINDOW_WIDTH = 1680;
 const DEFAULT_WINDOW_HEIGHT = 960;
 const MIN_WINDOW_WIDTH = 1200;
@@ -1676,7 +1676,7 @@ function registerIpcHandlers(): void {
       }
 
       // Rewrite <init_from> paths in the DAE XML so ColladaLoader can resolve textures via the
-      // simularcaasset:// protocol. The DAE is stored in assets/generic/, images in assets/image/,
+      // rehearse-engine-asset:// protocol. The DAE is stored in assets/generic/, images in assets/image/,
       // so the relative path from the DAE to each image is ../image/<targetName>.
       let patchedDaeText = daeText;
       for (const match of initFromMatches) {

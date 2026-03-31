@@ -31,7 +31,7 @@ function exactVisibleIds(
 
   for (let index = 0; index < count; index += 1) {
     const i3 = index * 3;
-    worldPosition.set(positions[i3], positions[i3 + 1], positions[i3 + 2]).applyMatrix4(modelWorldMatrix);
+    worldPosition.set(positions[i3]!, positions[i3 + 1]!, positions[i3 + 2]!).applyMatrix4(modelWorldMatrix);
     clipPosition.set(worldPosition.x, worldPosition.y, worldPosition.z, 1).applyMatrix4(viewProjection);
     if (clipPosition.w === 0) {
       continue;
@@ -74,9 +74,9 @@ function manualChunkDataForPoints(
   const chunkIds = new Uint16Array(count);
   for (let index = 0; index < count; index += 1) {
     const i3 = index * 3;
-    const x = positions[i3];
-    const y = positions[i3 + 1];
-    const z = positions[i3 + 2];
+    const x = positions[i3]!;
+    const y = positions[i3 + 1]!;
+    const z = positions[i3 + 2]!;
     chunks.push({
       min: [x - halfExtent, y - halfExtent, z - halfExtent] as [number, number, number],
       max: [x + halfExtent, y + halfExtent, z + halfExtent] as [number, number, number]

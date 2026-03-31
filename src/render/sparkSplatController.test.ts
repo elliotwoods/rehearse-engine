@@ -101,8 +101,19 @@ describe("spark stochastic depth helpers", () => {
   });
 
   it("reports a warning when WebGL2 ignores the requested color transform", () => {
-    const controller = new SparkSplatController({} as any, {} as any);
     const setActorStatus = vi.fn();
+    const controller = new SparkSplatController(
+      {
+        store: {
+          getState: () => ({
+            actions: {
+              setActorStatus
+            }
+          })
+        }
+      } as any,
+      {} as any
+    );
 
     (controller as any).pointCount = 123;
     (controller as any).bounds = {
@@ -117,12 +128,12 @@ describe("spark stochastic depth helpers", () => {
       {
         min: [0, 0, 0],
         max: [1, 1, 1]
-      },
-      setActorStatus
+      }
     );
 
     expect(setActorStatus).toHaveBeenCalledTimes(1);
     expect(setActorStatus).toHaveBeenCalledWith(
+      "actor.spark",
       expect.objectContaining({
         values: expect.objectContaining({
           backend: "spark-webgl",

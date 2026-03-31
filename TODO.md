@@ -106,3 +106,8 @@ Use local filesystem default location in AppData, etc for:
 * Recent projects
 
 Projects should live in their own folders. Also allow for filetype association
+
+# Camera Path
+
+* Show seconds ticks along the camera path
+* Better controls in the inspector for controlling keyframes (consider keyframe view at bottom of viewport)

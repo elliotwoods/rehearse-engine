@@ -10,7 +10,7 @@ import { ConsolePanel } from "@/ui/panels/ConsolePanel";
 import { PluginViewPanel } from "@/ui/panels/PluginViewPanel";
 import { focusPluginViewTab, listPluginViewTabs, syncPluginViewTabs } from "@/ui/pluginViewLayout";
 
-const LAYOUT_STORAGE_KEY = "simularca:flex-layout:v1";
+const LAYOUT_STORAGE_KEY = "rehearse-engine:flex-layout:v1";
 
 type JsonLike = Record<string, unknown>;
 

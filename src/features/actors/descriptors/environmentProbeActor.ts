@@ -42,18 +42,27 @@ export const environmentProbeActorDescriptor: ReloadableDescriptor<EnvironmentPr
   },
   status: {
     build({ actor, runtimeStatus }) {
-      const capturedActors = Array.isArray(actor.params.actorIds)
+      const selectedActors = Array.isArray(actor.params.actorIds)
         ? actor.params.actorIds.filter((entry): entry is string => typeof entry === "string")
         : [];
+      const capturedActors =
+        typeof runtimeStatus?.values.capturedActorCount === "number"
+          ? runtimeStatus.values.capturedActorCount
+          : selectedActors.length;
       return [
         { label: "Type", value: "Environment Probe" },
-        { label: "Captured Actors", value: capturedActors.length },
+        { label: "Captured Actors", value: capturedActors },
+        { label: "Selected Actors", value: selectedActors.length },
+        { label: "Skipped Actors", value: runtimeStatus?.values.skippedActorCount ?? 0 },
         { label: "Face Resolution", value: typeof actor.params.resolution === "number" ? actor.params.resolution : 256 },
         { label: "Preview", value: readPreview(actor.params.preview) },
         { label: "Render Mode", value: readRenderMode(actor.params.renderMode) },
         { label: "Load State", value: runtimeStatus?.values.loadState ?? "idle" },
         { label: "Last Reason", value: runtimeStatus?.values.lastRenderReason ?? "n/a" },
         { label: "Background", value: runtimeStatus?.values.backgroundSourceName ?? "none" },
+        ...(typeof runtimeStatus?.values.warning === "string"
+          ? [{ label: "Warning", value: runtimeStatus.values.warning, tone: "warning" as const }]
+          : []),
         { label: "Error", value: runtimeStatus?.error ?? null, tone: "error" }
       ];
     }

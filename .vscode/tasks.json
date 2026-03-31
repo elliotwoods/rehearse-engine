@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Simularca: Web",
+      "label": "Rehearse Engine: Web",
       "type": "shell",
       "command": "npm run dev:web",
       "options": {
@@ -10,7 +10,7 @@
       },
       "isBackground": true,
       "problemMatcher": {
-        "owner": "simularca-web",
+        "owner": "rehearse-engine-web",
         "pattern": {
           "regexp": "."
         },
@@ -22,11 +22,11 @@
       "presentation": {
         "reveal": "always",
         "panel": "dedicated",
-        "group": "simularca"
+        "group": "rehearse-engine"
       }
     },
     {
-      "label": "Simularca: Plugins",
+      "label": "Rehearse Engine: Plugins",
       "type": "shell",
       "command": "npm run dev:plugins",
       "options": {
@@ -34,7 +34,7 @@
       },
       "isBackground": true,
       "problemMatcher": {
-        "owner": "simularca-plugins",
+        "owner": "rehearse-engine-plugins",
         "pattern": {
           "regexp": "."
         },
@@ -46,11 +46,11 @@
       "presentation": {
         "reveal": "always",
         "panel": "dedicated",
-        "group": "simularca"
+        "group": "rehearse-engine"
       }
     },
     {
-      "label": "Simularca: Electron Compile Watch",
+      "label": "Rehearse Engine: Electron Compile Watch",
       "type": "shell",
       "command": "npx tsc -p tsconfig.electron.json --watch --preserveWatchOutput",
       "options": {
@@ -61,15 +61,15 @@
       "presentation": {
         "reveal": "always",
         "panel": "dedicated",
-        "group": "simularca"
+        "group": "rehearse-engine"
       }
     },
     {
-      "label": "Simularca: Desktop Prereqs",
+      "label": "Rehearse Engine: Desktop Prereqs",
       "dependsOn": [
-        "Simularca: Plugins",
-        "Simularca: Web",
-        "Simularca: Electron Compile Watch"
+        "Rehearse Engine: Plugins",
+        "Rehearse Engine: Web",
+        "Rehearse Engine: Electron Compile Watch"
       ],
       "dependsOrder": "parallel",
       "problemMatcher": []

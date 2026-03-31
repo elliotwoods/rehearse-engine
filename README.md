@@ -1,8 +1,8 @@
-# Simularca
+# Rehearse Engine
 
 Desktop-first simulation environment for kinetic art pre-visualization.
 
-![Simularca screenshot](./screenshot.png)
+![Rehearse Engine screenshot](./screenshot.png)
 
 ## Stack
 - Electron main process + Vite/React renderer + TypeScript

@@ -1,7 +1,7 @@
-# Claude Code — Simularca Development Guidelines
+# Claude Code - Rehearse Engine Development Guidelines
 
 ## Live Session Debugging
-- When Simularca is running in local Electron dev mode, prefer the live debug bridge over asking the user for manual DevTools snippets.
+- When Rehearse Engine is running in local Electron dev mode, prefer the live debug bridge over asking the user for manual DevTools snippets.
 - Start with `logs/codex-debug-session.json`, then use `node scripts/debug-session.mjs ...`.
 - Agent-facing instructions live in `AGENTS.md`.
 - Full bridge details and examples live in `docs/live-debug-bridge.md`.
@@ -25,10 +25,10 @@ coherence angle threshold, skip frame count) by observing the inspector in real 
 ### Incremental Optimization Testing
 When implementing GPU/rendering pipeline optimizations:
 - Apply **one change at a time** and test before moving to the next
-- Never combine geometry type changes (e.g., instanced → flat draw), shader
+- Never combine geometry type changes (e.g., instanced -> flat draw), shader
   restructuring, and sort algorithm changes in a single commit
 - Keep the working version accessible (either as a fallback code path or in git)
-- If a change produces a blank screen, revert it immediately — don't try to debug
+- If a change produces a blank screen, revert it immediately - don't try to debug
   on top of multiple simultaneous changes
 
 ### Three.js TSL (WebGPU) Limitations Encountered

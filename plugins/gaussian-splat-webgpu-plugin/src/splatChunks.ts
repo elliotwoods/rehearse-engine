@@ -8,7 +8,7 @@
  */
 
 import * as THREE from "three";
-import { WebGLCoordinateSystem } from "three";
+import { WebGLCoordinateSystem, type CoordinateSystem } from "three";
 
 export interface SplatChunk {
   /** Model-space local AABB min (already expanded by splat extent) */
@@ -31,9 +31,9 @@ const MIN_EXTENT = 0.001;
 const SPLAT_SIGMA_EXTENT = 3.0;
 
 function splatExtent(scales: Float32Array, index3: number): number {
-  const sx = Math.abs(scales[index3]);
-  const sy = Math.abs(scales[index3 + 1]);
-  const sz = Math.abs(scales[index3 + 2]);
+  const sx = Math.abs(scales[index3]!);
+  const sy = Math.abs(scales[index3 + 1]!);
+  const sz = Math.abs(scales[index3 + 2]!);
   return Math.max(sx, sy, sz) * SPLAT_SIGMA_EXTENT;
 }
 
@@ -43,9 +43,9 @@ function chunkForIndices(indices: readonly number[], positions: Float32Array, sc
 
   for (const idx of indices) {
     const i3 = idx * 3;
-    const x = positions[i3];
-    const y = positions[i3 + 1];
-    const z = positions[i3 + 2];
+    const x = positions[i3]!;
+    const y = positions[i3 + 1]!;
+    const z = positions[i3 + 2]!;
     const extent = splatExtent(scales, i3);
 
     minX = Math.min(minX, x - extent);
@@ -96,9 +96,9 @@ export function buildChunks(
   let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
   for (let i = 0; i < count; i += 1) {
     const i3 = i * 3;
-    const x = positions[i3];
-    const y = positions[i3 + 1];
-    const z = positions[i3 + 2];
+    const x = positions[i3]!;
+    const y = positions[i3 + 1]!;
+    const z = positions[i3 + 2]!;
     if (x < minX) minX = x;
     if (y < minY) minY = y;
     if (z < minZ) minZ = z;
@@ -131,9 +131,9 @@ export function buildChunks(
 
   for (let i = 0; i < count; i += 1) {
     const i3 = i * 3;
-    const x = positions[i3];
-    const y = positions[i3 + 1];
-    const z = positions[i3 + 2];
+    const x = positions[i3]!;
+    const y = positions[i3 + 1]!;
+    const z = positions[i3 + 2]!;
     const gx = Math.max(0, Math.min(gridX - 1, Math.floor((x - minX) / cellX)));
     const gy = Math.max(0, Math.min(gridY - 1, Math.floor((y - minY) / cellY)));
     const gz = Math.max(0, Math.min(gridZ - 1, Math.floor((z - minZ) / cellZ)));
@@ -172,14 +172,14 @@ function setChunkCorners(chunk: SplatChunk): void {
   const [minX, minY, minZ] = chunk.min;
   const [maxX, maxY, maxZ] = chunk.max;
 
-  _chunkCorners[0].set(minX, minY, minZ);
-  _chunkCorners[1].set(minX, minY, maxZ);
-  _chunkCorners[2].set(minX, maxY, minZ);
-  _chunkCorners[3].set(minX, maxY, maxZ);
-  _chunkCorners[4].set(maxX, minY, minZ);
-  _chunkCorners[5].set(maxX, minY, maxZ);
-  _chunkCorners[6].set(maxX, maxY, minZ);
-  _chunkCorners[7].set(maxX, maxY, maxZ);
+  _chunkCorners[0]!.set(minX, minY, minZ);
+  _chunkCorners[1]!.set(minX, minY, maxZ);
+  _chunkCorners[2]!.set(minX, maxY, minZ);
+  _chunkCorners[3]!.set(minX, maxY, maxZ);
+  _chunkCorners[4]!.set(maxX, minY, minZ);
+  _chunkCorners[5]!.set(maxX, minY, maxZ);
+  _chunkCorners[6]!.set(maxX, maxY, minZ);
+  _chunkCorners[7]!.set(maxX, maxY, maxZ);
 }
 
 function intersectsFrustumAsObb(chunk: SplatChunk, modelWorldMatrix: THREE.Matrix4): boolean {
@@ -221,16 +221,14 @@ export function updateChunkVisibility(
 ): number {
   const { chunks } = chunkData;
   const numChunks = chunks.length;
+  const coordinateSystem: CoordinateSystem = camera.coordinateSystem ?? WebGLCoordinateSystem;
 
   _projViewMatrix.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
-  _frustum.setFromProjectionMatrix(
-    _projViewMatrix,
-    (camera.coordinateSystem as number | undefined) ?? WebGLCoordinateSystem
-  );
+  _frustum.setFromProjectionMatrix(_projViewMatrix, coordinateSystem);
 
   let visibleCount = 0;
   for (let i = 0; i < numChunks; i += 1) {
-    if (intersectsFrustumAsObb(chunks[i], modelWorldMatrix)) {
+    if (intersectsFrustumAsObb(chunks[i]!, modelWorldMatrix)) {
       outVisibility[i] = 1;
       visibleCount += 1;
     } else {
