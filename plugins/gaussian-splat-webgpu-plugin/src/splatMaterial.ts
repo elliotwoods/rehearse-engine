@@ -15,6 +15,7 @@ import * as THREE from "three";
 import { NodeMaterial, StorageBufferAttribute } from "three/webgpu";
 import {
   Fn,
+  globalId,
   vec2,
   vec3,
   vec4,
@@ -34,9 +35,15 @@ import {
   cos,
   sin,
   exp,
+  pow,
   select
 } from "three/tsl";
 import { MIN_PERSPECTIVE_PROJECTION_DEPTH } from "./projectionDepth";
+
+const COLOR_SPACE_LINEAR = 0;
+const COLOR_SPACE_SRGB = 1;
+const COLOR_SPACE_IPHONE_SDR = 2;
+const COLOR_SPACE_APPLE_LOG = 3;
 
 /**
  * Storage buffer data needed by the material.
@@ -45,6 +52,7 @@ export interface SplatBuffers {
   positions: StorageBufferAttribute;
   covA: StorageBufferAttribute; // [c00, c01, c02] per splat
   covB: StorageBufferAttribute; // [c11, c12, c22] per splat
+  sourceColors: StorageBufferAttribute; // original [r, g, b, opacity] per splat
   colors: StorageBufferAttribute; // [r, g, b, opacity] per splat
   sortedIndices: StorageBufferAttribute;
   // Optional: chunk-based frustum culling buffers
@@ -63,6 +71,7 @@ export interface SplatBuffers {
 export interface SplatUniforms {
   opacity: { value: number };
   brightness: { value: number };
+  colorInputSpace: { value: number };
   viewportSize: { value: THREE.Vector2 };
   focalX: { value: number };
   focalY: { value: number };
@@ -74,6 +83,7 @@ export interface SplatUniforms {
 export interface SplatMaterialResult {
   material: NodeMaterial;
   uniforms: SplatUniforms;
+  colorRewriteNode: any;
 }
 
 export function createSplatMaterial(
@@ -84,6 +94,7 @@ export function createSplatMaterial(
 ): SplatMaterialResult {
   const uOpacity = uniform(1.0);
   const uBrightness = uniform(1.0);
+  const uColorInputSpace = uniform(COLOR_SPACE_SRGB);
   const uViewportSize = uniform(new THREE.Vector2(1920, 1080));
   const uFocalX = uniform(1.0);
   const uFocalY = uniform(1.0);
@@ -95,6 +106,7 @@ export function createSplatMaterial(
   const hasPrepass = !!(buffers.ellipseA && buffers.ellipseB);
 
   // Storage buffer nodes shared by both paths
+  const sourceColorsStorage: any = storage(buffers.sourceColors, "vec4", count).toReadOnly();
   const colorsStorage: any = storage(buffers.colors, "vec4", count);
   const indicesCount = paddedCount ?? count;
   const sortedIndicesStorage: any = storage(buffers.sortedIndices, "uint", indicesCount);
@@ -106,6 +118,64 @@ export function createSplatMaterial(
   const vValid: any = varyingProperty("float", "vValid");
 
   let vertexNode: any;
+
+  const colorSpaceNode = uColorInputSpace;
+  const srgbToLinearNode = (channel: any): any =>
+    select(
+      channel.lessThanEqual(float(0.04045)),
+      channel.div(float(12.92)),
+      pow(channel.add(float(0.055)).div(float(1.055)), float(2.4))
+    );
+  const appleLogDecodeNode = (channel: any): any => {
+    const r0 = float(-0.05641088);
+    const rt = float(0.01);
+    const c = float(47.28711236);
+    const beta = float(0.00964052);
+    const gamma = float(0.08550479);
+    const delta = float(0.69336945);
+    const pt = c.mul(rt.sub(r0).mul(rt.sub(r0)));
+    const linearSegment = channel.greaterThanEqual(pt);
+    const encoded = pow(float(2.0), channel.sub(delta).div(gamma)).sub(beta);
+    const logDecoded = sqrt(max(channel.div(c), float(0.0))).add(r0);
+    return select(channel.greaterThanEqual(float(0.0)), select(linearSegment, encoded, logDecoded), r0);
+  };
+  const linearizeCapturedColor = (rgb: any): any => {
+    const srgbDecoded = vec3(
+      srgbToLinearNode(rgb.x),
+      srgbToLinearNode(rgb.y),
+      srgbToLinearNode(rgb.z)
+    );
+    const appleLinear2020 = vec3(
+      appleLogDecodeNode(rgb.x),
+      appleLogDecodeNode(rgb.y),
+      appleLogDecodeNode(rgb.z)
+    );
+    const appleDecoded = vec3(
+      float(1.6604962191478271).mul(appleLinear2020.x).sub(float(0.5876564949750909).mul(appleLinear2020.y)).sub(float(0.0728397241727355).mul(appleLinear2020.z)),
+      float(-0.12454709558601268).mul(appleLinear2020.x).add(float(1.132895151076045).mul(appleLinear2020.y)).sub(float(0.008348055490032559).mul(appleLinear2020.z)),
+      float(-0.01815076335490582).mul(appleLinear2020.x).sub(float(0.1005973716857425).mul(appleLinear2020.y)).add(float(1.1187481346535225).mul(appleLinear2020.z))
+    );
+    return select(
+      colorSpaceNode.equal(float(COLOR_SPACE_LINEAR)),
+      rgb,
+      select(
+        colorSpaceNode.equal(float(COLOR_SPACE_SRGB)),
+        srgbDecoded,
+        select(
+          colorSpaceNode.equal(float(COLOR_SPACE_IPHONE_SDR)),
+          srgbDecoded,
+          appleDecoded
+        )
+      )
+    );
+  };
+  const colorRewriteFn = Fn(() => {
+    const idx: any = globalId.x;
+    const source: any = sourceColorsStorage.element(idx);
+    const linear = linearizeCapturedColor(vec3(source.x, source.y, source.z));
+    colorsStorage.element(idx).assign(vec4(linear.x, linear.y, linear.z, source.w));
+  });
+  const colorRewriteNode = colorRewriteFn().compute(count, [64]);
 
   if (hasPrepass) {
     // ---- Pre-pass path: lightweight vertex shader reads precomputed ellipse data ----
@@ -363,12 +433,14 @@ export function createSplatMaterial(
     uniforms: {
       opacity: uOpacity as unknown as { value: number },
       brightness: uBrightness as unknown as { value: number },
+      colorInputSpace: uColorInputSpace as unknown as { value: number },
       viewportSize: uViewportSize as unknown as { value: THREE.Vector2 },
       focalX: uFocalX as unknown as { value: number },
       focalY: uFocalY as unknown as { value: number },
       cameraNear: uCameraNear as unknown as { value: number },
       sizeScale: uSizeScale as unknown as { value: number },
       isOrthographic: uIsOrthographic as unknown as { value: number }
-    }
+    },
+    colorRewriteNode
   };
 }

@@ -1,5 +1,6 @@
 # Interface
 
+
 ## Can be improved
 
 e.g. made richer, more interactive, more interated
@@ -97,3 +98,11 @@ Better transport controls
 Consider showing time at the bottom of the viewport (e.g. with keyframes, and skipping affects total time)
 Option of 'timeline mode' and 'continous mode'
 
+# Filesystem
+
+Use local filesystem default location in AppData, etc for:
+
+* Window layout
+* Recent projects
+
+Projects should live in their own folders. Also allow for filetype association

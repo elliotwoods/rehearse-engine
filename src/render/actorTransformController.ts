@@ -60,7 +60,6 @@ export class ActorTransformController {
       this.applyTransformChange();
     });
 
-    this.sceneController.scene.add(this.transformHelper);
     this.domElement.addEventListener("pointerdown", this.onPointerDownCapture, true);
     this.domElement.addEventListener("pointerup", this.onPointerUpCapture, true);
     window.addEventListener(CURVE_VERTEX_SELECT_EVENT, this.onCurveVertexSelect as EventListener);
@@ -134,6 +133,7 @@ export class ActorTransformController {
       this.hideControls();
       return;
     }
+    this.ensureTransformHelperAttached();
 
     const signature = JSON.stringify({
       actorId: selectedActor.id,
@@ -168,6 +168,7 @@ export class ActorTransformController {
 
   private hideControls(clearActorId = true): void {
     this.transformControls.detach();
+    this.transformHelper.parent?.remove(this.transformHelper);
     if (clearActorId) {
       this.activeActorId = null;
       this.activeSignature = "";
@@ -285,5 +286,13 @@ export class ActorTransformController {
 
   private hasActiveCurveControlSelectionFor(actorId: string): boolean {
     return this.activeCurveSelection?.actorId === actorId && typeof this.activeCurveSelection.pointIndex === "number";
+  }
+
+  private ensureTransformHelperAttached(): void {
+    if (this.transformHelper.parent === this.sceneController.scene) {
+      return;
+    }
+    this.transformHelper.parent?.remove(this.transformHelper);
+    this.sceneController.scene.add(this.transformHelper);
   }
 }

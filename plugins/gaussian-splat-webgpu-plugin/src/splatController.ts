@@ -45,10 +45,10 @@ function nextPowerOfTwo(n: number): number {
   return p;
 }
 
-/** Convert a single sRGB channel value [0,1] to linear light [0,1]. */
-function srgbToLinear(c: number): number {
-  return c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-}
+const COLOR_SPACE_LINEAR = 0;
+const COLOR_SPACE_SRGB = 1;
+const COLOR_SPACE_IPHONE_SDR = 2;
+const COLOR_SPACE_APPLE_LOG = 3;
 
 /** Context shape passed from syncObject (matches plugin SceneHookContext subset). */
 interface SyncContext {
@@ -75,6 +75,8 @@ export class SplatController {
 
   // GPU sorting state
   private gpuSorter: GpuSorter | null = null;
+  private colorRewriteNode: any = null;
+  private colorRewriteDirty = false;
 
   // Compute pre-pass for Cov2D projection (runs 1× per splat instead of 4× in vertex shader)
   private splatProjection: SplatProjection | null = null;
@@ -114,6 +116,7 @@ export class SplatController {
     const scaleFactor = typeof params.scaleFactor === "number" ? params.scaleFactor : 1;
     const opacity = typeof params.opacity === "number" ? params.opacity : 1;
     const brightness = typeof params.brightness === "number" ? params.brightness : 1;
+    const colorInputSpace = typeof params.colorInputSpace === "string" ? params.colorInputSpace : "srgb";
     const splatSizeScale = typeof params.splatSizeScale === "number" ? params.splatSizeScale : 1;
 
     // Save reference for per-frame status updates
@@ -138,7 +141,7 @@ export class SplatController {
 
     // Update uniforms if mesh is live
     if (this.mesh && this.uniforms) {
-      this.updateUniforms(opacity, brightness, scaleFactor, splatSizeScale);
+      this.updateUniforms(opacity, brightness, scaleFactor, splatSizeScale, colorInputSpace);
     }
   }
 
@@ -230,19 +233,22 @@ export class SplatController {
         covBData[i4 + 3] = 0;           // padding
       }
 
-      // Pack colors + per-splat opacity into vec4
-      // PLY SH colors are in sRGB space (0.5 + SH_C0 * dc, clamped [0,1]).
-      // The material outputs to colorNode which Three.js treats as linear,
-      // and renderOutput() applies sRGB encoding. Convert sRGB→linear here
-      // to avoid double-gamma encoding.
+      // Pack colors + per-splat opacity into vec4.
+      // Color-space conversion is applied in the GPU shader so the selected
+      // input space can be changed at runtime without rebuilding buffers.
+      const sourceColorsData = new Float32Array(count * 4);
       const colorsData = new Float32Array(count * 4);
       for (let i = 0; i < count; i++) {
         const i3 = i * 3;
         const i4 = i * 4;
-        colorsData[i4] = srgbToLinear(data.colors[i3]);
-        colorsData[i4 + 1] = srgbToLinear(data.colors[i3 + 1]);
-        colorsData[i4 + 2] = srgbToLinear(data.colors[i3 + 2]);
-        colorsData[i4 + 3] = data.opacities[i]; // opacity is linear
+        sourceColorsData[i4] = data.colors[i3];
+        sourceColorsData[i4 + 1] = data.colors[i3 + 1];
+        sourceColorsData[i4 + 2] = data.colors[i3 + 2];
+        sourceColorsData[i4 + 3] = data.opacities[i];
+        colorsData[i4] = data.colors[i3];
+        colorsData[i4 + 1] = data.colors[i3 + 1];
+        colorsData[i4 + 2] = data.colors[i3 + 2];
+        colorsData[i4 + 3] = data.opacities[i]; // overwritten by compute rewrite
       }
 
       // Identity sort order, padded to next power of 2 for bitonic sort
@@ -275,6 +281,7 @@ export class SplatController {
         positions: positionsAttr,
         covA: new StorageBufferAttribute(covAData, 4),
         covB: new StorageBufferAttribute(covBData, 4),
+        sourceColors: new StorageBufferAttribute(sourceColorsData, 4),
         colors: new StorageBufferAttribute(colorsData, 4),
         sortedIndices: sortedIndicesAttr,
         chunkIds: chunkIdsAttr,
@@ -306,6 +313,8 @@ export class SplatController {
         const result = createSplatMaterial(buffers, count, paddedCount, numChunks);
         material = result.material;
         uniforms = result.uniforms;
+        this.colorRewriteNode = result.colorRewriteNode;
+        this.colorRewriteDirty = true;
         gpuSorter = new GpuSorter(
           positionsAttr,
           sortedIndicesAttr,
@@ -436,6 +445,11 @@ export class SplatController {
       this.uniforms.viewportSize.value.set(size.x, size.y);
     }
 
+    if (this.colorRewriteNode && this.colorRewriteDirty) {
+      renderer.compute(this.colorRewriteNode);
+      this.colorRewriteDirty = false;
+    }
+
     // Extract focal lengths from the camera's projection matrix
     // For a perspective camera:
     //   projectionMatrix[0] = 2n / (r-l)  ≈  2 * focalX / width
@@ -542,16 +556,41 @@ export class SplatController {
   // Uniform updates
   // ---------------------------------------------------------------------------
 
-  private updateUniforms(opacity: number, brightness: number, scaleFactor: number, splatSizeScale: number): void {
+  private updateUniforms(
+    opacity: number,
+    brightness: number,
+    scaleFactor: number,
+    splatSizeScale: number,
+    colorInputSpace: string
+  ): void {
     if (!this.uniforms || !this.mesh) return;
 
     this.uniforms.opacity.value = Math.max(0, Math.min(1, opacity));
     this.uniforms.brightness.value = Math.max(0, brightness);
     this.uniforms.sizeScale.value = Math.max(0.01, splatSizeScale);
+    const colorCode = this.parseColorInputSpaceCode(colorInputSpace);
+    if (this.uniforms.colorInputSpace.value !== colorCode) {
+      this.uniforms.colorInputSpace.value = colorCode;
+      this.colorRewriteDirty = true;
+    }
     this.currentSplatSizeScale = Math.max(0.01, splatSizeScale);
 
     const safeScale = Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1;
     this.mesh.scale.setScalar(safeScale);
+  }
+
+  private parseColorInputSpaceCode(value: string): number {
+    switch (value) {
+      case "linear":
+        return COLOR_SPACE_LINEAR;
+      case "iphone-sdr":
+        return COLOR_SPACE_IPHONE_SDR;
+      case "apple-log":
+        return COLOR_SPACE_APPLE_LOG;
+      case "srgb":
+      default:
+        return COLOR_SPACE_SRGB;
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -570,6 +609,8 @@ export class SplatController {
     }
     this.buffers = null;
     this.uniforms = null;
+    this.colorRewriteNode = null;
+    this.colorRewriteDirty = false;
     this.pointCount = 0;
     this.bounds = null;
     this.chunkData = null;

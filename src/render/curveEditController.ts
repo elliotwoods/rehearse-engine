@@ -127,7 +127,6 @@ export class CurveEditController {
       this.applyControlChange();
     });
 
-    this.sceneController.scene.add(this.transformHelper);
     this.domElement.addEventListener("pointerdown", this.onPointerDown, true);
     this.domElement.addEventListener("pointermove", this.onPointerMove, true);
     this.domElement.addEventListener("pointerup", this.onPointerUp, true);
@@ -222,6 +221,7 @@ export class CurveEditController {
       this.hideControls();
       return;
     }
+    this.ensureTransformHelperAttached();
 
     if (this.controlRoot.parent !== actorObject) {
       this.controlRoot.parent?.remove(this.controlRoot);
@@ -353,6 +353,7 @@ export class CurveEditController {
     this.controlObjects.length = 0;
     this.pointVisualByIndex.clear();
     this.transformControls.detach();
+    this.transformHelper.parent?.remove(this.transformHelper);
     this.activeActorId = null;
     this.activeSignature = "";
     this.activeControlMeta = null;
@@ -728,5 +729,13 @@ export class CurveEditController {
         }
       })
     );
+  }
+
+  private ensureTransformHelperAttached(): void {
+    if (this.transformHelper.parent === this.sceneController.scene) {
+      return;
+    }
+    this.transformHelper.parent?.remove(this.transformHelper);
+    this.sceneController.scene.add(this.transformHelper);
   }
 }

@@ -782,7 +782,7 @@ export class SceneController {
   public setRenderer(renderer: SupportedRenderer | null): void {
     this.renderer = renderer;
     this.pmremGenerator?.dispose();
-    this.pmremGenerator = renderer ? new THREE.PMREMGenerator(renderer as any) : null;
+    this.pmremGenerator = null;
   }
 
   public setWebGlRenderer(renderer: THREE.WebGLRenderer | null): void {
@@ -1506,7 +1506,7 @@ export class SceneController {
   }
 
   private ensureEnvironmentProbeState(actor: ActorNode): EnvironmentProbeState | null {
-    if (!this.renderer || !this.pmremGenerator) {
+    if (!this.renderer || !this.ensurePmremGenerator()) {
       return null;
     }
     const requestedResolution = typeof actor.params.resolution === "number" ? actor.params.resolution : 256;
@@ -1621,7 +1621,8 @@ export class SceneController {
     captureSignature: string,
     manualToken: number
   ): Promise<void> {
-    if (!this.renderer || !this.pmremGenerator) {
+    const pmremGenerator = this.ensurePmremGenerator();
+    if (!this.renderer || !pmremGenerator) {
       return;
     }
     const actorIds = Array.isArray(actor.params.actorIds)
@@ -1666,7 +1667,7 @@ export class SceneController {
       this.hasGaussianCameraState = false;
       this.renderEnvironmentProbeFaces(probeState);
       probeState.pmremTarget?.dispose();
-      probeState.pmremTarget = this.pmremGenerator.fromCubemap(probeState.cubeRenderTarget.texture);
+      probeState.pmremTarget = pmremGenerator.fromCubemap(probeState.cubeRenderTarget.texture);
       probeState.previewFaceUrls = await this.readEnvironmentProbePreviewFaces(probeState);
       probeState.lastCaptureSignature = captureSignature;
       probeState.lastManualToken = manualToken;
@@ -1759,6 +1760,17 @@ export class SceneController {
     renderer.setRenderTarget(currentRenderTarget, currentActiveCubeFace, currentActiveMipmapLevel);
     renderer.xr.enabled = currentXrEnabled;
     probeState.cubeRenderTarget.texture.needsPMREMUpdate = true;
+  }
+
+  private ensurePmremGenerator(): THREE.PMREMGenerator | null {
+    if (this.pmremGenerator) {
+      return this.pmremGenerator;
+    }
+    if (!this.renderer) {
+      return null;
+    }
+    this.pmremGenerator = new THREE.PMREMGenerator(this.renderer as any);
+    return this.pmremGenerator;
   }
 
   private async readEnvironmentProbePreviewFaces(probeState: EnvironmentProbeState): Promise<string[]> {
