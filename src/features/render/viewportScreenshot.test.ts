@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { assertViewportScreenshotSize, formatViewportScreenshotStatus } from "@/features/render/viewportScreenshot";
+import {
+  assertViewportScreenshotSize,
+  formatViewportScreenshotStatus,
+  hasOpaquePixel
+} from "@/features/render/viewportScreenshot";
 
 describe("viewportScreenshot helpers", () => {
   it("rounds and returns a valid viewport size", () => {
@@ -23,5 +27,11 @@ describe("viewportScreenshot helpers", () => {
         backend: "webgpu"
       })
     ).toBe("Viewport screenshot copied to clipboard. 2560 x 1440 PNG | WEBGPU | debug views hidden.");
+  });
+
+  it("detects whether a screenshot contains any opaque pixels", () => {
+    expect(hasOpaquePixel(new Uint8Array([0, 0, 0, 0]))).toBe(false);
+    expect(hasOpaquePixel(new Uint8Array([10, 20, 30, 255]))).toBe(true);
+    expect(hasOpaquePixel(new Uint8Array([0, 0, 0, 0, 10, 20, 30, 0]))).toBe(false);
   });
 });
