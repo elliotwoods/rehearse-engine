@@ -75,8 +75,6 @@ export class SplatController {
 
   // GPU sorting state
   private gpuSorter: GpuSorter | null = null;
-  private colorRewriteNode: any = null;
-  private colorRewriteDirty = false;
 
   // Compute pre-pass for Cov2D projection (runs 1× per splat instead of 4× in vertex shader)
   private splatProjection: SplatProjection | null = null;
@@ -89,6 +87,7 @@ export class SplatController {
   private chunkData: ChunkData | null = null;
   private chunkVisibilityArray: Uint32Array | null = null;
   private lastVisibleChunks = 0;
+  private lastVisibleSplats = 0;
 
   // Per-frame status reporting
   private setActorStatusRef: ((status: unknown) => void) | null = null;
@@ -233,22 +232,17 @@ export class SplatController {
         covBData[i4 + 3] = 0;           // padding
       }
 
-      // Pack colors + per-splat opacity into vec4.
+      // Pack parser-produced colors + per-splat opacity into vec4.
       // Color-space conversion is applied in the GPU shader so the selected
       // input space can be changed at runtime without rebuilding buffers.
-      const sourceColorsData = new Float32Array(count * 4);
       const colorsData = new Float32Array(count * 4);
       for (let i = 0; i < count; i++) {
         const i3 = i * 3;
         const i4 = i * 4;
-        sourceColorsData[i4] = data.colors[i3];
-        sourceColorsData[i4 + 1] = data.colors[i3 + 1];
-        sourceColorsData[i4 + 2] = data.colors[i3 + 2];
-        sourceColorsData[i4 + 3] = data.opacities[i];
         colorsData[i4] = data.colors[i3];
         colorsData[i4 + 1] = data.colors[i3 + 1];
         colorsData[i4 + 2] = data.colors[i3 + 2];
-        colorsData[i4 + 3] = data.opacities[i]; // overwritten by compute rewrite
+        colorsData[i4 + 3] = data.opacities[i];
       }
 
       // Identity sort order, padded to next power of 2 for bitonic sort
@@ -281,7 +275,6 @@ export class SplatController {
         positions: positionsAttr,
         covA: new StorageBufferAttribute(covAData, 4),
         covB: new StorageBufferAttribute(covBData, 4),
-        sourceColors: new StorageBufferAttribute(sourceColorsData, 4),
         colors: new StorageBufferAttribute(colorsData, 4),
         sortedIndices: sortedIndicesAttr,
         chunkIds: chunkIdsAttr,
@@ -313,8 +306,6 @@ export class SplatController {
         const result = createSplatMaterial(buffers, count, paddedCount, numChunks);
         material = result.material;
         uniforms = result.uniforms;
-        this.colorRewriteNode = result.colorRewriteNode;
-        this.colorRewriteDirty = true;
         gpuSorter = new GpuSorter(
           positionsAttr,
           sortedIndicesAttr,
@@ -374,6 +365,7 @@ export class SplatController {
       this.chunkData = chunkData;
       this.chunkVisibilityArray = visibilityArray;
       this.lastVisibleChunks = numChunks;
+      this.lastVisibleSplats = count;
       this.loadedAssetId = assetId;
       this.pendingAssetId = "";
 
@@ -401,7 +393,12 @@ export class SplatController {
           sortMethod: "gpu-bitonic-temporal",
           temporalCoherence: `angle=${0.01}rad, maxSkip=${4}`,
           projectionPrepass: splatProjection !== null,
-          chunkCount: numChunks
+          chunkCount: numChunks,
+          visibleChunks: numChunks,
+          visibleSplats: count,
+          culledSplats: 0,
+          visibleSplatRatio: 1,
+          cullingDebug: "chunk-local-obb"
         },
         updatedAtIso: new Date().toISOString()
       });
@@ -445,11 +442,6 @@ export class SplatController {
       this.uniforms.viewportSize.value.set(size.x, size.y);
     }
 
-    if (this.colorRewriteNode && this.colorRewriteDirty) {
-      renderer.compute(this.colorRewriteNode);
-      this.colorRewriteDirty = false;
-    }
-
     // Extract focal lengths from the camera's projection matrix
     // For a perspective camera:
     //   projectionMatrix[0] = 2n / (r-l)  ≈  2 * focalX / width
@@ -475,6 +467,14 @@ export class SplatController {
         this.mesh.matrixWorld,
         this.chunkVisibilityArray
       );
+      const chunkPointCounts = this.chunkData.chunkPointCounts;
+      let visibleSplats = 0;
+      for (let i = 0; i < this.chunkVisibilityArray.length; i += 1) {
+        if (this.chunkVisibilityArray[i] === 1) {
+          visibleSplats += chunkPointCounts[i] ?? 0;
+        }
+      }
+      this.lastVisibleSplats = visibleSplats;
 
       // Upload visibility to GPU (sorter uses this for depth culling + triggers re-sort)
       visibilityChanged = this.gpuSorter.updateChunkVisibility(this.chunkVisibilityArray);
@@ -541,6 +541,10 @@ export class SplatController {
           cameraNear: Math.round(cameraNear * 10000) / 10000,
           chunkCount: this.chunkData?.chunks.length ?? 0,
           visibleChunks: this.lastVisibleChunks,
+          visibleSplats: this.lastVisibleSplats,
+          culledSplats: Math.max(0, this.pointCount - this.lastVisibleSplats),
+          visibleSplatRatio: this.pointCount > 0 ? Math.round((this.lastVisibleSplats / this.pointCount) * 1000) / 1000 : 0,
+          cullingDebug: "chunk-local-obb",
           // Per-frame sort stats
           sortMode: this.lastSortStats.sortMode,
           sortDispatches: this.lastSortStats.dispatches,
@@ -569,10 +573,7 @@ export class SplatController {
     this.uniforms.brightness.value = Math.max(0, brightness);
     this.uniforms.sizeScale.value = Math.max(0.01, splatSizeScale);
     const colorCode = this.parseColorInputSpaceCode(colorInputSpace);
-    if (this.uniforms.colorInputSpace.value !== colorCode) {
-      this.uniforms.colorInputSpace.value = colorCode;
-      this.colorRewriteDirty = true;
-    }
+    this.uniforms.colorInputSpace.value = colorCode;
     this.currentSplatSizeScale = Math.max(0.01, splatSizeScale);
 
     const safeScale = Number.isFinite(scaleFactor) && scaleFactor > 0 ? scaleFactor : 1;
@@ -609,13 +610,12 @@ export class SplatController {
     }
     this.buffers = null;
     this.uniforms = null;
-    this.colorRewriteNode = null;
-    this.colorRewriteDirty = false;
     this.pointCount = 0;
     this.bounds = null;
     this.chunkData = null;
     this.chunkVisibilityArray = null;
     this.lastVisibleChunks = 0;
+    this.lastVisibleSplats = 0;
     this.lastProjectionSnapshot = null;
     if (this.gpuSorter) {
       this.gpuSorter.dispose();

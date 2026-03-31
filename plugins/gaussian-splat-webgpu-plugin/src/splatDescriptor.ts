@@ -195,11 +195,15 @@ export function createGaussianSplatDescriptor(): ReloadableDescriptor {
             ? [
                 { label: "Projection", value: rs?.values?.projectionPrepass ? "compute pre-pass" : "vertex shader" },
                 { label: "Camera Near", value: rs?.values?.cameraNear ?? "n/a" },
+                { label: "Visible Splats", value: rs?.values?.visibleSplats ?? "n/a" },
+                { label: "Culled Splats", value: rs?.values?.culledSplats ?? "n/a" },
+                { label: "Visible Ratio", value: rs?.values?.visibleSplatRatio ?? "n/a" },
                 { label: "Sort Mode", value: rs?.values?.sortMode ?? "n/a" },
                 { label: "Sort Dispatches", value: rs?.values?.sortDispatches ?? "n/a" },
                 { label: "Frames Since Sort", value: rs?.values?.framesSinceFullSort ?? "n/a" },
                 { label: "Sort Angle (rad)", value: rs?.values?.angleSinceSort ?? "n/a" },
-                { label: "Visible Chunks", value: rs?.values?.visibleChunks ?? "n/a" }
+                { label: "Visible Chunks", value: rs?.values?.visibleChunks ?? "n/a" },
+                { label: "Cull Debug", value: rs?.values?.cullingDebug ?? "n/a" }
               ]
             : []),
           ...(warning ? [{ label: "Warning", value: warning, tone: "warning" as const }] : []),

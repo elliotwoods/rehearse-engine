@@ -15,7 +15,6 @@ import * as THREE from "three";
 import { NodeMaterial, StorageBufferAttribute } from "three/webgpu";
 import {
   Fn,
-  globalId,
   vec2,
   vec3,
   vec4,
@@ -52,8 +51,7 @@ export interface SplatBuffers {
   positions: StorageBufferAttribute;
   covA: StorageBufferAttribute; // [c00, c01, c02] per splat
   covB: StorageBufferAttribute; // [c11, c12, c22] per splat
-  sourceColors: StorageBufferAttribute; // original [r, g, b, opacity] per splat
-  colors: StorageBufferAttribute; // [r, g, b, opacity] per splat
+  colors: StorageBufferAttribute; // parser-produced [r, g, b, opacity] per splat
   sortedIndices: StorageBufferAttribute;
   // Optional: chunk-based frustum culling buffers
   chunkIds?: StorageBufferAttribute;        // uint per splat → chunk index
@@ -83,7 +81,6 @@ export interface SplatUniforms {
 export interface SplatMaterialResult {
   material: NodeMaterial;
   uniforms: SplatUniforms;
-  colorRewriteNode: any;
 }
 
 export function createSplatMaterial(
@@ -106,7 +103,6 @@ export function createSplatMaterial(
   const hasPrepass = !!(buffers.ellipseA && buffers.ellipseB);
 
   // Storage buffer nodes shared by both paths
-  const sourceColorsStorage: any = storage(buffers.sourceColors, "vec4", count).toReadOnly();
   const colorsStorage: any = storage(buffers.colors, "vec4", count);
   const indicesCount = paddedCount ?? count;
   const sortedIndicesStorage: any = storage(buffers.sortedIndices, "uint", indicesCount);
@@ -169,14 +165,6 @@ export function createSplatMaterial(
       )
     );
   };
-  const colorRewriteFn = Fn(() => {
-    const idx: any = globalId.x;
-    const source: any = sourceColorsStorage.element(idx);
-    const linear = linearizeCapturedColor(vec3(source.x, source.y, source.z));
-    colorsStorage.element(idx).assign(vec4(linear.x, linear.y, linear.z, source.w));
-  });
-  const colorRewriteNode = colorRewriteFn().compute(count, [64]);
-
   if (hasPrepass) {
     // ---- Pre-pass path: lightweight vertex shader reads precomputed ellipse data ----
     // The compute pre-pass already did Cov3D → Cov2D once per splat.
@@ -218,7 +206,7 @@ export function createSplatMaterial(
       );
 
       // Pass varyings to fragment
-      vColor.assign(vec3(colorData.x, colorData.y, colorData.z).mul(uBrightness));
+      vColor.assign(linearizeCapturedColor(vec3(colorData.x, colorData.y, colorData.z)).mul(uBrightness));
       vOpacity.assign(colorData.w.mul(uOpacity));
       vQuadUV.assign(quadPos);
 
@@ -382,7 +370,7 @@ export function createSplatMaterial(
       );
 
       // Pass varyings to fragment
-      vColor.assign(vec3(colorData.x, colorData.y, colorData.z).mul(uBrightness));
+      vColor.assign(linearizeCapturedColor(vec3(colorData.x, colorData.y, colorData.z)).mul(uBrightness));
       vOpacity.assign(colorData.w.mul(uOpacity));
       vQuadUV.assign(quadPos);
 
@@ -440,7 +428,6 @@ export function createSplatMaterial(
       cameraNear: uCameraNear as unknown as { value: number },
       sizeScale: uSizeScale as unknown as { value: number },
       isOrthographic: uIsOrthographic as unknown as { value: number }
-    },
-    colorRewriteNode
+    }
   };
 }
