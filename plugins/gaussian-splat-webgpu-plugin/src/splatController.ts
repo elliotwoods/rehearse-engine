@@ -195,9 +195,6 @@ export class SplatController {
       const chunkData = buildChunks(data.positions, data.scales, data.count);
       const numChunks = chunkData.chunks.length;
 
-      // Dispose any previous rendering
-      this.disposeRendering();
-
       // Build storage buffer data arrays
       const count = data.count;
 
@@ -342,6 +339,20 @@ export class SplatController {
       const mesh = new THREE.Mesh(geometry, material);
       mesh.frustumCulled = false;
       mesh.name = "gsplat-webgpu-mesh";
+
+      if (this.loadToken !== localToken) {
+        mesh.removeFromParent();
+        geometry.dispose();
+        material.dispose();
+        splatProjection?.dispose();
+        gpuSorter.dispose();
+        return;
+      }
+
+      // Dispose any previous rendering only after the new mesh is ready and
+      // this load is still current. That avoids blanking the live scene if the
+      // user switches renderers while a large splat is still loading.
+      this.disposeRendering();
 
       // Store state before setting up onBeforeRender (needs references)
       this.mesh = mesh;

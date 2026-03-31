@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
+import * as THREE from "three";
+import { describe, expect, it, vi } from "vitest";
 import type { ActorNode, ParameterValues } from "@/core/types";
+import { SparkSplatController } from "@/render/sparkSplatController";
 import { applySparkStochasticDepthMode, isSparkStochasticDepthEnabled } from "@/render/sparkSplatController";
 
 function createActor(params: ParameterValues): ActorNode {
@@ -72,5 +74,62 @@ describe("spark stochastic depth helpers", () => {
     expect(mesh.material.transparent).toBe(true);
     expect(mesh.material.depthWrite).toBe(false);
     expect(mesh.material.needsUpdate).toBe(true);
+  });
+
+  it("keeps the corrected root mounted when disposing a splat entry", () => {
+    const renderRoot = new THREE.Group();
+    const correctedRoot = new THREE.Group();
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial()) as any;
+    mesh.dispose = vi.fn();
+    correctedRoot.add(mesh);
+    renderRoot.add(correctedRoot);
+
+    const controller = new SparkSplatController({} as any, {} as any);
+    (controller as any).entriesByActorId.set("actor.spark", {
+      assetId: "asset.splat",
+      reloadToken: 1,
+      mesh,
+      correctedRoot
+    });
+
+    (controller as any).disposeActorEntry("actor.spark");
+
+    expect(correctedRoot.parent).toBe(renderRoot);
+    expect(correctedRoot.children).toHaveLength(0);
+    expect(mesh.parent).toBeNull();
+    expect(mesh.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a warning when WebGL2 ignores the requested color transform", () => {
+    const controller = new SparkSplatController({} as any, {} as any);
+    const setActorStatus = vi.fn();
+
+    (controller as any).pointCount = 123;
+    (controller as any).bounds = {
+      min: [0, 0, 0],
+      max: [1, 1, 1]
+    };
+
+    (controller as any).reportLoadedStatus(
+      createActor({ colorInputSpace: "apple-log", splatSizeScale: 1 }),
+      "asset.splat",
+      123,
+      {
+        min: [0, 0, 0],
+        max: [1, 1, 1]
+      },
+      setActorStatus
+    );
+
+    expect(setActorStatus).toHaveBeenCalledTimes(1);
+    expect(setActorStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        values: expect.objectContaining({
+          backend: "spark-webgl",
+          loadState: "loaded",
+          warning: expect.stringContaining("Captured Color Space \"apple-log\" is ignored in WebGL2.")
+        })
+      })
+    );
   });
 });

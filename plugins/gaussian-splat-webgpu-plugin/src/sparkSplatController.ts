@@ -1,7 +1,8 @@
 import * as THREE from "three";
 import { SplatMesh } from "@sparkjsdev/spark";
 
-type SplatColorInputSpace = "linear" | "srgb" | "iphone-sdr";
+type SplatColorInputSpace = "linear" | "srgb" | "iphone-sdr" | "apple-log";
+const SPARK_COORDINATE_CORRECTION_EULER = new THREE.Euler(-Math.PI / 2, 0, 0, "XYZ");
 
 interface SyncContext {
   actor: { id: string; params: Record<string, unknown> };
@@ -10,30 +11,8 @@ interface SyncContext {
   readAssetBytes(assetId: string): Promise<Uint8Array>;
 }
 
-interface SparkColorControls {
-  decodeEnabled: { value: boolean };
-  colorInputSpace: { value: number };
-}
-
 function parseSparkColorInputSpace(value: unknown): SplatColorInputSpace {
-  return value === "linear" || value === "iphone-sdr" || value === "srgb" ? value : "srgb";
-}
-
-function sparkColorInputSpaceCode(value: SplatColorInputSpace): number {
-  if (value === "linear") {
-    return 0;
-  }
-  if (value === "iphone-sdr") {
-    return 2;
-  }
-  return 1;
-}
-
-function createSparkColorControls(): SparkColorControls {
-  return {
-    decodeEnabled: { value: false },
-    colorInputSpace: { value: 1 }
-  };
+  return value === "linear" || value === "iphone-sdr" || value === "apple-log" || value === "srgb" ? value : "srgb";
 }
 
 function formatLoadError(error: unknown): string {
@@ -50,16 +29,11 @@ function formatLoadError(error: unknown): string {
   }
 }
 
-function readTonemappingMode(state: unknown): string {
-  if (!state || typeof state !== "object") {
-    return "off";
-  }
-  const scene = (state as { scene?: { tonemapping?: { mode?: unknown } } }).scene;
-  const mode = scene?.tonemapping?.mode;
-  return typeof mode === "string" ? mode : "off";
-}
-
 function readUnsupportedWarning(actor: { params: Record<string, unknown> }): string | null {
+  const colorInputSpace = parseSparkColorInputSpace(actor.params.colorInputSpace);
+  if (colorInputSpace !== "srgb") {
+    return `Captured Color Space "${colorInputSpace}" is ignored in WebGL2.`;
+  }
   const splatSizeScale = actor.params.splatSizeScale;
   if (typeof splatSizeScale === "number" && Number.isFinite(splatSizeScale) && Math.abs(splatSizeScale - 1) > 1e-6) {
     return "Splat Size is only supported in the WebGPU backend and is ignored in WebGL2.";
@@ -75,7 +49,6 @@ export class SparkSplatController {
   private loadToken = 0;
   private mesh: any = null;
   private correctedRoot: THREE.Group | null = null;
-  private colorControls = createSparkColorControls();
   private pointCount = 0;
   private bounds: { min: [number, number, number]; max: [number, number, number] } | null = null;
   private lastWarning: string | null = null;
@@ -119,16 +92,14 @@ export class SparkSplatController {
     this.pendingAssetId = "";
     this.pendingReloadToken = 0;
     this.disposeRenderingResources();
-    this.colorControls = createSparkColorControls();
   }
 
   private disposeRenderingResources(): void {
     this.pointCount = 0;
     this.bounds = null;
     this.lastWarning = null;
-    if (this.correctedRoot) {
-      this.correctedRoot.parent?.remove(this.correctedRoot);
-      this.correctedRoot = null;
+    if (this.mesh) {
+      this.mesh.removeFromParent?.();
     }
     if (typeof this.mesh?.dispose === "function") {
       this.mesh.dispose();
@@ -156,11 +127,8 @@ export class SparkSplatController {
       if (this.loadToken !== localToken) {
         return;
       }
-
-      this.disposeRenderingResources();
-
-      const correctedRoot = new THREE.Group();
-      this.renderRoot.add(correctedRoot);
+      const correctedRoot = this.correctedRoot ?? new THREE.Group();
+      correctedRoot.rotation.copy(SPARK_COORDINATE_CORRECTION_EULER);
 
       const mesh = new (SplatMesh as any)({
         fileBytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
@@ -170,10 +138,20 @@ export class SparkSplatController {
         await mesh.initialized;
       }
       if (this.loadToken !== localToken) {
+        mesh.removeFromParent?.();
         mesh.dispose?.();
-        correctedRoot.parent?.remove(correctedRoot);
         return;
       }
+
+      this.disposeRenderingResources();
+      if (!this.correctedRoot) {
+        this.renderRoot.add(correctedRoot);
+        this.correctedRoot = correctedRoot;
+      } else if (correctedRoot.parent !== this.renderRoot) {
+        this.renderRoot.add(correctedRoot);
+      }
+      correctedRoot.clear();
+      correctedRoot.rotation.copy(SPARK_COORDINATE_CORRECTION_EULER);
 
       correctedRoot.add(mesh);
       this.loadedAssetId = assetId;
@@ -217,7 +195,7 @@ export class SparkSplatController {
     }
   }
 
-  private applyRuntimeParams(actor: { params: Record<string, unknown> }, state: unknown): void {
+  private applyRuntimeParams(actor: { params: Record<string, unknown> }, _state: unknown): void {
     if (!this.mesh) {
       return;
     }
@@ -231,10 +209,6 @@ export class SparkSplatController {
     if (this.mesh.recolor instanceof THREE.Color) {
       this.mesh.recolor.setRGB(safeBrightness, safeBrightness, safeBrightness);
     }
-
-    const colorInputSpace = parseSparkColorInputSpace(actor.params.colorInputSpace);
-    this.colorControls.decodeEnabled.value = readTonemappingMode(state) !== "off";
-    this.colorControls.colorInputSpace.value = sparkColorInputSpaceCode(colorInputSpace);
 
     const opacity = Number(actor.params.opacity ?? 1);
     const safeOpacity = Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1;

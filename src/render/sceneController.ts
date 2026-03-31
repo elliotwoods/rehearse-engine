@@ -30,6 +30,7 @@ import { tryParseSplatBinary } from "@/features/splats/splatBinaryFormat";
 import { getGaussianFilterMode, getGaussianFilterRegionActorIds } from "@/render/gaussianFilter";
 import { MistVolumeController, type MistVolumeQualityMode } from "@/render/mistVolumeController";
 import { collectActorRenderOrder } from "@/render/sceneRenderOrder";
+import { pruneInvalidSceneGraph } from "@/render/sceneGraphUtils";
 
 const GAUSSIAN_RENDER_ROOT_NAME = "gaussian-splat-render-root";
 const GAUSSIAN_RENDER_MESH_NAME = "gaussian-splat-render";
@@ -76,6 +77,43 @@ interface GaussianSortChunk {
   center: [number, number, number];
   radius: number;
 }
+
+type SupportedRenderer = THREE.WebGLRenderer | {
+  coordinateSystem?: unknown;
+  xr: { enabled: boolean };
+  setRenderTarget(target: unknown, activeCubeFace?: number, activeMipmapLevel?: number): void;
+  getRenderTarget(): unknown;
+  getActiveCubeFace(): number;
+  getActiveMipmapLevel(): number;
+  render(scene: THREE.Scene, camera: THREE.Camera): void;
+  readRenderTargetPixelsAsync(
+    renderTarget: any,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    textureIndex?: number,
+    faceIndex?: number
+  ): Promise<ArrayBufferView>;
+};
+
+interface EnvironmentSourceResolution {
+  actorId: string | null;
+  actorType: "environment" | "environment-probe" | null;
+  name: string;
+  texture: THREE.Texture | null;
+}
+
+interface EnvironmentProbeState {
+  cubeCamera: THREE.CubeCamera;
+  cubeRenderTarget: THREE.WebGLCubeRenderTarget;
+  pmremTarget: THREE.WebGLRenderTarget | null;
+  previewFaceUrls: string[];
+  lastCaptureSignature: string;
+  lastManualToken: number;
+}
+
+const ENVIRONMENT_PROBE_FACE_KEYS = ["px", "nx", "py", "ny", "pz", "nz"] as const;
 
 export interface SceneControllerOptions {
   qualityMode?: MistVolumeQualityMode;
@@ -425,9 +463,12 @@ export class SceneController {
   private readonly ktx2Loader = new KTX2Loader();
   private readonly textureLoader = new THREE.TextureLoader();
   private readonly textureByUrl = new Map<string, THREE.Texture>();
+  private readonly environmentTextureByActorId = new Map<string, THREE.Texture>();
+  private readonly environmentAssetByActorId = new Map<string, string>();
+  private readonly environmentReloadTokenByActorId = new Map<string, number>();
+  private readonly environmentProbeStateByActorId = new Map<string, EnvironmentProbeState>();
   private gaussianSpriteTexture: any | null = null;
   private currentEnvironmentAssetId: string | null = null;
-  private currentEnvironmentReloadToken = 0;
   private gaussianSortFrameCounter = 0;
   private hasGaussianCameraState = false;
   private readonly gaussianLastCameraPosition = new THREE.Vector3();
@@ -438,6 +479,8 @@ export class SceneController {
   private readonly pluginActorRuntimeController: PluginActorRuntimeController;
   private readonly showDebugHelpers: boolean;
   private debugHelpersVisible: boolean;
+  private renderer: SupportedRenderer | null = null;
+  private pmremGenerator: THREE.PMREMGenerator | null = null;
 
   public constructor(private readonly kernel: AppKernel, options: SceneControllerOptions = {}) {
     this.showDebugHelpers = options.showDebugHelpers ?? true;
@@ -572,6 +615,14 @@ export class SceneController {
     const state = this.kernel.store.getState().state;
     this.syncSceneHelpers(state.scene.helpers);
     const actorIds = new Set(Object.keys(state.actors));
+    const orderedActorIds = collectActorRenderOrder(
+      state.scene.actorIds,
+      state.actors,
+      (actorId) => this.getActorDependencyIds(actorId, state)
+    );
+    const orderedActors = orderedActorIds
+      .map((actorId) => state.actors[actorId])
+      .filter((actor): actor is ActorNode => Boolean(actor));
     const simTimeSeconds = Number.isFinite(state.time.elapsedSimSeconds) ? state.time.elapsedSimSeconds : 0;
     const dtSeconds = Math.max(0, simTimeSeconds - this.previousSimTimeSeconds);
     this.previousSimTimeSeconds = simTimeSeconds;
@@ -608,11 +659,16 @@ export class SceneController {
         this.gaussianTriangleCountByActorId.delete(existing);
         this.gaussianSortableBatchesByActorId.delete(existing);
         this.curveSignatureByActorId.delete(existing);
-        this.meshMaterialSigByActorId.delete(existing);
-        this.pluginDescriptorByActorId.delete(existing);
-        if (object instanceof THREE.Group) {
-          const dxfRoot = object.getObjectByName(DXF_RENDER_ROOT_NAME);
-          if (dxfRoot instanceof THREE.Group) {
+          this.meshMaterialSigByActorId.delete(existing);
+          this.pluginDescriptorByActorId.delete(existing);
+          this.environmentTextureByActorId.get(existing)?.dispose?.();
+          this.environmentTextureByActorId.delete(existing);
+          this.environmentAssetByActorId.delete(existing);
+          this.environmentReloadTokenByActorId.delete(existing);
+          this.disposeEnvironmentProbe(existing);
+          if (object instanceof THREE.Group) {
+            const dxfRoot = object.getObjectByName(DXF_RENDER_ROOT_NAME);
+            if (dxfRoot instanceof THREE.Group) {
             disposeDxfObject(dxfRoot);
           }
         }
@@ -620,12 +676,12 @@ export class SceneController {
         this.primitiveSignatureByActorId.delete(existing);
         this.lastKnownActorById.delete(existing);
       }
-    }
+      }
 
-    this.pluginActorRuntimeController.sync(state, dtSeconds);
+      this.pluginActorRuntimeController.sync(state, dtSeconds);
 
-    const tA = performance.now();
-    for (const actor of Object.values(state.actors)) {
+      const tA = performance.now();
+      for (const actor of orderedActors) {
       const _ta0 = performance.now();
       this.lastKnownActorById.set(actor.id, actor);
       const _ta1 = performance.now();
@@ -689,39 +745,48 @@ export class SceneController {
           "| total:", (_ta6 - _ta0).toFixed(0), "ms"
         );
       }
-    }
-    const tB = performance.now();
-    for (const actor of Object.values(state.actors)) {
-      this.syncActorParentAttachment(actor.id, actor.parentActorId);
-    }
-    const tC = performance.now();
-    this.syncActorSiblingOrder(state);
-    this.applyActorRenderOrder(state);
-    const tC2 = performance.now();
-    this.mistVolumeController.syncFromState(state, simTimeSeconds, dtSeconds);
-    const tC3 = performance.now();
-    for (const actor of Object.values(state.actors)) {
-      this.syncPluginSceneActor(actor, state, simTimeSeconds, dtSeconds);
-    }
-    const tD = performance.now();
+      }
+      const tB = performance.now();
+      for (const actor of orderedActors) {
+        this.syncActorParentAttachment(actor.id, actor.parentActorId);
+      }
+      const tC = performance.now();
+      this.syncActorSiblingOrder(state);
+      this.applyActorRenderOrder(state);
+      const tC2 = performance.now();
+      this.mistVolumeController.syncFromState(state, simTimeSeconds, dtSeconds);
+      const tC3 = performance.now();
+      for (const actor of orderedActors) {
+        this.syncPluginSceneActor(actor, state, simTimeSeconds, dtSeconds);
+      }
+      const tD = performance.now();
 
-    this.applySceneBackgroundColor();
-    await this.updateEnvironmentTexture();
-    const dt = performance.now() - t0;
-    if (dt > 100) {
-      this.warnPerformance(
-        "[simularca] syncFromState slow:", dt.toFixed(0), "ms |",
-        "actorLoop:", (tB - tA).toFixed(0), "ms |",
-        "parentSync:", (tC - tB).toFixed(0), "ms |",
-        "orderSync:", (tC2 - tC).toFixed(0), "ms |",
-        "mistSync:", (tC3 - tC2).toFixed(0), "ms |",
-        "pluginLoop:", (tD - tC3).toFixed(0), "ms |",
-        "envTex:", (performance.now() - tD).toFixed(0), "ms"
-      );
+      await this.syncEnvironmentTextures(state, orderedActorIds);
+      this.applySceneBackgroundColor();
+      await this.syncEnvironmentProbes(state, orderedActors);
+      pruneInvalidSceneGraph(this.scene);
+      const dt = performance.now() - t0;
+      if (dt > 100) {
+        this.warnPerformance(
+          "[simularca] syncFromState slow:", dt.toFixed(0), "ms |",
+          "actorLoop:", (tB - tA).toFixed(0), "ms |",
+          "parentSync:", (tC - tB).toFixed(0), "ms |",
+          "orderSync:", (tC2 - tC).toFixed(0), "ms |",
+          "mistSync:", (tC3 - tC2).toFixed(0), "ms |",
+          "pluginLoop:", (tD - tC3).toFixed(0), "ms |",
+          "envProbe:", (performance.now() - tD).toFixed(0), "ms"
+        );
+      }
     }
+
+  public setRenderer(renderer: SupportedRenderer | null): void {
+    this.renderer = renderer;
+    this.pmremGenerator?.dispose();
+    this.pmremGenerator = renderer ? new THREE.PMREMGenerator(renderer as any) : null;
   }
 
   public setWebGlRenderer(renderer: THREE.WebGLRenderer | null): void {
+    this.setRenderer(renderer);
     this.mistVolumeController.setWebGlRenderer(renderer);
   }
 
@@ -734,6 +799,16 @@ export class SceneController {
   }
 
   public dispose(): void {
+    for (const texture of this.environmentTextureByActorId.values()) {
+      texture.dispose?.();
+    }
+    this.environmentTextureByActorId.clear();
+    for (const actorId of [...this.environmentProbeStateByActorId.keys()]) {
+      this.disposeEnvironmentProbe(actorId);
+    }
+    this.pmremGenerator?.dispose();
+    this.pmremGenerator = null;
+    this.renderer = null;
     this.pluginActorRuntimeController.dispose();
     this.mistVolumeController.dispose();
   }
@@ -1012,8 +1087,35 @@ export class SceneController {
     }
   }
 
+  private getActorDependencyIds(actorId: string, state: AppState): string[] {
+    const actor = state.actors[actorId];
+    if (!actor) {
+      return [];
+    }
+    const dependencies = new Set<string>();
+    const descriptor = this.resolveActorDescriptor(actor);
+    for (const definition of descriptor?.schema.params ?? []) {
+      const value = actor.params[definition.key];
+      if (definition.type === "actor-ref" && typeof value === "string" && value.length > 0) {
+        dependencies.add(value);
+      }
+      if (definition.type === "actor-ref-list" && Array.isArray(value)) {
+        for (const entry of value) {
+          if (typeof entry === "string" && entry.length > 0) {
+            dependencies.add(entry);
+          }
+        }
+      }
+    }
+    return [...dependencies];
+  }
+
   private applyActorRenderOrder(state: AppState): void {
-    const orderedActorIds = collectActorRenderOrder(state.scene.actorIds, state.actors);
+    const orderedActorIds = collectActorRenderOrder(
+      state.scene.actorIds,
+      state.actors,
+      (actorId) => this.getActorDependencyIds(actorId, state)
+    );
     const stride = 10;
     orderedActorIds.forEach((actorId, index) => {
       const object = this.actorObjects.get(actorId);
@@ -1056,6 +1158,12 @@ export class SceneController {
         new THREE.MeshStandardMaterial({ color: 0x33ffaa, emissive: 0x112222 })
       );
       return marker;
+    }
+
+    if (actor.actorType === "environment-probe") {
+      const group = new THREE.Group();
+      group.name = "environment-probe";
+      return group;
     }
 
     if (actor.actorType === "primitive") {
@@ -1155,25 +1263,43 @@ export class SceneController {
     }
   }
 
-  private resolveEnvironment(actorId: string): { texture: THREE.Texture | null; name: string } {
+  private resolveEnvironment(actorId: string): EnvironmentSourceResolution {
     const state = this.kernel.store.getState().state;
     const actor = state.actors[actorId];
     if (!actor) {
-      return { texture: null, name: "Default" };
+      return { actorId: null, actorType: null, texture: null, name: "Default" };
     }
 
-    const envActors = Object.values(state.actors).filter(
-      (a) => a.actorType === "environment" && a.enabled && a.params.assetId
-    );
-    if (envActors.length === 0) {
-      return { texture: null, name: "Default" };
+    const overrideActorId =
+      typeof actor.params.environmentSourceId === "string" && actor.params.environmentSourceId.length > 0
+        ? actor.params.environmentSourceId
+        : null;
+    if (overrideActorId) {
+      return this.resolveEnvironmentSourceByActorId(overrideActorId);
+    }
+
+    const candidateActors = Object.values(state.actors).filter((entry) => {
+      if (!entry.enabled) {
+        return false;
+      }
+      if (entry.actorType === "environment") {
+        return this.environmentTextureByActorId.has(entry.id);
+      }
+      if (entry.actorType === "environment-probe") {
+        const probeState = this.environmentProbeStateByActorId.get(entry.id);
+        return Boolean(probeState?.pmremTarget?.texture);
+      }
+      return false;
+    });
+    if (candidateActors.length === 0) {
+      return { actorId: null, actorType: null, texture: null, name: "Default" };
     }
 
     const actorPos = new THREE.Vector3(...actor.transform.position);
-    let closestEnv: (typeof envActors)[0] | null = null;
+    let closestEnv: ActorNode | null = null;
     let minDistanceSq = Number.POSITIVE_INFINITY;
 
-    for (const env of envActors) {
+    for (const env of candidateActors) {
       const envPos = new THREE.Vector3(...env.transform.position);
       const distSq = actorPos.distanceToSquared(envPos);
       if (distSq < minDistanceSq) {
@@ -1182,18 +1308,505 @@ export class SceneController {
       }
     }
 
-    if (closestEnv) {
-      // Find the texture loaded for this environment actor
-      // For now, if it's the current active environment, use scene.environment
-      const currentEnvActor = Object.values(state.actors).find(
-        (a) => a.actorType === "environment" && a.params.assetId === this.currentEnvironmentAssetId
-      );
-      if (currentEnvActor?.id === closestEnv.id) {
-        return { texture: this.scene.environment, name: closestEnv.name };
+    return closestEnv ? this.resolveEnvironmentSourceByActorId(closestEnv.id) : { actorId: null, actorType: null, texture: null, name: "Default" };
+  }
+
+  private resolveEnvironmentSourceByActorId(actorId: string | null): EnvironmentSourceResolution {
+    if (!actorId) {
+      return { actorId: null, actorType: null, texture: null, name: "Default" };
+    }
+    const actor = this.kernel.store.getState().state.actors[actorId];
+    if (!actor || !actor.enabled) {
+      return { actorId: null, actorType: null, texture: null, name: "Default" };
+    }
+    if (actor.actorType === "environment") {
+      return {
+        actorId: actor.id,
+        actorType: "environment",
+        texture: this.environmentTextureByActorId.get(actor.id) ?? null,
+        name: actor.name
+      };
+    }
+    if (actor.actorType === "environment-probe") {
+      return {
+        actorId: actor.id,
+        actorType: "environment-probe",
+        texture: this.environmentProbeStateByActorId.get(actor.id)?.pmremTarget?.texture ?? null,
+        name: actor.name
+      };
+    }
+    return { actorId: null, actorType: null, texture: null, name: "Default" };
+  }
+
+  private async syncEnvironmentTextures(state: AppState, orderedActorIds: string[]): Promise<void> {
+    const environmentActors = orderedActorIds
+      .map((actorId) => state.actors[actorId])
+      .filter((actor): actor is ActorNode => actor !== undefined && actor.actorType === "environment");
+    const activeIds = new Set(environmentActors.map((actor) => actor.id));
+
+    for (const existingId of [...this.environmentTextureByActorId.keys()]) {
+      if (activeIds.has(existingId)) {
+        continue;
       }
+      this.environmentTextureByActorId.get(existingId)?.dispose?.();
+      this.environmentTextureByActorId.delete(existingId);
+      this.environmentAssetByActorId.delete(existingId);
+      this.environmentReloadTokenByActorId.delete(existingId);
     }
 
-    return { texture: this.scene.environment, name: closestEnv?.name ?? "Default" };
+    for (const actor of environmentActors) {
+      const assetId = typeof actor.params.assetId === "string" ? actor.params.assetId : "";
+      const reloadToken = typeof actor.params.assetIdReloadToken === "number" ? actor.params.assetIdReloadToken : 0;
+      if (!assetId) {
+        this.environmentTextureByActorId.get(actor.id)?.dispose?.();
+        this.environmentTextureByActorId.delete(actor.id);
+        this.environmentAssetByActorId.delete(actor.id);
+        this.environmentReloadTokenByActorId.delete(actor.id);
+        this.kernel.store.getState().actions.setActorStatus(actor.id, {
+          values: { loadState: "idle" },
+          updatedAtIso: new Date().toISOString()
+        });
+        continue;
+      }
+      const unchanged =
+        this.environmentAssetByActorId.get(actor.id) === assetId &&
+        this.environmentReloadTokenByActorId.get(actor.id) === reloadToken &&
+        this.environmentTextureByActorId.has(actor.id);
+      if (unchanged) {
+        continue;
+      }
+      this.environmentTextureByActorId.get(actor.id)?.dispose?.();
+      const texture = await this.loadEnvironmentTexture(actor, state, assetId);
+      if (!texture) {
+        continue;
+      }
+      this.environmentTextureByActorId.set(actor.id, texture);
+      this.environmentAssetByActorId.set(actor.id, assetId);
+      this.environmentReloadTokenByActorId.set(actor.id, reloadToken);
+    }
+
+    const primary = environmentActors.find((entry) => this.environmentTextureByActorId.has(entry.id));
+    if (primary) {
+      this.currentEnvironmentAssetId = this.environmentAssetByActorId.get(primary.id) ?? null;
+      const texture = this.environmentTextureByActorId.get(primary.id) ?? null;
+      this.scene.environment = texture;
+      this.scene.background = texture;
+      return;
+    }
+    this.currentEnvironmentAssetId = null;
+    this.scene.environment = null;
+  }
+
+  private async loadEnvironmentTexture(
+    actor: ActorNode,
+    state: AppState,
+    assetId: string
+  ): Promise<THREE.Texture | null> {
+    const asset = state.assets.find((entry) => entry.id === assetId);
+    if (!asset) {
+      this.kernel.store.getState().actions.setActorStatus(actor.id, {
+        values: {},
+        error: "Asset reference not found in project state.",
+        updatedAtIso: new Date().toISOString()
+      });
+      return null;
+    }
+    const url = await this.kernel.storage.resolveAssetPath({
+      projectName: state.activeProjectName,
+      relativePath: asset.relativePath
+    });
+    const extension = asset.relativePath.split(".").pop()?.toLowerCase();
+    this.kernel.store.getState().actions.setActorStatus(actor.id, {
+      values: {
+        format: extension ?? "hdr",
+        assetFileName: asset.sourceFileName,
+        loadState: "loading"
+      },
+      updatedAtIso: new Date().toISOString()
+    });
+    try {
+      const texture = extension === "ktx2"
+        ? await new Promise<THREE.Texture>((resolve, reject) => {
+            this.ktx2Loader.load(url, resolve, undefined, reject);
+          })
+        : await new Promise<THREE.Texture>((resolve, reject) => {
+            this.rgbeLoader.load(url, resolve, undefined, reject);
+          });
+      texture.mapping = THREE.EquirectangularReflectionMapping;
+      this.kernel.store.getState().actions.setActorStatus(actor.id, {
+        values: {
+          format: extension ?? "hdr",
+          assetFileName: asset.sourceFileName,
+          loadState: "loaded"
+        },
+        updatedAtIso: new Date().toISOString()
+      });
+      return texture;
+    } catch (error) {
+      this.kernel.store.getState().actions.setActorStatus(actor.id, {
+        values: {
+          format: extension ?? "hdr",
+          assetFileName: asset.sourceFileName,
+          loadState: "failed"
+        },
+        error: formatLoadError(error),
+        updatedAtIso: new Date().toISOString()
+      });
+      return null;
+    }
+  }
+
+  private disposeEnvironmentProbe(actorId: string): void {
+    const probeState = this.environmentProbeStateByActorId.get(actorId);
+    if (!probeState) {
+      return;
+    }
+    probeState.pmremTarget?.dispose();
+    probeState.cubeRenderTarget.dispose();
+    this.environmentProbeStateByActorId.delete(actorId);
+  }
+
+  private async syncEnvironmentProbes(state: AppState, orderedActors: ActorNode[]): Promise<void> {
+    const activeProbeIds = new Set(
+      orderedActors.filter((actor) => actor.actorType === "environment-probe").map((actor) => actor.id)
+    );
+    for (const existingId of [...this.environmentProbeStateByActorId.keys()]) {
+      if (!activeProbeIds.has(existingId)) {
+        this.disposeEnvironmentProbe(existingId);
+      }
+    }
+    for (const actor of orderedActors) {
+      if (actor.actorType !== "environment-probe") {
+        continue;
+      }
+      this.syncEnvironmentProbePreviewObject(actor);
+      const probeState = this.ensureEnvironmentProbeState(actor);
+      if (!probeState) {
+        this.kernel.store.getState().actions.setActorStatus(actor.id, {
+          values: { loadState: "idle" },
+          error: this.renderer ? undefined : "Renderer is not ready for environment probe capture.",
+          updatedAtIso: new Date().toISOString()
+        });
+        continue;
+      }
+      const renderMode = actor.params.renderMode === "never" || actor.params.renderMode === "always"
+        ? actor.params.renderMode
+        : "on-change";
+      const manualToken = typeof actor.params.renderRequestToken === "number" ? actor.params.renderRequestToken : 0;
+      const captureSignature = this.buildEnvironmentProbeCaptureSignature(actor, state, manualToken);
+      const shouldCapture =
+        renderMode === "always"
+        || manualToken !== probeState.lastManualToken
+        || (renderMode === "on-change" && captureSignature !== probeState.lastCaptureSignature);
+      if (!shouldCapture) {
+        continue;
+      }
+      await this.captureEnvironmentProbe(actor, state, probeState, captureSignature, manualToken);
+    }
+  }
+
+  private ensureEnvironmentProbeState(actor: ActorNode): EnvironmentProbeState | null {
+    if (!this.renderer || !this.pmremGenerator) {
+      return null;
+    }
+    const requestedResolution = typeof actor.params.resolution === "number" ? actor.params.resolution : 256;
+    const resolution = Math.max(16, Math.min(2048, Math.round(requestedResolution)));
+    const existing = this.environmentProbeStateByActorId.get(actor.id);
+    if (existing && existing.cubeRenderTarget.width === resolution) {
+      return existing;
+    }
+    if (existing) {
+      this.disposeEnvironmentProbe(actor.id);
+    }
+    const cubeRenderTarget = new THREE.WebGLCubeRenderTarget(resolution, {
+      type: THREE.UnsignedByteType,
+      generateMipmaps: true,
+      minFilter: THREE.LinearMipmapLinearFilter
+    });
+    cubeRenderTarget.texture.colorSpace = THREE.SRGBColorSpace;
+    const cubeCamera = new THREE.CubeCamera(0.01, 1000, cubeRenderTarget);
+    cubeCamera.name = `environment-probe-camera:${actor.id}`;
+    const probeState: EnvironmentProbeState = {
+      cubeCamera,
+      cubeRenderTarget,
+      pmremTarget: null,
+      previewFaceUrls: [],
+      lastCaptureSignature: "",
+      lastManualToken: 0
+    };
+    this.environmentProbeStateByActorId.set(actor.id, probeState);
+    return probeState;
+  }
+
+  private syncEnvironmentProbePreviewObject(actor: ActorNode): void {
+    const group = this.actorObjects.get(actor.id);
+    if (!(group instanceof THREE.Group)) {
+      return;
+    }
+    const previewMode = actor.params.preview === "cube" || actor.params.preview === "sphere" ? actor.params.preview : "none";
+    const existing = group.getObjectByName("environment-probe-preview");
+    if (previewMode === "none") {
+      existing?.parent?.remove(existing);
+      return;
+    }
+    let mesh = existing as THREE.Mesh | null;
+    if (!(mesh instanceof THREE.Mesh)) {
+      mesh = new THREE.Mesh(
+        previewMode === "cube" ? new THREE.BoxGeometry(1, 1, 1) : new THREE.SphereGeometry(0.5, 24, 16),
+        new THREE.MeshStandardMaterial({
+          color: 0xffffff,
+          metalness: 1,
+          roughness: 0,
+          envMapIntensity: 1
+        })
+      );
+      mesh.name = "environment-probe-preview";
+      group.add(mesh);
+    } else {
+      const needsCube = previewMode === "cube";
+      const hasCube = mesh.geometry instanceof THREE.BoxGeometry;
+      if (needsCube !== hasCube) {
+        const nextGeometry = needsCube ? new THREE.BoxGeometry(1, 1, 1) : new THREE.SphereGeometry(0.5, 24, 16);
+        mesh.geometry.dispose();
+        mesh.geometry = nextGeometry;
+      }
+    }
+    const envTexture = this.environmentProbeStateByActorId.get(actor.id)?.pmremTarget?.texture ?? null;
+    if (mesh.material instanceof THREE.MeshStandardMaterial) {
+      mesh.material.envMap = envTexture;
+      mesh.material.needsUpdate = true;
+    }
+  }
+
+  private buildEnvironmentProbeCaptureSignature(actor: ActorNode, state: AppState, manualToken: number): string {
+    const actorIds = Array.isArray(actor.params.actorIds)
+      ? actor.params.actorIds.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    const selectedActorSignatures = actorIds
+      .map((actorId) => {
+        const target = state.actors[actorId];
+        const runtimeStatus = state.actorStatusByActorId[actorId];
+        if (!target) {
+          return `${actorId}:missing`;
+        }
+        return JSON.stringify({
+          id: target.id,
+          enabled: target.enabled,
+          parentActorId: target.parentActorId,
+          transform: target.transform,
+          params: target.params,
+          loadState: runtimeStatus?.values.loadState ?? null,
+          updatedAtIso: runtimeStatus?.updatedAtIso ?? null
+        });
+      })
+      .join("|");
+    return JSON.stringify({
+      actor: {
+        enabled: actor.enabled,
+        transform: actor.transform,
+        preview: actor.params.preview,
+        resolution: actor.params.resolution,
+        renderMode: actor.params.renderMode
+      },
+      actorIds,
+      selectedActorSignatures,
+      manualToken
+    });
+  }
+
+  private async captureEnvironmentProbe(
+    actor: ActorNode,
+    state: AppState,
+    probeState: EnvironmentProbeState,
+    captureSignature: string,
+    manualToken: number
+  ): Promise<void> {
+    if (!this.renderer || !this.pmremGenerator) {
+      return;
+    }
+    const actorIds = Array.isArray(actor.params.actorIds)
+      ? actor.params.actorIds.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    const captureActorIds = new Set(actorIds.filter((actorId) => state.actors[actorId]?.enabled));
+    const background = this.resolveEnvironmentProbeBackground(actor, captureActorIds, state);
+    const previousVisibility = new Map<any, boolean>();
+    const previousBackground = this.scene.background;
+    const previousEnvironment = this.scene.environment;
+    const renderReason =
+      actor.params.renderMode === "always"
+        ? "always"
+        : manualToken !== probeState.lastManualToken
+          ? "manual"
+          : "on-change";
+
+    try {
+      for (const [actorId, actorObject] of this.actorObjects.entries()) {
+        if (!actorObject) {
+          continue;
+        }
+        previousVisibility.set(actorObject, actorObject.visible !== false);
+        if (actorId === actor.id) {
+          actorObject.visible = false;
+          continue;
+        }
+        const targetActor = state.actors[actorId];
+        const includeGeometry =
+          captureActorIds.has(actorId)
+          && targetActor?.enabled !== false
+          && targetActor?.actorType !== "environment"
+          && targetActor?.actorType !== "environment-probe";
+        actorObject.visible = includeGeometry;
+      }
+
+      this.scene.background = background.texture;
+      this.scene.environment = background.texture;
+      probeState.cubeCamera.position.set(...actor.transform.position);
+      probeState.cubeCamera.updateMatrixWorld(true);
+      this.gaussianSortDirty = true;
+      this.hasGaussianCameraState = false;
+      this.renderEnvironmentProbeFaces(probeState);
+      probeState.pmremTarget?.dispose();
+      probeState.pmremTarget = this.pmremGenerator.fromCubemap(probeState.cubeRenderTarget.texture);
+      probeState.previewFaceUrls = await this.readEnvironmentProbePreviewFaces(probeState);
+      probeState.lastCaptureSignature = captureSignature;
+      probeState.lastManualToken = manualToken;
+      this.syncEnvironmentProbePreviewObject(actor);
+      this.kernel.store.getState().actions.setActorStatus(actor.id, {
+        values: {
+          loadState: "captured",
+          lastRenderReason: renderReason,
+          backgroundSourceName: background.name,
+          previewFaces: Object.fromEntries(
+            ENVIRONMENT_PROBE_FACE_KEYS.map((key, index) => [key, probeState.previewFaceUrls[index] ?? ""])
+          ),
+          capturedActorCount: captureActorIds.size
+        },
+        updatedAtIso: new Date().toISOString()
+      });
+    } catch (error) {
+      this.kernel.store.getState().actions.setActorStatus(actor.id, {
+        values: {
+          loadState: "failed",
+          backgroundSourceName: background.name
+        },
+        error: formatLoadError(error),
+        updatedAtIso: new Date().toISOString()
+      });
+    } finally {
+      for (const [actorObject, visible] of previousVisibility.entries()) {
+        actorObject.visible = visible;
+      }
+      this.scene.background = previousBackground;
+      this.scene.environment = previousEnvironment;
+      this.gaussianSortDirty = true;
+      this.hasGaussianCameraState = false;
+    }
+  }
+
+  private resolveEnvironmentProbeBackground(
+    actor: ActorNode,
+    captureActorIds: Set<string>,
+    state: AppState
+  ): EnvironmentSourceResolution {
+    const actorPosition = new THREE.Vector3(...actor.transform.position);
+    let closest: EnvironmentSourceResolution | null = null;
+    let minDistanceSq = Number.POSITIVE_INFINITY;
+    for (const actorId of captureActorIds) {
+      const candidate = state.actors[actorId];
+      if (!candidate || (candidate.actorType !== "environment" && candidate.actorType !== "environment-probe")) {
+        continue;
+      }
+      const resolved = this.resolveEnvironmentSourceByActorId(candidate.id);
+      if (!resolved.texture) {
+        continue;
+      }
+      const candidatePosition = new THREE.Vector3(...candidate.transform.position);
+      const distanceSq = actorPosition.distanceToSquared(candidatePosition);
+      if (distanceSq < minDistanceSq) {
+        minDistanceSq = distanceSq;
+        closest = resolved;
+      }
+    }
+    return closest ?? { actorId: null, actorType: null, texture: null, name: "none" };
+  }
+
+  private renderEnvironmentProbeFaces(probeState: EnvironmentProbeState): void {
+    if (!this.renderer) {
+      return;
+    }
+    const renderer = this.renderer as any;
+    const cubeCamera = probeState.cubeCamera;
+    if (cubeCamera.coordinateSystem !== renderer.coordinateSystem) {
+      cubeCamera.coordinateSystem = renderer.coordinateSystem;
+      cubeCamera.updateCoordinateSystem();
+    }
+    const currentRenderTarget = renderer.getRenderTarget();
+    const currentActiveCubeFace = renderer.getActiveCubeFace();
+    const currentActiveMipmapLevel = renderer.getActiveMipmapLevel();
+    const currentXrEnabled = renderer.xr.enabled;
+    const generateMipmaps = probeState.cubeRenderTarget.texture.generateMipmaps;
+    renderer.xr.enabled = false;
+    probeState.cubeRenderTarget.texture.generateMipmaps = false;
+    const cameras = cubeCamera.children as THREE.PerspectiveCamera[];
+    for (let faceIndex = 0; faceIndex < cameras.length; faceIndex += 1) {
+      if (faceIndex === cameras.length - 1) {
+        probeState.cubeRenderTarget.texture.generateMipmaps = generateMipmaps;
+      }
+      renderer.setRenderTarget(probeState.cubeRenderTarget, faceIndex, cubeCamera.activeMipmapLevel);
+      this.updateGaussianDepthSorting(cameras[faceIndex]);
+      renderer.render(this.scene, cameras[faceIndex]);
+    }
+    renderer.setRenderTarget(currentRenderTarget, currentActiveCubeFace, currentActiveMipmapLevel);
+    renderer.xr.enabled = currentXrEnabled;
+    probeState.cubeRenderTarget.texture.needsPMREMUpdate = true;
+  }
+
+  private async readEnvironmentProbePreviewFaces(probeState: EnvironmentProbeState): Promise<string[]> {
+    if (!this.renderer) {
+      return [];
+    }
+    const faceSize = Math.min(96, probeState.cubeRenderTarget.width);
+    const urls: string[] = [];
+    for (let faceIndex = 0; faceIndex < ENVIRONMENT_PROBE_FACE_KEYS.length; faceIndex += 1) {
+      const pixels =
+        this.renderer instanceof THREE.WebGLRenderer
+          ? await (() => {
+              const buffer = new Uint8Array(faceSize * faceSize * 4);
+              return this.renderer!
+                .readRenderTargetPixelsAsync(probeState.cubeRenderTarget, 0, 0, faceSize, faceSize, buffer, faceIndex)
+                .then(() => buffer);
+            })()
+          : await this.renderer.readRenderTargetPixelsAsync(
+              probeState.cubeRenderTarget as any,
+              0,
+              0,
+              faceSize,
+              faceSize,
+              0,
+              faceIndex
+            );
+      urls.push(this.environmentProbePixelsToDataUrl(pixels, faceSize, faceSize));
+    }
+    return urls;
+  }
+
+  private environmentProbePixelsToDataUrl(pixels: ArrayBufferView, width: number, height: number): string {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return "";
+    }
+    const imageData = context.createImageData(width, height);
+    const source = pixels instanceof Uint8Array ? pixels : new Uint8Array(pixels.buffer.slice(0));
+    for (let y = 0; y < height; y += 1) {
+      const srcRow = y * width * 4;
+      const dstRow = (height - y - 1) * width * 4;
+      imageData.data.set(source.subarray(srcRow, srcRow + width * 4), dstRow);
+    }
+    context.putImageData(imageData, 0, 0);
+    return canvas.toDataURL("image/png");
   }
 
   private buildAssetUrl(projectName: string, relativePath: string): string {
@@ -1221,10 +1834,11 @@ export class SceneController {
     }
 
     const mat = materialData as import("@/core/types").Material;
-    let material = this.materialByMaterialId.get(mat.id);
+    const materialCacheKey = `${actorId}:${mat.id}`;
+    let material = this.materialByMaterialId.get(materialCacheKey);
     if (!material) {
       material = new THREE.MeshStandardMaterial();
-      this.materialByMaterialId.set(mat.id, material);
+      this.materialByMaterialId.set(materialCacheKey, material);
     }
 
     // Albedo channel
@@ -1391,11 +2005,12 @@ export class SceneController {
       }
     }
     const localMaterials = actor.params.localMaterials as Record<string, unknown> | undefined;
+    const env = this.resolveEnvironment(actor.id);
     const materialHash = Array.from(referencedMaterialIds)
       .sort()
       .map((id) => JSON.stringify(localMaterials?.[id] ?? state.materials[id]))
       .join("|");
-    const sig = JSON.stringify({ slots: materialSlots, override: materialId, mats: materialHash });
+    const sig = JSON.stringify({ slots: materialSlots, override: materialId, mats: materialHash, environment: env.actorId });
     const _tsm1 = performance.now();
     if (_tsm1 - _tsm0 > 10) this.warnPerformance("[simularca] syncMeshMaterials sig slow:", (_tsm1 - _tsm0).toFixed(0), "ms | slots:", Object.keys(materialSlots as object ?? {}).length);
 
@@ -2939,131 +3554,6 @@ export class SceneController {
       });
     }
     return chunks;
-  }
-
-  private async updateEnvironmentTexture(): Promise<void> {
-    const state = this.kernel.store.getState().state;
-    const environmentActor = Object.values(state.actors).find((actor) => actor.actorType === "environment");
-    if (!environmentActor) {
-      if (this.currentEnvironmentAssetId) {
-        this.scene.environment = null;
-        this.applySceneBackgroundColor();
-        this.currentEnvironmentAssetId = null;
-      }
-      return;
-    }
-
-    const assetId = typeof environmentActor.params.assetId === "string" ? environmentActor.params.assetId : null;
-    const reloadToken =
-      typeof environmentActor.params.assetIdReloadToken === "number" ? environmentActor.params.assetIdReloadToken : 0;
-    if (!assetId) {
-      if (this.currentEnvironmentAssetId !== null) {
-        this.scene.environment = null;
-        this.currentEnvironmentAssetId = null;
-        this.currentEnvironmentReloadToken = 0;
-        this.applySceneBackgroundColor();
-        this.kernel.store.getState().actions.setActorStatus(environmentActor.id, {
-          values: { loadState: "idle" },
-          updatedAtIso: new Date().toISOString()
-        });
-      }
-      return;
-    }
-    if (assetId === this.currentEnvironmentAssetId && reloadToken === this.currentEnvironmentReloadToken) {
-      return;
-    }
-
-    const asset = state.assets.find((entry) => entry.id === assetId);
-    if (!asset) {
-      this.kernel.store.getState().actions.setActorStatus(environmentActor.id, {
-        values: {},
-        error: "Asset reference not found in project state.",
-        updatedAtIso: new Date().toISOString()
-      });
-      return;
-    }
-    const url = await this.kernel.storage.resolveAssetPath({
-      projectName: state.activeProjectName,
-      relativePath: asset.relativePath
-    });
-
-    const extension = asset.relativePath.split(".").pop()?.toLowerCase();
-    this.kernel.store.getState().actions.setActorStatus(environmentActor.id, {
-      values: {
-        format: extension ?? "hdr",
-        assetFileName: asset.sourceFileName,
-        loadState: "loading"
-      },
-      updatedAtIso: new Date().toISOString()
-    });
-    if (extension === "ktx2") {
-      this.ktx2Loader.load(
-        url,
-        (texture) => {
-          texture.mapping = THREE.EquirectangularReflectionMapping;
-          this.scene.environment = texture;
-          this.scene.background = texture;
-          this.currentEnvironmentAssetId = asset.id;
-          this.currentEnvironmentReloadToken = reloadToken;
-          this.kernel.store.getState().actions.setActorStatus(environmentActor.id, {
-            values: {
-              format: "ktx2",
-              assetFileName: asset.sourceFileName,
-              loadState: "loaded"
-            },
-            updatedAtIso: new Date().toISOString()
-          });
-        },
-        undefined,
-        () => {
-          this.kernel.store.getState().actions.setActorStatus(environmentActor.id, {
-            values: {
-              format: "ktx2",
-              assetFileName: asset.sourceFileName,
-              loadState: "failed"
-            },
-            error: "KTX2 environment load failed. Ensure basis transcoders are available.",
-            updatedAtIso: new Date().toISOString()
-          });
-          this.kernel.store.getState().actions.setStatus(
-            "KTX2 environment load failed. Ensure basis transcoder files are available in /public/basis."
-          );
-        }
-      );
-      return;
-    }
-
-    this.rgbeLoader.load(
-      url,
-      (texture) => {
-        texture.mapping = THREE.EquirectangularReflectionMapping;
-        this.scene.environment = texture;
-        this.scene.background = texture;
-        this.currentEnvironmentAssetId = asset.id;
-        this.currentEnvironmentReloadToken = reloadToken;
-        this.kernel.store.getState().actions.setActorStatus(environmentActor.id, {
-          values: {
-            format: extension ?? "hdr",
-            assetFileName: asset.sourceFileName,
-            loadState: "loaded"
-          },
-          updatedAtIso: new Date().toISOString()
-        });
-      },
-      undefined,
-      () => {
-        this.kernel.store.getState().actions.setActorStatus(environmentActor.id, {
-          values: {
-            format: extension ?? "hdr",
-            assetFileName: asset.sourceFileName,
-            loadState: "failed"
-          },
-          error: "Environment texture load failed.",
-          updatedAtIso: new Date().toISOString()
-        });
-        this.kernel.store.getState().actions.setStatus("Environment texture load failed.");
-      }
-    );
   }
 
   private applySceneBackgroundColor(): void {

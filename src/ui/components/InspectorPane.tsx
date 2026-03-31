@@ -20,7 +20,7 @@ import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import { resolveActorPlugin } from "@/features/plugins/pluginViews";
 import { usePluginRegistryRevision } from "@/features/plugins/usePluginRegistryRevision";
-import { DEFAULT_POST_PROCESSING, DEFAULT_SCENE_HELPERS } from "@/core/defaults";
+import { DEFAULT_POST_PROCESSING, DEFAULT_RENDER_ENGINE, DEFAULT_SCENE_HELPERS } from "@/core/defaults";
 import type {
   ActorNode,
   ActorRuntimeStatus,
@@ -144,6 +144,14 @@ const SCENE_TONEMAPPING_OPTIONS: Array<{ value: SceneToneMappingMode; label: str
   { value: "aces", label: "ACES" },
   { value: "off", label: "Off" }
 ];
+const ENVIRONMENT_PROBE_FACE_PREVIEW = [
+  { key: "px", label: "+X" },
+  { key: "nx", label: "-X" },
+  { key: "py", label: "+Y" },
+  { key: "ny", label: "-Y" },
+  { key: "pz", label: "+Z" },
+  { key: "nz", label: "-Z" }
+] as const;
 
 function resolveActorDescriptor(
   actor: ActorNode,
@@ -675,7 +683,7 @@ function SceneInspectorView(props: SceneInspectorViewProps) {
   const hasEnvironmentBackground =
     typeof environmentActor?.params.assetId === "string" && environmentActor.params.assetId.length > 0;
   const canResetBackground = props.appState.scene.backgroundColor.toLowerCase() !== DEFAULT_SCENE_BACKGROUND;
-  const canResetEngine = props.appState.scene.renderEngine !== "webgl2";
+  const canResetEngine = props.appState.scene.renderEngine !== DEFAULT_RENDER_ENGINE;
   const canResetAntialiasing = props.appState.scene.antialiasing !== true;
   const canResetGridVisible = props.appState.scene.helpers.grid.visible !== DEFAULT_SCENE_HELPERS.grid.visible;
   const canResetGridSize = Math.abs(props.appState.scene.helpers.grid.size - DEFAULT_SCENE_HELPERS.grid.size) > 1e-9;
@@ -1017,7 +1025,7 @@ function SceneInspectorView(props: SceneInspectorViewProps) {
                 title="Reset Engine"
                 disabled={props.readOnly || !canResetEngine}
                 onClick={() => {
-                  props.kernel.store.getState().actions.setSceneRenderSettings({ renderEngine: "webgl2" });
+                  props.kernel.store.getState().actions.setSceneRenderSettings({ renderEngine: DEFAULT_RENDER_ENGINE });
                 }}
               >
                 <FontAwesomeIcon icon={faRotateLeft} />
@@ -2623,6 +2631,16 @@ export function InspectorPane() {
     }
   };
 
+  const renderSelectedEnvironmentProbe = (): void => {
+    if (!singleSelection || singleSelection.actorType !== "environment-probe") {
+      return;
+    }
+    kernel.store.getState().actions.updateActorParams(singleSelection.id, {
+      renderRequestToken: Date.now()
+    });
+    scheduleAutosave();
+  };
+
   const updateSelectedActorEnabled = (nextEnabled: boolean): void => {
     for (const actor of actorSelection) {
       kernel.store.getState().actions.setNodeEnabled({ kind: "actor", id: actor.id }, nextEnabled);
@@ -2664,6 +2682,10 @@ export function InspectorPane() {
 
   const descriptorForSingleSelection = singleSelection ? resolveActorDescriptor(singleSelection, actorDescriptors) : undefined;
   const runtimeStatus = singleSelection ? actorStatusByActorId[singleSelection.id] : undefined;
+  const environmentProbePreviewFaces =
+    singleSelection?.actorType === "environment-probe" && runtimeStatus?.values.previewFaces && typeof runtimeStatus.values.previewFaces === "object"
+      ? (runtimeStatus.values.previewFaces as Record<string, unknown>)
+      : null;
   const statusEntries = singleSelection
     ? (descriptorForSingleSelection?.status?.build({
         actor: singleSelection,
@@ -3383,6 +3405,34 @@ export function InspectorPane() {
             <button type="button" disabled={readOnly} onClick={resetSelectedMistSimulations}>
               Reset Simulation
             </button>
+          </div>
+        </section>
+      ) : null}
+      {singleSelection?.actorType === "environment-probe" ? (
+        <section className="widget-row">
+          <div className="widget-row-header">
+            <span className="widget-label">Environment Probe</span>
+          </div>
+          <div className="camera-path-toolbar">
+            <button
+              type="button"
+              disabled={readOnly || singleSelection.params.renderMode === "always"}
+              onClick={renderSelectedEnvironmentProbe}
+            >
+              Render
+            </button>
+          </div>
+          <div className="environment-probe-preview-grid">
+            {ENVIRONMENT_PROBE_FACE_PREVIEW.map((face) => {
+              const value = environmentProbePreviewFaces?.[face.key];
+              const src = typeof value === "string" ? value : "";
+              return (
+                <div key={face.key} className="environment-probe-preview-face">
+                  <span>{face.label}</span>
+                  {src ? <img src={src} alt={`${face.label} environment probe face`} /> : <div className="environment-probe-preview-empty">No capture</div>}
+                </div>
+              );
+            })}
           </div>
         </section>
       ) : null}

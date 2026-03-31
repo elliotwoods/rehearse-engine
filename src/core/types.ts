@@ -6,10 +6,11 @@ export type SceneNodeKind = "scene" | "actor" | "component";
 export type RenderEngine = "webgl2" | "webgpu";
 export type SceneToneMappingMode = "off" | "aces";
 export type SceneFramePacingMode = "vsync" | "fixed";
-export type SplatColorInputSpace = "linear" | "srgb" | "iphone-sdr";
+export type SplatColorInputSpace = "linear" | "srgb" | "iphone-sdr" | "apple-log";
 export type ActorType =
   | "empty"
   | "environment"
+  | "environment-probe"
   | "gaussian-splat-spark"
   | "mist-volume"
   | "mesh"

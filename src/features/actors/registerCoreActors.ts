@@ -2,6 +2,7 @@ import type { AppKernel } from "@/app/kernel";
 import { acceptDescriptorHotReload } from "@/core/hotReload/hmr";
 import { emptyActorDescriptor } from "@/features/actors/descriptors/emptyActor";
 import { environmentActorDescriptor } from "@/features/actors/descriptors/environmentActor";
+import { environmentProbeActorDescriptor } from "@/features/actors/descriptors/environmentProbeActor";
 import { mistVolumeActorDescriptor } from "@/features/actors/descriptors/mistVolumeActor";
 import { meshActorDescriptor } from "@/features/actors/descriptors/meshActor";
 import { primitiveActorDescriptor } from "@/features/actors/descriptors/primitiveActor";
@@ -12,6 +13,7 @@ export function registerCoreActorDescriptors(kernel: AppKernel): void {
   const descriptors = [
     emptyActorDescriptor,
     environmentActorDescriptor,
+    environmentProbeActorDescriptor,
     mistVolumeActorDescriptor,
     meshActorDescriptor,
     primitiveActorDescriptor,
@@ -27,6 +29,7 @@ export function setupActorHotReload(kernel: AppKernel): void {
   acceptDescriptorHotReload("core-actors", kernel, () => [
     emptyActorDescriptor,
     environmentActorDescriptor,
+    environmentProbeActorDescriptor,
     mistVolumeActorDescriptor,
     meshActorDescriptor,
     primitiveActorDescriptor,

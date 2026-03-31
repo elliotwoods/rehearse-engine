@@ -256,6 +256,14 @@ export function createActorFromDescriptor(kernel: AppKernel, descriptorId: strin
       intensity: 1
     });
   }
+  if (descriptorId === "actor.environmentProbe") {
+    kernel.store.getState().actions.updateActorParams(actorId, {
+      actorIds: [],
+      resolution: 256,
+      preview: "none",
+      renderMode: "on-change"
+    });
+  }
   if (descriptorId === "actor.primitive") {
     kernel.store.getState().actions.updateActorParams(actorId, {
       shape: "sphere",

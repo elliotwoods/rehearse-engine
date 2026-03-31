@@ -23,4 +23,37 @@ describe("scene render order", () => {
 
     expect(ordered).toEqual(["a", "b"]);
   });
+
+  it("updates referenced actors before dependents while preserving tree order", () => {
+    const ordered = collectActorRenderOrder(
+      ["root"],
+      {
+        root: { id: "root", childActorIds: ["probe", "mesh"] },
+        probe: { id: "probe", childActorIds: [] },
+        mesh: { id: "mesh", childActorIds: [] },
+        env: { id: "env", childActorIds: [] }
+      },
+      (actorId) => {
+        if (actorId === "probe") {
+          return ["mesh", "env"];
+        }
+        return [];
+      }
+    );
+
+    expect(ordered).toEqual(["root", "mesh", "env", "probe"]);
+  });
+
+  it("breaks reference cycles safely", () => {
+    const ordered = collectActorRenderOrder(
+      ["a"],
+      {
+        a: { id: "a", childActorIds: [] },
+        b: { id: "b", childActorIds: [] }
+      },
+      (actorId) => (actorId === "a" ? ["b"] : ["a"])
+    );
+
+    expect(ordered).toEqual(["b", "a"]);
+  });
 });

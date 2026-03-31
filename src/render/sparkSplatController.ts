@@ -1,21 +1,30 @@
 import * as THREE from "three";
 import { SplatMesh } from "@sparkjsdev/spark";
 import type { AppKernel } from "@/app/kernel";
-import type { ActorNode, SplatColorInputSpace } from "@/core/types";
+import type { ActorNode } from "@/core/types";
 import { SceneController } from "@/render/sceneController";
+import { parseSplatColorInputSpace } from "@/features/splats/colorSpace";
 
 const SPARK_COORDINATE_CORRECTION_EULER = new THREE.Euler(-Math.PI / 2, 0, 0, "XYZ");
-interface SparkColorControls {
-  decodeEnabled: { value: boolean };
-  colorInputSpace: { value: number };
-}
-
+const SPARK_RENDER_ROOT_NAME = "spark-render-root";
 interface SparkActorEntry {
   assetId: string;
   reloadToken: number;
   mesh: any;
   correctedRoot: any;
-  colorControls: SparkColorControls;
+}
+
+function readUnsupportedWarning(actor: Pick<ActorNode, "params">): string | null {
+  const warnings: string[] = [];
+  const colorInputSpace = parseSplatColorInputSpace(actor.params.colorInputSpace);
+  if (colorInputSpace !== "srgb") {
+    warnings.push(`Captured Color Space "${colorInputSpace}" is ignored in WebGL2.`);
+  }
+  const splatSizeScale = actor.params.splatSizeScale;
+  if (typeof splatSizeScale === "number" && Number.isFinite(splatSizeScale) && Math.abs(splatSizeScale - 1) > 1e-6) {
+    warnings.push("Splat Size is only supported in the WebGPU backend and is ignored in WebGL2.");
+  }
+  return warnings.length > 0 ? warnings.join(" ") : null;
 }
 
 export function isSparkStochasticDepthEnabled(actor: Pick<ActorNode, "params">): boolean {
@@ -45,27 +54,6 @@ export function applySparkStochasticDepthMode(mesh: any, enabled: boolean): void
   }
 }
 
-function parseSparkColorInputSpace(value: unknown): SplatColorInputSpace {
-  return value === "linear" || value === "iphone-sdr" || value === "srgb" ? value : "srgb";
-}
-
-function sparkColorInputSpaceCode(value: SplatColorInputSpace): number {
-  if (value === "linear") {
-    return 0;
-  }
-  if (value === "iphone-sdr") {
-    return 2;
-  }
-  return 1;
-}
-
-function createSparkColorControls(): SparkColorControls {
-  return {
-    decodeEnabled: { value: false },
-    colorInputSpace: { value: 1 }
-  };
-}
-
 function formatLoadError(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -83,6 +71,9 @@ function formatLoadError(error: unknown): string {
 export class SparkSplatController {
   private readonly entriesByActorId = new Map<string, SparkActorEntry>();
   private loadingTokenByActorId = new Map<string, number>();
+  private lastWarning: string | null = null;
+  private pointCount = 0;
+  private bounds: { min: [number, number, number]; max: [number, number, number] } | null = null;
 
   public constructor(
     private readonly kernel: AppKernel,
@@ -122,6 +113,9 @@ export class SparkSplatController {
       this.disposeActorEntry(actorId);
     }
     this.loadingTokenByActorId = new Map<string, number>();
+    this.lastWarning = null;
+    this.pointCount = 0;
+    this.bounds = null;
   }
 
   private async syncSparkActor(actor: ActorNode): Promise<void> {
@@ -159,6 +153,13 @@ export class SparkSplatController {
       existingEntry && existingEntry.assetId === assetId && existingEntry.reloadToken === reloadToken && existingEntry.mesh;
     if (isLoaded) {
       this.applySparkRuntimeParams(existingEntry, actor);
+      this.reportLoadedStatus(
+        actor,
+        undefined,
+        undefined,
+        undefined,
+        this.kernel.store.getState().actions.setActorStatus
+      );
       return;
     }
 
@@ -183,11 +184,14 @@ export class SparkSplatController {
         return;
       }
       this.disposeActorEntry(actor.id);
-
-      const correctedRoot = new THREE.Group();
+      const correctedRoot =
+        (actorObject.getObjectByName(SPARK_RENDER_ROOT_NAME) as THREE.Group | null) ?? new THREE.Group();
+      correctedRoot.name = SPARK_RENDER_ROOT_NAME;
+      if (correctedRoot.parent !== actorObject) {
+        actorObject.add(correctedRoot);
+      }
+      correctedRoot.clear();
       correctedRoot.rotation.copy(SPARK_COORDINATE_CORRECTION_EULER);
-      actorObject.add(correctedRoot);
-      const colorControls = createSparkColorControls();
       const mesh = new (SplatMesh as any)({
         fileBytes: bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
       });
@@ -196,8 +200,8 @@ export class SparkSplatController {
         await mesh.initialized;
       }
       if (this.loadingTokenByActorId.get(actor.id) !== loadToken) {
+        mesh.removeFromParent?.();
         mesh.dispose?.();
-        correctedRoot.parent?.remove(correctedRoot);
         return;
       }
 
@@ -207,25 +211,19 @@ export class SparkSplatController {
         reloadToken,
         mesh,
         correctedRoot,
-        colorControls
       };
       this.applySparkRuntimeParams(entry, actor);
-
       const bounds = typeof mesh.getBoundingBox === "function" ? mesh.getBoundingBox() : null;
       const pointCount = Number(mesh.numSplats ?? mesh.splatCount ?? 0);
+      this.pointCount = pointCount;
+      this.bounds = bounds
+        ? {
+            min: [bounds.min.x, bounds.min.y, bounds.min.z],
+            max: [bounds.max.x, bounds.max.y, bounds.max.z]
+          }
+        : null;
       this.entriesByActorId.set(actor.id, entry);
-      this.kernel.store.getState().actions.setActorStatus(actor.id, {
-        values: {
-          backend: "spark-webgl",
-          loadState: "loaded",
-          assetFileName: asset.sourceFileName,
-          pointCount,
-          transparencyMode: isSparkStochasticDepthEnabled(actor) ? "stochastic-depth" : "alpha-blended",
-          boundsMin: bounds ? [bounds.min.x, bounds.min.y, bounds.min.z] : undefined,
-          boundsMax: bounds ? [bounds.max.x, bounds.max.y, bounds.max.z] : undefined
-        },
-        updatedAtIso: new Date().toISOString()
-      });
+      this.reportLoadedStatus(actor, asset.sourceFileName, pointCount, bounds, this.kernel.store.getState().actions.setActorStatus);
       this.kernel.store.getState().actions.setStatus(
         `Gaussian splat loaded (Spark): ${asset.sourceFileName} | points: ${pointCount.toLocaleString()}`
       );
@@ -254,7 +252,9 @@ export class SparkSplatController {
     if (!existing) {
       return;
     }
-    existing.correctedRoot.parent?.remove(existing.correctedRoot);
+    this.pointCount = 0;
+    this.bounds = null;
+    existing.mesh.removeFromParent?.();
     if (typeof existing.mesh?.dispose === "function") {
       existing.mesh.dispose();
     }
@@ -262,7 +262,7 @@ export class SparkSplatController {
   }
 
   private applySparkRuntimeParams(entry: SparkActorEntry, actor: ActorNode): void {
-    const { mesh, colorControls } = entry;
+    const { mesh } = entry;
     applySparkStochasticDepthMode(mesh, isSparkStochasticDepthEnabled(actor));
 
     const scaleFactor = Number(actor.params.scaleFactor ?? 1);
@@ -274,11 +274,6 @@ export class SparkSplatController {
     if (mesh.recolor instanceof THREE.Color) {
       mesh.recolor.setRGB(safeBrightness, safeBrightness, safeBrightness);
     }
-
-    const colorInputSpace = parseSparkColorInputSpace(actor.params.colorInputSpace);
-    const tonemappingEnabled = this.kernel.store.getState().state.scene.tonemapping.mode !== "off";
-    colorControls.decodeEnabled.value = tonemappingEnabled;
-    colorControls.colorInputSpace.value = sparkColorInputSpaceCode(colorInputSpace);
 
     const opacity = Number(actor.params.opacity ?? 1);
     const safeOpacity = Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1;
@@ -296,6 +291,33 @@ export class SparkSplatController {
     if (typeof mesh.prepareViewpoint === "function") {
       mesh.prepareViewpoint(mesh.viewpoint ?? mesh.defaultView);
     }
+  }
+
+  private reportLoadedStatus(
+    actor: ActorNode,
+    assetFileName: string | undefined,
+    pointCount: number | undefined,
+    bounds: { min: [number, number, number]; max: [number, number, number] } | null | undefined,
+    setActorStatus: (status: unknown) => void
+  ): void {
+    const warning = readUnsupportedWarning(actor);
+    if (warning === this.lastWarning && assetFileName === undefined) {
+      return;
+    }
+    this.lastWarning = warning;
+    setActorStatus({
+      values: {
+        backend: "spark-webgl",
+        loadState: "loaded",
+        assetFileName,
+        pointCount: pointCount ?? this.pointCount,
+        transparencyMode: isSparkStochasticDepthEnabled(actor) ? "stochastic-depth" : "alpha-blended",
+        boundsMin: bounds ? [bounds.min.x, bounds.min.y, bounds.min.z] : this.bounds?.min ?? undefined,
+        boundsMax: bounds ? [bounds.max.x, bounds.max.y, bounds.max.z] : this.bounds?.max ?? undefined,
+        warning
+      },
+      updatedAtIso: new Date().toISOString()
+    });
   }
 }
 

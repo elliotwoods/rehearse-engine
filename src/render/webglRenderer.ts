@@ -17,6 +17,7 @@ import { reportSlowFrame } from "@/render/slowFrameDiagnostics";
 import type { MistVolumeQualityMode } from "@/render/mistVolumeController";
 import { countActorStats, summarizeMemory, type RenderStatsSample } from "@/render/stats";
 import { SceneOutputPass, threeToneMappingForMode } from "@/render/tonemapping";
+import { pruneInvalidSceneGraph } from "@/render/sceneGraphUtils";
 import { captureViewportScreenshotFromCanvas, type ViewportScreenshotResult } from "@/features/render/viewportScreenshot";
 
 const FAST_STATS_INTERVAL_MS = 500;
@@ -273,15 +274,25 @@ export class WebGlViewport {
     }
     this.kernel.clock.tick(nowMs, this.kernel.store);
     this.renderInFlight = true;
-    void this.renderFrame().finally(() => {
-      this.renderInFlight = false;
-    });
+    void this.renderFrame()
+      .catch((error) => {
+        if (!this.disposed) {
+          console.warn("[simularca] WebGL2 render frame failed:", error);
+        }
+      })
+      .finally(() => {
+        this.renderInFlight = false;
+      });
   };
 
   private async renderFrame(options?: { collectStats?: boolean }): Promise<void> {
     const collectStats = options?.collectStats ?? true;
     const _rf0 = performance.now();
     await this.sceneController.syncFromState();
+    if (this.disposed) {
+      return;
+    }
+    pruneInvalidSceneGraph(this.sceneController.scene);
     const _rf1 = performance.now();
     const _rf2 = _rf1;
     this.enforceActorCompatibility("webgl2");

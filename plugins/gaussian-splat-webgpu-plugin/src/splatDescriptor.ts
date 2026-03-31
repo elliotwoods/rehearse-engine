@@ -67,7 +67,7 @@ const schema: ParameterSchema = {
       key: "colorInputSpace",
       label: "Captured Color Space",
       type: "select",
-      options: ["srgb", "iphone-sdr", "linear"],
+      options: ["srgb", "iphone-sdr", "apple-log", "linear"],
       defaultValue: "srgb"
     }
   ]

@@ -3918,6 +3918,46 @@ body.is-dragging-viewport-axes * {
   gap: 6px;
 }
 
+.environment-probe-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.environment-probe-preview-face {
+  display: grid;
+  gap: 6px;
+}
+
+.environment-probe-preview-face span {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.environment-probe-preview-face img,
+.environment-probe-preview-empty {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border: 1px solid var(--line);
+  background: #071220;
+}
+
+.environment-probe-preview-face img {
+  display: block;
+  object-fit: cover;
+}
+
+.environment-probe-preview-empty {
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .inspector-nav-header {
   display: flex;
   align-items: center;

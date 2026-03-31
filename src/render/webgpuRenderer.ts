@@ -16,6 +16,7 @@ import { CurveEditController } from "./curveEditController";
 import { reportSlowFrame } from "./slowFrameDiagnostics";
 import type { MistVolumeQualityMode } from "./mistVolumeController";
 import { buildWebGpuToneMappedOutputNode, threeToneMappingForMode } from "./tonemapping";
+import { pruneInvalidSceneGraph } from "./sceneGraphUtils";
 import { captureViewportScreenshotFromCanvas, type ViewportScreenshotResult } from "@/features/render/viewportScreenshot";
 
 const FAST_STATS_INTERVAL_MS = 500;
@@ -85,6 +86,7 @@ export class WebGpuViewport {
     });
     this.framePacer = new FramePacer(kernel.store.getState().state.scene.framePacing);
     this.renderer = new WebGPURenderer({ antialias: options.antialias, alpha: false });
+    this.sceneController.setRenderer(this.renderer as unknown as any);
     const initialWidth = this.fixedViewportSize?.width ?? Math.max(1, this.mountEl.clientWidth);
     const initialHeight = this.fixedViewportSize?.height ?? Math.max(1, this.mountEl.clientHeight);
     this.applyRenderScale(initialWidth, initialHeight);
@@ -196,6 +198,7 @@ export class WebGpuViewport {
     this.controls.dispose();
     this.actorTransformController?.dispose();
     this.curveEditController?.dispose();
+    this.sceneController.setRenderer(null);
     this.sceneController.dispose();
     this.clearCompatibilityStatus();
     if (this.initialized) {
@@ -277,15 +280,25 @@ export class WebGpuViewport {
     }
     this.kernel.clock.tick(nowMs, this.kernel.store);
     this.renderInFlight = true;
-    void this.renderFrame().finally(() => {
-      this.renderInFlight = false;
-    });
+    void this.renderFrame()
+      .catch((error) => {
+        if (!this.disposed) {
+          console.warn("[simularca] WebGPU render frame failed:", error);
+        }
+      })
+      .finally(() => {
+        this.renderInFlight = false;
+      });
   };
 
   private async renderFrame(options?: { collectStats?: boolean }): Promise<void> {
     const collectStats = options?.collectStats ?? true;
     const _rf0 = performance.now();
     await this.sceneController.syncFromState();
+    if (this.disposed) {
+      return;
+    }
+    pruneInvalidSceneGraph(this.sceneController.scene);
     const _rf1 = performance.now();
     this.syncCameraState();
     this.cameraController.update(performance.now());
@@ -298,11 +311,28 @@ export class WebGpuViewport {
     this.syncCameraToState();
     this.syncToneMappingOutput();
     const _rf2 = performance.now();
-    const renderPromise =
-      typeof (this.postProcessing as any).renderAsync === "function"
-        ? (this.postProcessing as any).renderAsync()
-        : Promise.resolve((this.postProcessing as any).render());
-    await Promise.resolve(renderPromise);
+    const renderOnce = async (): Promise<void> => {
+      const renderPromise =
+        typeof (this.postProcessing as any).renderAsync === "function"
+          ? (this.postProcessing as any).renderAsync()
+          : Promise.resolve((this.postProcessing as any).render());
+      await Promise.resolve(renderPromise);
+    };
+    try {
+      await renderOnce();
+    } catch (error) {
+      if (this.disposed) {
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.includes("Cannot read properties of null") && message.includes("visible")) {
+        pruneInvalidSceneGraph(this.sceneController.scene);
+        this.postProcessing.needsUpdate = true;
+        await renderOnce();
+      } else {
+        throw error;
+      }
+    }
     const _rf3 = performance.now();
     if (collectStats) {
       reportSlowFrame(this.kernel, {

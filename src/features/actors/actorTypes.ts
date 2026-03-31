@@ -30,6 +30,42 @@ export const ENVIRONMENT_ACTOR_SCHEMA: ParameterSchema = {
   ]
 };
 
+export const ENVIRONMENT_PROBE_ACTOR_SCHEMA: ParameterSchema = {
+  id: "actor.environmentProbe",
+  title: "Environment Probe",
+  params: [
+    {
+      key: "actorIds",
+      label: "Captured Actors",
+      type: "actor-ref-list",
+      allowSelf: false
+    },
+    {
+      key: "resolution",
+      label: "Face Resolution",
+      type: "number",
+      min: 16,
+      max: 2048,
+      step: 1,
+      defaultValue: 256
+    },
+    {
+      key: "preview",
+      label: "Preview",
+      type: "select",
+      options: ["none", "cube", "sphere"],
+      defaultValue: "none"
+    },
+    {
+      key: "renderMode",
+      label: "Render",
+      type: "select",
+      options: ["never", "on-change", "always"],
+      defaultValue: "on-change"
+    }
+  ]
+};
+
 export const GAUSSIAN_SPLAT_SPARK_SCHEMA: ParameterSchema = {
   id: "actor.gaussianSplatSpark",
   title: "Gaussian Splat",
@@ -67,7 +103,7 @@ export const GAUSSIAN_SPLAT_SPARK_SCHEMA: ParameterSchema = {
       key: "colorInputSpace",
       label: "Captured Color Space",
       type: "select",
-      options: ["srgb", "iphone-sdr", "linear"],
+      options: ["srgb", "iphone-sdr", "apple-log", "linear"],
       defaultValue: "srgb"
     },
     {
@@ -780,6 +816,13 @@ export const MESH_ACTOR_SCHEMA: ParameterSchema = {
       type: "material-ref"
     },
     {
+      key: "environmentSourceId",
+      label: "Environment Override",
+      type: "actor-ref",
+      allowedActorTypes: ["environment", "environment-probe"],
+      allowSelf: false
+    },
+    {
       key: "materialSlots",
       label: "Material Slots",
       type: "material-slots"
@@ -931,6 +974,13 @@ export const PRIMITIVE_ACTOR_SCHEMA: ParameterSchema = {
       label: "Material",
       type: "material-ref",
       defaultValue: "mat.plastic.white.glossy"
+    },
+    {
+      key: "environmentSourceId",
+      label: "Environment Override",
+      type: "actor-ref",
+      allowedActorTypes: ["environment", "environment-probe"],
+      allowSelf: false
     },
     {
       key: "wireframe",
