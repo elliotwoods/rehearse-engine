@@ -127,7 +127,7 @@ describe("spark stochastic depth helpers", () => {
         values: expect.objectContaining({
           backend: "spark-webgl",
           loadState: "loaded",
-          warning: expect.stringContaining("Captured Color Space \"apple-log\" is ignored in WebGL2.")
+          warning: expect.stringContaining("Splat Output Transform \"apple-log\" is ignored in WebGL2.")
         })
       })
     );
