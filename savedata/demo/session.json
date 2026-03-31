@@ -14,7 +14,7 @@
     ],
     "sceneComponentIds": [],
     "backgroundColor": "#070b12",
-    "renderEngine": "webgl2",
+    "renderEngine": "webgpu",
     "antialiasing": true,
     "cameraKeyboardNavigation": true,
     "cameraNavigationSpeed": 6

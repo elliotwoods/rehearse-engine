@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { DEFAULT_SCENE_HELPERS } from "@/core/defaults";
+import { DEFAULT_RENDER_ENGINE, DEFAULT_SCENE_HELPERS } from "@/core/defaults";
 import { PROJECT_SCHEMA_VERSION } from "@/core/types";
 import type { ProjectSnapshotManifest } from "@/core/types";
 
@@ -137,6 +137,7 @@ const actorSchema = z.object({
   actorType: z.enum([
     "empty",
     "environment",
+    "environment-probe",
     "mist-volume",
     "mesh",
     "dxf-reference",
@@ -223,7 +224,7 @@ const projectSnapshotSchema = z.object({
     actorIds: z.array(z.string()),
     sceneComponentIds: z.array(z.string()),
     backgroundColor: z.string().default("#070b12"),
-    renderEngine: z.enum(["webgl2", "webgpu"]).default("webgl2"),
+    renderEngine: z.enum(["webgl2", "webgpu"]).default(DEFAULT_RENDER_ENGINE),
     antialiasing: z.boolean().default(true),
     framePacing: z
       .object({

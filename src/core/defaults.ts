@@ -7,6 +7,7 @@ import type {
   SceneFramePacingSettings,
   SceneHelpersSettings,
   ScenePostProcessingSettings,
+  RenderEngine,
   SceneState,
   TimeState
 } from "./types";
@@ -170,6 +171,7 @@ export const DEFAULT_FRAME_PACING: SceneFramePacingSettings = {
   mode: "vsync",
   targetFps: 60
 };
+export const DEFAULT_RENDER_ENGINE: RenderEngine = "webgpu";
 export const DEFAULT_POST_PROCESSING: ScenePostProcessingSettings = {
   bloom: {
     enabled: false,
@@ -223,7 +225,7 @@ export function createDefaultScene(): {
     actorIds: [],
     sceneComponentIds: [],
     backgroundColor: "#070b12",
-    renderEngine: "webgl2",
+    renderEngine: DEFAULT_RENDER_ENGINE,
     antialiasing: true,
     framePacing: structuredClone(DEFAULT_FRAME_PACING),
     tonemapping: {

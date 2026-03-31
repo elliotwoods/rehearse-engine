@@ -73,6 +73,7 @@ describe("project snapshot schema", () => {
       mode: "aces",
       dither: true
     });
+    expect(parsed.scene.renderEngine).toBe("webgpu");
     expect(parsed.scene.framePacing).toEqual({
       mode: "vsync",
       targetFps: 60
@@ -83,6 +84,57 @@ describe("project snapshot schema", () => {
     expect(parsed.actors[curveActorId]?.actorType).toBe("curve");
     expect(parsed.actors[curveActorId]?.params.curveData).toBeTruthy();
     expect(parsed.lastPerspectiveCamera).toEqual(state.lastPerspectiveCamera);
+  });
+
+  it("round-trips environment probe actors", () => {
+    const state = createInitialState("electron-rw", "demo", "main");
+    const probeActorId = createId("actor");
+    state.actors[probeActorId] = {
+      id: probeActorId,
+      name: "Probe",
+      enabled: true,
+      kind: "actor",
+      actorType: "environment-probe",
+      visibilityMode: "visible",
+      parentActorId: null,
+      childActorIds: [],
+      componentIds: [],
+      transform: {
+        position: [1, 2, 3],
+        rotation: [0, 0, 0],
+        scale: [1, 1, 1]
+      },
+      params: {
+        actorIds: [],
+        resolution: 256,
+        preview: "sphere",
+        renderMode: "on-change"
+      }
+    };
+    state.scene.actorIds.push(probeActorId);
+
+    const payload = serializeProjectSnapshot({
+      schemaVersion: PROJECT_SCHEMA_VERSION,
+      appMode: "electron-rw",
+      projectName: state.activeProjectName,
+      snapshotName: state.activeSnapshotName,
+      createdAtIso: "2026-03-31T00:00:00.000Z",
+      updatedAtIso: "2026-03-31T00:00:00.000Z",
+      scene: state.scene,
+      actors: state.actors,
+      components: state.components,
+      camera: state.camera,
+      lastPerspectiveCamera: state.lastPerspectiveCamera,
+      time: state.time,
+      pluginViews: {},
+      materials: state.materials,
+      assets: state.assets
+    });
+
+    const parsed = parseProjectSnapshot(payload);
+    expect(parsed.actors[probeActorId]?.actorType).toBe("environment-probe");
+    expect(parsed.actors[probeActorId]?.params.preview).toBe("sphere");
+    expect(parsed.actors[probeActorId]?.params.renderMode).toBe("on-change");
   });
 
   it("hydrates default tonemapping settings for legacy snapshots", () => {
