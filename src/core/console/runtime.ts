@@ -42,6 +42,24 @@ const METHOD_DOCS: ConsoleMethodDoc[] = [
   { path: "help", signature: "help()", description: "List available JS console APIs.", examples: ["help()"] },
   { path: "scene.stats", signature: "scene.stats()", description: "Return scene stats.", examples: ["scene.stats()"] },
   {
+    path: "scene.profile.state",
+    signature: "scene.profile.state()",
+    description: "Return live profiler capture state.",
+    examples: ["scene.profile.state()"]
+  },
+  {
+    path: "scene.profile.latestSummary",
+    signature: "scene.profile.latestSummary()",
+    description: "Return the latest completed profiler result as compact LLM-readable JSON.",
+    examples: ["scene.profile.latestSummary()"]
+  },
+  {
+    path: "scene.profile.latestRaw",
+    signature: "scene.profile.latestRaw()",
+    description: "Return the full latest completed profiler capture tree.",
+    examples: ["scene.profile.latestRaw()"]
+  },
+  {
     path: "scene.listActors",
     signature: "scene.listActors(filter?)",
     description: "List actors with optional filter.",
@@ -454,6 +472,17 @@ function buildRuntimeApi(kernel: AppKernel) {
   const scene = {
     stats() {
       return kernel.store.getState().state.stats;
+    },
+    profile: {
+      state() {
+        return kernel.profiler.getState();
+      },
+      latestSummary() {
+        return kernel.profiler.getLatestSummary();
+      },
+      latestRaw() {
+        return kernel.profiler.getLatestResult();
+      }
     },
     listActors(filter?: { type?: string; nameIncludes?: string; enabled?: boolean }) {
       return Object.values(kernel.store.getState().state.actors).filter((actor) => {

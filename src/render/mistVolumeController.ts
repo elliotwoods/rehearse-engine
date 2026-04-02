@@ -1569,7 +1569,20 @@ export class MistVolumeController {
       }
     }
     for (const actor of actors) {
-      this.syncActor(actor, state, simTimeSeconds, dtSeconds);
+      if (this.kernel.profiler.shouldProfileUpdates()) {
+        this.kernel.profiler.withActorPhase(
+          {
+            actorId: actor.id,
+            actorName: actor.name,
+            actorType: actor.actorType,
+            pluginType: actor.pluginType
+          },
+          "update",
+          () => this.syncActor(actor, state, simTimeSeconds, dtSeconds)
+        );
+      } else {
+        this.syncActor(actor, state, simTimeSeconds, dtSeconds);
+      }
     }
   }
 
@@ -1612,12 +1625,18 @@ export class MistVolumeController {
     }
     const quality = pickMistVolumeQuality(actor, this.qualityMode);
     const entry = this.ensureEntry(actor.id, quality.resolution);
+    const profileChunk = <T,>(label: string, run: () => T): T => {
+      if (this.kernel.profiler.shouldProfileUpdates() && this.kernel.profiler.getDetailPreset() === "standard") {
+        return this.kernel.profiler.withChunk(label, run);
+      }
+      return run();
+    };
     if (entry.previewGroup.parent !== actorObject) {
       actorObject.add(entry.previewGroup);
     }
     const updateStart = performance.now();
     const previewMode = readPreviewMode(actor.params.previewMode);
-    const binding = this.resolveVolumeBinding(actor);
+    const binding = profileChunk("Volume binding", () => this.resolveVolumeBinding(actor));
     const boundarySettings = readBoundarySettings(actor);
     if (!binding) {
       this.setPreviewVisibility(entry, false, previewMode);
@@ -1668,36 +1687,42 @@ export class MistVolumeController {
     }
 
     const sourceCollectStart = performance.now();
-    const sources = this.collectSources(actor, binding);
+    const sources = profileChunk("Source collection", () => this.collectSources(actor, binding));
     const sourceCollectMs = performance.now() - sourceCollectStart;
     const clampedDt = Math.max(0, Math.min(dtSeconds, 1 / 15));
     const simulationStart = performance.now();
     let cpuDiagnostics: MistCpuSimulationDiagnostics = { postInjectRange: "n/a", postTransportRange: "n/a", postFadeRange: "n/a" };
     if (clampedDt > 0) {
-      cpuDiagnostics = this.simulate(entry, actor, sources, simTimeSeconds, clampedDt, quality);
+      cpuDiagnostics = profileChunk("Simulation", () =>
+        this.simulate(entry, actor, sources, simTimeSeconds, clampedDt, quality)
+      );
     }
     const simulationMs = performance.now() - simulationStart;
     const uploadStart = performance.now();
     let uploadByteRange: [number, number] | "n/a" = "n/a";
     if (clampedDt > 0 || shouldReset) {
-      uploadByteRange = this.uploadDensity(entry);
+      uploadByteRange = profileChunk("Density upload", () => this.uploadDensity(entry));
     }
     const uploadMs = performance.now() - uploadStart;
     entry.lastSimTimeSeconds = simTimeSeconds;
 
     const densityRange = this.computeDensityRange(entry.density);
-    const previewVisible = this.setPreviewVisibility(entry, actorObject.visible === true, previewMode);
+    const previewVisible = profileChunk("Preview update", () =>
+      this.setPreviewVisibility(entry, actorObject.visible === true, previewMode)
+    );
     const debugSettings = readDebugSettings(actor);
     const diagnosticSampleRange = this.computeDiagnosticSampleRange(entry, actor, simTimeSeconds);
-    const debugState = this.updateDebugOverlay(
-      entry,
-      actor,
-      binding,
-      previewMode,
-      readNumber(actor.params.slicePosition, 0.5, 0, 1),
-      sources,
-      simTimeSeconds,
-      previewVisible
+    const debugState = profileChunk("Debug overlay", () =>
+      this.updateDebugOverlay(
+        entry,
+        actor,
+        binding,
+        previewMode,
+        readNumber(actor.params.slicePosition, 0.5, 0, 1),
+        sources,
+        simTimeSeconds,
+        previewVisible
+      )
     );
     const noiseSeed = Math.floor(readNumber(actor.params.noiseSeed, 1));
     const emissionNoiseStrength = readNumber(actor.params.emissionNoiseStrength, 0, 0);

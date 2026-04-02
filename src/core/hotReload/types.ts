@@ -50,6 +50,7 @@ export interface SceneHookContext {
   } | null;
   getMistVolumeResource(actorId: string): MistVolumeResource | null;
   getVolumetricRayResource(actorId: string): VolumetricRayFieldResource | null;
+  profileChunk?<T>(label: string, run: () => T): T;
   setActorStatus(status: ActorRuntimeStatus | null): void;
   readAssetBytes(assetId: string): Promise<Uint8Array>;
 }

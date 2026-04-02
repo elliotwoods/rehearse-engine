@@ -34,6 +34,7 @@ import {
   formatEnvironmentProbeSkippedWarning
 } from "@/render/environmentProbeCompatibility";
 import { MistVolumeController, type MistVolumeQualityMode } from "@/render/mistVolumeController";
+import type { ActorProfileMeta } from "@/render/profiling";
 import { collectActorRenderOrder } from "@/render/sceneRenderOrder";
 import { pruneInvalidSceneGraph } from "@/render/sceneGraphUtils";
 
@@ -168,6 +169,15 @@ export function buildEnvironmentProbeSelectedActorSignature(
     params: target.params,
     loadState: runtimeStatus?.values.loadState ?? null
   });
+}
+
+function buildActorProfileMeta(actor: ActorNode): ActorProfileMeta {
+  return {
+    actorId: actor.id,
+    actorName: actor.name,
+    actorType: actor.actorType,
+    pluginType: actor.pluginType
+  };
 }
 
 export interface SceneControllerOptions {
@@ -630,7 +640,8 @@ export class SceneController {
       },
       addLog: (entry) => {
         this.kernel.store.getState().actions.addLog(entry);
-      }
+      },
+      profiler: this.kernel.profiler
     });
   }
 
@@ -719,21 +730,24 @@ export class SceneController {
     this.applySceneHelperVisibility();
   }
 
-  private shouldLogPerformanceDiagnostics(): boolean {
-    return this.kernel.store.getState().state.runtimeDebug.slowFrameDiagnosticsEnabled;
-  }
-
-  private warnPerformance(...args: unknown[]): void {
-    if (!this.shouldLogPerformanceDiagnostics()) {
-      return;
-    }
-    console.warn(...args);
-  }
-
   public async syncFromState(): Promise<void> {
-    const t0 = performance.now();
+    const profileFrameChunk = async <T,>(label: string, run: () => T | Promise<T>): Promise<T> => {
+      if (!this.kernel.profiler.isCaptureActive()) {
+        return await run();
+      }
+      return await this.kernel.profiler.withFrameChunk(label, run);
+    };
+    const profileActorChunk = <T,>(label: string, run: () => T | Promise<T>): T | Promise<T> => {
+      if (!this.kernel.profiler.shouldProfileUpdates() || this.kernel.profiler.getDetailPreset() !== "standard") {
+        return run();
+      }
+      return this.kernel.profiler.withChunk(label, run);
+    };
+
     const state = this.kernel.store.getState().state;
-    this.syncSceneHelpers(state.scene.helpers);
+    await profileFrameChunk("Scene helpers", () => {
+      this.syncSceneHelpers(state.scene.helpers);
+    });
     const actorIds = new Set(Object.keys(state.actors));
     const orderedActorIds = collectActorRenderOrder(
       state.scene.actorIds,
@@ -747,39 +761,40 @@ export class SceneController {
     const dtSeconds = Math.max(0, simTimeSeconds - this.previousSimTimeSeconds);
     this.previousSimTimeSeconds = simTimeSeconds;
 
-    for (const existing of [...this.actorObjects.keys()]) {
-      if (!actorIds.has(existing)) {
-        const object = this.actorObjects.get(existing);
-        const removedActor = this.lastKnownActorById.get(existing) ?? null;
-        this.disposePluginSceneObject(removedActor, object, this.pluginDescriptorByActorId.get(existing) ?? undefined);
-        if (object) {
-          object.parent?.remove(object);
-        }
-        this.actorObjects.delete(existing);
-        this.gaussianAssetByActorId.delete(existing);
-        this.gaussianReloadTokenByActorId.delete(existing);
-        this.meshAssetByActorId.delete(existing);
-        this.meshReloadTokenByActorId.delete(existing);
-        this.dxfAssetByActorId.delete(existing);
-        this.dxfReloadTokenByActorId.delete(existing);
-        this.dxfDocumentByActorId.delete(existing);
-        this.dxfSceneByActorId.delete(existing);
-        this.dxfBuildSignatureByActorId.delete(existing);
-        this.dxfAppearanceSignatureByActorId.delete(existing);
-        this.dxfStatusSignatureByActorId.delete(existing);
-        this.meshLoadTokenByActorId.delete(existing);
-        this.disposeMeshAnimationState(existing);
-        const helper = this.gaussianBoundsHelpers.get(existing);
-        if (helper) {
-          helper.parent?.remove(helper);
-          this.gaussianBoundsHelpers.delete(existing);
-        }
-        this.gaussianGeometryByActorId.delete(existing);
-        this.gaussianVisualSignatureByActorId.delete(existing);
-        this.gaussianVisibleCountByActorId.delete(existing);
-        this.gaussianTriangleCountByActorId.delete(existing);
-        this.gaussianSortableBatchesByActorId.delete(existing);
-        this.curveSignatureByActorId.delete(existing);
+    await profileFrameChunk("Scene cleanup", () => {
+      for (const existing of [...this.actorObjects.keys()]) {
+        if (!actorIds.has(existing)) {
+          const object = this.actorObjects.get(existing);
+          const removedActor = this.lastKnownActorById.get(existing) ?? null;
+          this.disposePluginSceneObject(removedActor, object, this.pluginDescriptorByActorId.get(existing) ?? undefined);
+          if (object) {
+            object.parent?.remove(object);
+          }
+          this.actorObjects.delete(existing);
+          this.gaussianAssetByActorId.delete(existing);
+          this.gaussianReloadTokenByActorId.delete(existing);
+          this.meshAssetByActorId.delete(existing);
+          this.meshReloadTokenByActorId.delete(existing);
+          this.dxfAssetByActorId.delete(existing);
+          this.dxfReloadTokenByActorId.delete(existing);
+          this.dxfDocumentByActorId.delete(existing);
+          this.dxfSceneByActorId.delete(existing);
+          this.dxfBuildSignatureByActorId.delete(existing);
+          this.dxfAppearanceSignatureByActorId.delete(existing);
+          this.dxfStatusSignatureByActorId.delete(existing);
+          this.meshLoadTokenByActorId.delete(existing);
+          this.disposeMeshAnimationState(existing);
+          const helper = this.gaussianBoundsHelpers.get(existing);
+          if (helper) {
+            helper.parent?.remove(helper);
+            this.gaussianBoundsHelpers.delete(existing);
+          }
+          this.gaussianGeometryByActorId.delete(existing);
+          this.gaussianVisualSignatureByActorId.delete(existing);
+          this.gaussianVisibleCountByActorId.delete(existing);
+          this.gaussianTriangleCountByActorId.delete(existing);
+          this.gaussianSortableBatchesByActorId.delete(existing);
+          this.curveSignatureByActorId.delete(existing);
           this.meshMaterialSigByActorId.delete(existing);
           this.pluginDescriptorByActorId.delete(existing);
           this.environmentTextureByActorId.get(existing)?.dispose?.();
@@ -790,116 +805,121 @@ export class SceneController {
           if (object instanceof THREE.Group) {
             const dxfRoot = object.getObjectByName(DXF_RENDER_ROOT_NAME);
             if (dxfRoot instanceof THREE.Group) {
-            disposeDxfObject(dxfRoot);
+              disposeDxfObject(dxfRoot);
+            }
           }
+          this.kernel.store.getState().actions.setActorStatus(existing, null);
+          this.primitiveSignatureByActorId.delete(existing);
+          this.lastKnownActorById.delete(existing);
         }
-        this.kernel.store.getState().actions.setActorStatus(existing, null);
-        this.primitiveSignatureByActorId.delete(existing);
-        this.lastKnownActorById.delete(existing);
       }
-      }
+    });
 
+    await profileFrameChunk("Plugin runtime sync", () => {
       this.pluginActorRuntimeController.sync(state, dtSeconds);
+    });
 
-      const tA = performance.now();
+    await profileFrameChunk("Actor update loop", async () => {
       for (const actor of orderedActors) {
-      const _ta0 = performance.now();
-      this.lastKnownActorById.set(actor.id, actor);
-      const _ta1 = performance.now();
-      await this.ensureActorObject(actor);
-      const _ta2 = performance.now();
-      this.refreshPluginSceneObjectIfNeeded(actor);
-      const _ta2b = performance.now();
-      this.syncActorParentAttachment(actor.id, actor.parentActorId);
-      const _ta3 = performance.now();
-      let _ta4 = _ta3, _ta5 = _ta3;
-      if (actor.actorType === "mesh") {
-        // Avoid an unconditional `await` every frame. `syncMeshAsset` early-exits
-        // synchronously, but `async` always yields to the microtask queue, which
-        // can allow queued macrotasks (e.g., XHR/DOMParser callbacks) to run and
-        // block the frame for seconds. Only await when an actual reload is needed.
-        const _tPrecheck = performance.now();
-        const assetId = typeof actor.params.assetId === "string" ? actor.params.assetId : "";
-        const reloadToken = typeof actor.params.assetIdReloadToken === "number" ? actor.params.assetIdReloadToken : 0;
-        const needsReload = assetId !== (this.meshAssetByActorId.get(actor.id) ?? "")
-          || reloadToken !== (this.meshReloadTokenByActorId.get(actor.id) ?? 0);
-        const _precheckDt = performance.now() - _tPrecheck;
-        if (_precheckDt > 5) this.warnPerformance("[rehearse-engine] mesh precheck slow:", _precheckDt.toFixed(1), "ms");
-        if (needsReload) {
-          await this.syncMeshAsset(actor);
+        const syncActorWork = async () => {
+          profileActorChunk("Actor bookkeeping", () => {
+            this.lastKnownActorById.set(actor.id, actor);
+          });
+          await profileActorChunk("Ensure object", () => this.ensureActorObject(actor));
+          profileActorChunk("Refresh plugin object", () => {
+            this.refreshPluginSceneObjectIfNeeded(actor);
+          });
+          profileActorChunk("Parent attachment", () => {
+            this.syncActorParentAttachment(actor.id, actor.parentActorId);
+          });
+          if (actor.actorType === "mesh") {
+            const assetId = typeof actor.params.assetId === "string" ? actor.params.assetId : "";
+            const reloadToken = typeof actor.params.assetIdReloadToken === "number" ? actor.params.assetIdReloadToken : 0;
+            const needsReload =
+              assetId !== (this.meshAssetByActorId.get(actor.id) ?? "") ||
+              reloadToken !== (this.meshReloadTokenByActorId.get(actor.id) ?? 0);
+            if (needsReload) {
+              await profileActorChunk("Mesh asset", () => this.syncMeshAsset(actor));
+            }
+            profileActorChunk("Mesh materials", () => {
+              this.syncMeshMaterials(actor, state);
+            });
+            profileActorChunk("Mesh animation", () => {
+              this.syncMeshAnimation(actor, simTimeSeconds);
+            });
+          }
+          if (actor.actorType === "dxf-reference") {
+            const assetId = typeof actor.params.assetId === "string" ? actor.params.assetId : "";
+            const reloadToken = typeof actor.params.assetIdReloadToken === "number" ? actor.params.assetIdReloadToken : 0;
+            const needsReload =
+              assetId !== (this.dxfAssetByActorId.get(actor.id) ?? "") ||
+              reloadToken !== (this.dxfReloadTokenByActorId.get(actor.id) ?? 0);
+            const needsInitialLoad =
+              assetId.length > 0 &&
+              !this.dxfDocumentByActorId.has(actor.id) &&
+              !this.dxfStatusSignatureByActorId.has(actor.id);
+            if (needsReload || needsInitialLoad) {
+              await profileActorChunk("DXF asset", () => this.syncDxfReferenceAsset(actor));
+            }
+            profileActorChunk("DXF visuals", () => {
+              this.syncDxfReferenceVisual(actor);
+            });
+          }
+          if (actor.actorType === "primitive") {
+            profileActorChunk("Primitive visuals", () => {
+              this.syncPrimitiveActor(actor);
+            });
+          }
+          if (actor.actorType === "curve") {
+            profileActorChunk("Curve visuals", () => {
+              this.syncCurveActor(actor);
+            });
+          }
+          if (actor.actorType === "gaussian-splat-spark") {
+            await profileActorChunk("Gaussian asset", () => this.syncGaussianSplatAsset(actor));
+          }
+          profileActorChunk("Transform", () => {
+            this.applyActorTransform(actor);
+          });
+        };
+        if (this.kernel.profiler.shouldProfileUpdates()) {
+          await this.kernel.profiler.withActorPhase(buildActorProfileMeta(actor), "update", syncActorWork);
+        } else {
+          await syncActorWork();
         }
-        _ta4 = performance.now();
-        this.syncMeshMaterials(actor, state);
-        this.syncMeshAnimation(actor, simTimeSeconds);
-        _ta5 = performance.now();
       }
-      if (actor.actorType === "dxf-reference") {
-        const assetId = typeof actor.params.assetId === "string" ? actor.params.assetId : "";
-        const reloadToken = typeof actor.params.assetIdReloadToken === "number" ? actor.params.assetIdReloadToken : 0;
-        const needsReload = assetId !== (this.dxfAssetByActorId.get(actor.id) ?? "")
-          || reloadToken !== (this.dxfReloadTokenByActorId.get(actor.id) ?? 0);
-        const needsInitialLoad = assetId.length > 0
-          && !this.dxfDocumentByActorId.has(actor.id)
-          && !this.dxfStatusSignatureByActorId.has(actor.id);
-        if (needsReload || needsInitialLoad) {
-          await this.syncDxfReferenceAsset(actor);
-        }
-        this.syncDxfReferenceVisual(actor);
-      }
-      if (actor.actorType === "primitive") {
-        this.syncPrimitiveActor(actor);
-      }
-      if (actor.actorType === "curve") {
-        this.syncCurveActor(actor);
-      }
-      this.applyActorTransform(actor);
-      const _ta6 = performance.now();
-      if (_ta6 - _ta0 > 50) {
-        this.warnPerformance(
-          "[rehearse-engine] actor slow:", actor.actorType, actor.id,
-          "| clone:", (_ta1 - _ta0).toFixed(0), "ms",
-          "| ensure:", (_ta2 - _ta1).toFixed(0), "ms",
-          "| pluginRefresh:", (_ta2b - _ta2).toFixed(0), "ms",
-          "| parentAttach:", (_ta3 - _ta2b).toFixed(0), "ms",
-          "| meshAsset:", (_ta4 - _ta3).toFixed(0), "ms",
-          "| meshMat:", (_ta5 - _ta4).toFixed(0), "ms",
-          "| transform:", (_ta6 - _ta5).toFixed(0), "ms",
-          "| total:", (_ta6 - _ta0).toFixed(0), "ms"
-        );
-      }
-      }
-      const tB = performance.now();
+    });
+
+    await profileFrameChunk("Parent attachment sync", () => {
       for (const actor of orderedActors) {
         this.syncActorParentAttachment(actor.id, actor.parentActorId);
       }
-      const tC = performance.now();
+    });
+
+    await profileFrameChunk("Sibling/order sync", () => {
       this.syncActorSiblingOrder(state);
       this.applyActorRenderOrder(state);
-      const tC2 = performance.now();
+    });
+
+    await profileFrameChunk("Mist volume sync", () => {
       this.mistVolumeController.syncFromState(state, simTimeSeconds, dtSeconds);
-      const tC3 = performance.now();
+    });
+
+    await profileFrameChunk("Plugin scene hooks", () => {
       for (const actor of orderedActors) {
         this.syncPluginSceneActor(actor, state, simTimeSeconds, dtSeconds);
       }
-      const tD = performance.now();
+    });
 
-      await this.syncEnvironmentTextures(state, orderedActorIds);
+    await profileFrameChunk("Environment textures", () => this.syncEnvironmentTextures(state, orderedActorIds));
+    await profileFrameChunk("Scene background", () => {
       this.applySceneBackgroundColor();
-      await this.syncEnvironmentProbes(state, orderedActors);
+    });
+    await profileFrameChunk("Environment probes", () => this.syncEnvironmentProbes(state, orderedActors));
+    await profileFrameChunk("Scene graph prune", () => {
       pruneInvalidSceneGraph(this.scene);
-      const dt = performance.now() - t0;
-      if (dt > 100) {
-        this.warnPerformance(
-          "[rehearse-engine] syncFromState slow:", dt.toFixed(0), "ms |",
-          "actorLoop:", (tB - tA).toFixed(0), "ms |",
-          "parentSync:", (tC - tB).toFixed(0), "ms |",
-          "orderSync:", (tC2 - tC).toFixed(0), "ms |",
-          "mistSync:", (tC3 - tC2).toFixed(0), "ms |",
-          "pluginLoop:", (tD - tC3).toFixed(0), "ms |",
-          "envProbe:", (performance.now() - tD).toFixed(0), "ms"
-        );
-      }
-    }
+    });
+  }
 
   public setRenderer(renderer: SupportedRenderer | null): void {
     this.renderer = renderer;
@@ -914,6 +934,16 @@ export class SceneController {
 
   public getActorObject(actorId: string): any | null {
     return this.actorObjects.get(actorId) ?? null;
+  }
+
+  public listActorObjectsForProfiling(): Array<{ actorId: string; object: THREE.Object3D }> {
+    const entries: Array<{ actorId: string; object: THREE.Object3D }> = [];
+    for (const [actorId, object] of this.actorObjects.entries()) {
+      if (object instanceof THREE.Object3D) {
+        entries.push({ actorId, object });
+      }
+    }
+    return entries;
   }
 
   public getMistVolumeResource(actorId: string) {
@@ -2284,7 +2314,6 @@ export class SceneController {
     if (!(renderRoot instanceof THREE.Group) || renderRoot.children.length === 0) return;
 
     // Build a signature from material-relevant params and referenced material data
-    const _tsm0 = performance.now();
     const materialSlots = actor.params.materialSlots;
     const materialId = actor.params.materialId;
     const referencedMaterialIds = new Set<string>();
@@ -2301,15 +2330,10 @@ export class SceneController {
       .map((id) => JSON.stringify(localMaterials?.[id] ?? state.materials[id]))
       .join("|");
     const sig = JSON.stringify({ slots: materialSlots, override: materialId, mats: materialHash, environment: env.actorId });
-    const _tsm1 = performance.now();
-    if (_tsm1 - _tsm0 > 10) this.warnPerformance("[rehearse-engine] syncMeshMaterials sig slow:", (_tsm1 - _tsm0).toFixed(0), "ms | slots:", Object.keys(materialSlots as object ?? {}).length);
 
     if (sig === this.meshMaterialSigByActorId.get(actor.id)) return;
     this.meshMaterialSigByActorId.set(actor.id, sig);
-    const _tsm2 = performance.now();
     this.reapplyMeshMaterials(actor);
-    const _tsm3 = performance.now();
-    if (_tsm3 - _tsm2 > 5) this.warnPerformance("[rehearse-engine] reapplyMeshMaterials slow:", (_tsm3 - _tsm2).toFixed(0), "ms");
   }
 
   private disposeMeshAnimationState(actorId: string): void {
@@ -3155,11 +3179,7 @@ export class SceneController {
       }
       renderRoot.clear();
       renderRoot.add(loadedObject);
-
-      const _tAL0 = performance.now();
       this.applyMeshMaterials(actor, loadedObject, extension);
-      const _tAL1 = performance.now();
-      if (_tAL1 - _tAL0 > 5) this.warnPerformance("[rehearse-engine] applyMeshMaterials slow:", (_tAL1 - _tAL0).toFixed(0), "ms");
       const bounds = new THREE.Box3().setFromObject(loadedObject);
       const size = new THREE.Vector3();
       bounds.getSize(size);
@@ -3620,33 +3640,40 @@ export class SceneController {
       return;
     }
     try {
-      descriptor.sceneHooks.syncObject({
-        actor,
-        state,
-        object,
-        runtime: this.pluginActorRuntimeController.getRuntime(actor.id),
-        simTimeSeconds,
-        dtSeconds,
-        getActorById: (actorId) => this.kernel.store.getState().state.actors[actorId] ?? null,
-        getActorObject: (actorId) => this.actorObjects.get(actorId) ?? null,
-        getActorRuntime: (actorId) => this.pluginActorRuntimeController.getRuntime(actorId),
-        sampleCurveWorldPoint: (actorId, t) => this.sampleCurveWorldPoint(actorId, t),
-        getMistVolumeResource: (actorId) => this.mistVolumeController.getResource(actorId),
-        getVolumetricRayResource: (actorId) => this.pluginActorRuntimeController.getVolumetricResource(actorId),
-        setActorStatus: (status: ActorRuntimeStatus | null) => {
-          this.kernel.store.getState().actions.setActorStatus(actor.id, status);
-        },
-        readAssetBytes: (assetId: string): Promise<Uint8Array> => {
-          const asset = state.assets.find(a => a.id === assetId);
-          if (!asset) {
-            return Promise.reject(new Error(`Asset not found: ${assetId}`));
+      const syncPluginObject = () =>
+        descriptor.sceneHooks!.syncObject!({
+          actor,
+          state,
+          object,
+          runtime: this.pluginActorRuntimeController.getRuntime(actor.id),
+          simTimeSeconds,
+          dtSeconds,
+          getActorById: (actorId) => this.kernel.store.getState().state.actors[actorId] ?? null,
+          getActorObject: (actorId) => this.actorObjects.get(actorId) ?? null,
+          getActorRuntime: (actorId) => this.pluginActorRuntimeController.getRuntime(actorId),
+          sampleCurveWorldPoint: (actorId, t) => this.sampleCurveWorldPoint(actorId, t),
+          getMistVolumeResource: (actorId) => this.mistVolumeController.getResource(actorId),
+          getVolumetricRayResource: (actorId) => this.pluginActorRuntimeController.getVolumetricResource(actorId),
+          profileChunk: <T,>(label: string, run: () => T): T => this.kernel.profiler.withChunk(label, run),
+          setActorStatus: (status: ActorRuntimeStatus | null) => {
+            this.kernel.store.getState().actions.setActorStatus(actor.id, status);
+          },
+          readAssetBytes: (assetId: string): Promise<Uint8Array> => {
+            const asset = state.assets.find(a => a.id === assetId);
+            if (!asset) {
+              return Promise.reject(new Error(`Asset not found: ${assetId}`));
+            }
+            return this.kernel.storage.readAssetBytes({
+              projectName: state.activeProjectName,
+              relativePath: asset.relativePath
+            });
           }
-          return this.kernel.storage.readAssetBytes({
-            projectName: state.activeProjectName,
-            relativePath: asset.relativePath
-          });
-        }
-      });
+        });
+      if (this.kernel.profiler.shouldProfileUpdates()) {
+        this.kernel.profiler.withActorPhase(buildActorProfileMeta(actor), "update", syncPluginObject);
+      } else {
+        syncPluginObject();
+      }
     } catch (error) {
       this.kernel.store.getState().actions.setActorStatus(actor.id, {
         values: {},

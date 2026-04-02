@@ -5,6 +5,7 @@ import { DescriptorRegistry } from "@/core/hotReload/descriptorRegistry";
 import { HotReloadManager } from "@/core/hotReload/hotReloadManager";
 import { createPluginApi } from "@/features/plugins/pluginApi";
 import { SimulationClock } from "@/core/simulation/clock";
+import { ActorProfilingService } from "@/render/profiling";
 
 export interface AppKernel {
   store: ReturnType<typeof createAppStore>;
@@ -14,6 +15,7 @@ export interface AppKernel {
   hotReloadManager: HotReloadManager;
   pluginApi: ReturnType<typeof createPluginApi>;
   clock: SimulationClock;
+  profiler: ActorProfilingService;
 }
 
 function createKernelInternal(): AppKernel {
@@ -24,6 +26,7 @@ function createKernelInternal(): AppKernel {
   const pluginApi = createPluginApi(descriptorRegistry, hotReloadManager);
   const projectService = new ProjectService(storage, store);
   const clock = new SimulationClock(1 / 60);
+  const profiler = new ActorProfilingService();
 
   return {
     store,
@@ -32,7 +35,8 @@ function createKernelInternal(): AppKernel {
     descriptorRegistry,
     hotReloadManager,
     pluginApi,
-    clock
+    clock,
+    profiler
   };
 }
 

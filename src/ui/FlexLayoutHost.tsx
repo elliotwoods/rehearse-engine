@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo } from "react";
-import { Actions, Layout, Model, type IJsonModel, type TabNode } from "flexlayout-react";
+import { memo, useCallback, useEffect, useMemo } from "react";
+import { Actions, DockLocation, Layout, Model, type IJsonModel, type TabNode } from "flexlayout-react";
 import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import { sortOpenPluginViews } from "@/features/plugins/pluginViews";
@@ -8,9 +8,12 @@ import { RightPanel } from "@/ui/panels/RightPanel";
 import { ViewportPanel } from "@/ui/panels/ViewportPanel";
 import { ConsolePanel } from "@/ui/panels/ConsolePanel";
 import { PluginViewPanel } from "@/ui/panels/PluginViewPanel";
+import { ProfilingResultsPanel } from "@/ui/panels/ProfilingResultsPanel";
 import { focusPluginViewTab, listPluginViewTabs, syncPluginViewTabs } from "@/ui/pluginViewLayout";
+import type { ProfileSessionResult } from "@/render/profiling";
 
 const LAYOUT_STORAGE_KEY = "rehearse-engine:flex-layout:v1";
+const PROFILE_RESULTS_TAB_ID = "tab.profiling-results";
 
 type JsonLike = Record<string, unknown>;
 
@@ -146,6 +149,9 @@ function stripNodeSizeConstraints(node: unknown): unknown {
   }
 
   const source = node as JsonLike;
+  if (source.component === "profiling-results" || source.id === PROFILE_RESULTS_TAB_ID) {
+    return null;
+  }
   const sanitized: JsonLike = {};
   for (const [key, value] of Object.entries(source)) {
     if (
@@ -166,12 +172,29 @@ function stripNodeSizeConstraints(node: unknown): unknown {
     ) {
       continue;
     }
-    sanitized[key] = stripNodeSizeConstraints(value);
+    const sanitizedValue = stripNodeSizeConstraints(value);
+    if (Array.isArray(sanitizedValue)) {
+      sanitized[key] = sanitizedValue.filter((entry) => entry !== null);
+    } else {
+      sanitized[key] = sanitizedValue;
+    }
+  }
+  const childArray = Array.isArray(sanitized.children) ? (sanitized.children as unknown[]) : null;
+  if (
+    childArray &&
+    (sanitized.type === "tabset" || sanitized.type === "border") &&
+    typeof sanitized.selected === "number"
+  ) {
+    if (childArray.length <= 0) {
+      sanitized.selected = -1;
+    } else {
+      sanitized.selected = Math.max(0, Math.min(childArray.length - 1, Math.floor(sanitized.selected)));
+    }
   }
   return sanitized;
 }
 
-function sanitizeLayoutConfig(config: IJsonModel): IJsonModel {
+export function sanitizeLayoutConfig(config: IJsonModel): IJsonModel {
   return stripNodeSizeConstraints(config) as IJsonModel;
 }
 
@@ -185,7 +208,12 @@ function loadStoredLayoutConfig(): IJsonModel | null {
     if (!parsed || typeof parsed !== "object") {
       return null;
     }
-    return sanitizeLayoutConfig(parsed);
+    const sanitized = sanitizeLayoutConfig(parsed);
+    const normalizedRaw = JSON.stringify(sanitized);
+    if (normalizedRaw !== raw) {
+      localStorage.setItem(LAYOUT_STORAGE_KEY, normalizedRaw);
+    }
+    return sanitized;
   } catch {
     return null;
   }
@@ -209,22 +237,30 @@ function persistLayoutConfig(model: Model): void {
   }
 }
 
-function findViewportTabsetId(model: Model): string | null {
-  let viewportTabsetId: string | null = null;
+function findTabsetIdForComponent(model: Model, component: string): string | null {
+  let tabsetId: string | null = null;
   model.visitNodes((node) => {
-    if (viewportTabsetId || node.getType() !== "tab") {
+    if (tabsetId || node.getType() !== "tab") {
       return;
     }
     const tabNode = node as TabNode;
-    if (tabNode.getComponent() !== "center") {
+    if (tabNode.getComponent() !== component) {
       return;
     }
     const parent = tabNode.getParent();
     if (parent?.getType() === "tabset") {
-      viewportTabsetId = parent.getId();
+      tabsetId = parent.getId();
     }
   });
-  return viewportTabsetId;
+  return tabsetId;
+}
+
+function findViewportTabsetId(model: Model): string | null {
+  return findTabsetIdForComponent(model, "center");
+}
+
+export function findPreferredProfileResultsTabsetId(model: Model): string | null {
+  return findTabsetIdForComponent(model, "right") ?? findViewportTabsetId(model);
 }
 
 interface FlexLayoutHostProps {
@@ -235,7 +271,66 @@ interface FlexLayoutHostProps {
   viewportFullscreen?: boolean;
   viewportScreenshotRequestId?: number;
   onViewportScreenshotBusyChange?: (busy: boolean) => void;
+  profileResults: ProfileSessionResult | null;
+  profileResultsOpen: boolean;
+  onCloseProfileResults: () => void;
 }
+
+function findProfileResultsTab(model: Model): TabNode | null {
+  let found: TabNode | null = null;
+  model.visitNodes((node) => {
+    if (found || node.getType() !== "tab") {
+      return;
+    }
+    const tabNode = node as TabNode;
+    if (tabNode.getId() === PROFILE_RESULTS_TAB_ID || tabNode.getComponent() === "profiling-results") {
+      found = tabNode;
+    }
+  });
+  return found;
+}
+
+function syncProfileResultsTab(
+  model: Model,
+  open: boolean,
+  viewportTabsetId: string | null,
+  title: string
+): void {
+  const existing = findProfileResultsTab(model);
+  if (!open) {
+    if (existing) {
+      model.doAction(Actions.deleteTab(existing.getId()));
+    }
+    return;
+  }
+  if (existing) {
+    model.doAction(Actions.selectTab(existing.getId()));
+    return;
+  }
+  model.doAction(
+    Actions.addNode(
+      {
+        type: "tab",
+        id: PROFILE_RESULTS_TAB_ID,
+        component: "profiling-results",
+        name: title,
+        enableClose: true
+      },
+      viewportTabsetId ?? "panel.center",
+      DockLocation.CENTER,
+      -1
+    )
+  );
+  model.doAction(Actions.selectTab(PROFILE_RESULTS_TAB_ID));
+}
+
+const StableFlexLayoutSurface = memo(function StableFlexLayoutSurface(props: {
+  model: Model;
+  factory: (node: TabNode) => React.ReactNode;
+  onModelChange: (model: Model) => void;
+}) {
+  return <Layout model={props.model} factory={props.factory} onModelChange={props.onModelChange} />;
+});
 
 export function FlexLayoutHost(props: FlexLayoutHostProps) {
   const kernel = useKernel();
@@ -244,6 +339,7 @@ export function FlexLayoutHost(props: FlexLayoutHostProps) {
   const pluginViews = useMemo(() => sortOpenPluginViews(pluginViewMap), [pluginViewMap]);
   const model = useMemo(() => createLayoutModel(), []);
   const viewportTabsetId = useMemo(() => findViewportTabsetId(model), [model]);
+  const profileResultsTabsetId = useMemo(() => findPreferredProfileResultsTabsetId(model), [model]);
 
   useEffect(() => {
     if (!viewportTabsetId) {
@@ -259,6 +355,15 @@ export function FlexLayoutHost(props: FlexLayoutHostProps) {
   useEffect(() => {
     syncPluginViewTabs(model, pluginViews, viewportTabsetId);
   }, [model, pluginViews, viewportTabsetId]);
+
+  useEffect(() => {
+    syncProfileResultsTab(
+      model,
+      props.profileResultsOpen && Boolean(props.profileResults),
+      profileResultsTabsetId,
+      props.profileResults ? `Profile (${props.profileResults.frames.length}f)` : "Profile"
+    );
+  }, [model, profileResultsTabsetId, props.profileResults, props.profileResultsOpen]);
 
   useEffect(() => {
     focusPluginViewTab(model, focusedPluginViewId);
@@ -280,42 +385,56 @@ export function FlexLayoutHost(props: FlexLayoutHostProps) {
           actions.setPluginViewTabset(view.id, tab.tabsetId);
         }
       }
+      if (props.profileResultsOpen && !findProfileResultsTab(nextModel)) {
+        props.onCloseProfileResults();
+      }
     },
-    [kernel, pluginViews]
+    [kernel, pluginViews, props.onCloseProfileResults, props.profileResultsOpen]
   );
 
-  const factory = (node: TabNode): React.ReactNode => {
-    const component = node.getComponent();
-    switch (component) {
-      case "left":
-        return <LeftPanel pendingDropFileName={props.pendingDropFileName} />;
-      case "center":
-        return (
-          <ViewportPanel
-            suspended={props.viewportSuspended}
-            screenshotRequestId={props.viewportScreenshotRequestId}
-            onScreenshotBusyChange={props.onViewportScreenshotBusyChange}
-          />
-        );
-      case "right":
-        return <RightPanel />;
-      case "console":
-        return <ConsolePanel />;
-      case "plugin-view": {
-        const config = (node.getConfig() ?? {}) as { pluginViewId?: string };
-        return config.pluginViewId ? <PluginViewPanel pluginViewId={config.pluginViewId} /> : null;
+  const factory = useCallback(
+    (node: TabNode): React.ReactNode => {
+      const component = node.getComponent();
+      switch (component) {
+        case "left":
+          return <LeftPanel pendingDropFileName={props.pendingDropFileName} />;
+        case "center":
+          return (
+            <ViewportPanel
+              suspended={props.viewportSuspended}
+              screenshotRequestId={props.viewportScreenshotRequestId}
+              onScreenshotBusyChange={props.onViewportScreenshotBusyChange}
+            />
+          );
+        case "right":
+          return <RightPanel />;
+        case "console":
+          return <ConsolePanel />;
+        case "plugin-view": {
+          const config = (node.getConfig() ?? {}) as { pluginViewId?: string };
+          return config.pluginViewId ? <PluginViewPanel pluginViewId={config.pluginViewId} /> : null;
+        }
+        case "profiling-results":
+          return props.profileResults ? <ProfilingResultsPanel result={props.profileResults} /> : null;
+        default:
+          return null;
       }
-      default:
-        return null;
-    }
-  };
+    },
+    [
+      props.onViewportScreenshotBusyChange,
+      props.pendingDropFileName,
+      props.profileResults,
+      props.viewportScreenshotRequestId,
+      props.viewportSuspended
+    ]
+  );
 
   return (
     <div className={`layout-shell${props.viewportFullscreen ? " is-viewport-fullscreen" : ""}`}>
       <div className="layout-shell-title">{props.titleBar}</div>
       <div className="layout-shell-toolbar">{props.topBar}</div>
       <div className="flex-layout-host">
-        <Layout model={model} factory={factory} onModelChange={handleModelChange} />
+        <StableFlexLayoutSurface model={model} factory={factory} onModelChange={handleModelChange} />
       </div>
     </div>
   );

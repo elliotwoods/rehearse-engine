@@ -24,9 +24,68 @@ import { countActorStats, summarizeMemory, type RenderStatsSample } from "@/rend
 import { SceneOutputPass, threeToneMappingForMode } from "@/render/tonemapping";
 import { pruneInvalidSceneGraph } from "@/render/sceneGraphUtils";
 import { captureViewportScreenshotFromCanvas, type ViewportScreenshotResult } from "@/features/render/viewportScreenshot";
+import type { ProfileFrameGpuInput } from "@/render/profiling";
 
 const FAST_STATS_INTERVAL_MS = 500;
 const SLOW_STATS_INTERVAL_MS = 2000;
+
+type WebGlTimerQueryExt = {
+  TIME_ELAPSED_EXT: number;
+  GPU_DISJOINT_EXT: number;
+};
+
+class WebGlGpuTimer {
+  private readonly ext: WebGlTimerQueryExt | null;
+
+  public constructor(private readonly gl: WebGL2RenderingContext) {
+    this.ext = this.gl.getExtension("EXT_disjoint_timer_query_webgl2") as WebGlTimerQueryExt | null;
+  }
+
+  public isAvailable(): boolean {
+    return this.ext !== null;
+  }
+
+  public begin(): WebGLQuery | null {
+    if (!this.ext) {
+      return null;
+    }
+    const query = this.gl.createQuery();
+    if (!query) {
+      return null;
+    }
+    this.gl.beginQuery(this.ext.TIME_ELAPSED_EXT, query);
+    return query;
+  }
+
+  public end(): void {
+    if (!this.ext) {
+      return;
+    }
+    this.gl.endQuery(this.ext.TIME_ELAPSED_EXT);
+  }
+
+  public async resolve(query: WebGLQuery): Promise<number | null> {
+    if (!this.ext) {
+      return null;
+    }
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const available = this.gl.getQueryParameter(query, this.gl.QUERY_RESULT_AVAILABLE) as boolean;
+      const disjoint = this.gl.getParameter(this.ext.GPU_DISJOINT_EXT) as boolean;
+      if (disjoint) {
+        this.gl.deleteQuery(query);
+        return null;
+      }
+      if (available) {
+        const elapsedNanoseconds = this.gl.getQueryParameter(query, this.gl.QUERY_RESULT) as number;
+        this.gl.deleteQuery(query);
+        return Number.isFinite(elapsedNanoseconds) ? elapsedNanoseconds / 1_000_000 : null;
+      }
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    }
+    this.gl.deleteQuery(query);
+    return null;
+  }
+}
 
 export class WebGlViewport {
   private readonly renderer: any;
@@ -65,6 +124,7 @@ export class WebGlViewport {
   private readonly framePacer: FramePacer;
   private readonly colorBufferPrecision: ResolvedSceneColorBufferPrecision;
   private lastLoggedColorBufferWarning: string | null = null;
+  private gpuTimer: WebGlGpuTimer | null = null;
 
   public constructor(
     private readonly kernel: AppKernel,
@@ -231,6 +291,7 @@ export class WebGlViewport {
     this.controls.dispose();
     this.actorTransformController?.dispose();
     this.curveEditController?.dispose();
+    this.kernel.profiler.clearDrawHooks();
     this.sceneController.setWebGlRenderer(null);
     this.sceneController.dispose();
     this.bloomPass.dispose();
@@ -321,22 +382,26 @@ export class WebGlViewport {
   private async renderFrame(options?: { collectStats?: boolean }): Promise<void> {
     const collectStats = options?.collectStats ?? true;
     const _rf0 = performance.now();
-    await this.sceneController.syncFromState();
+    this.kernel.profiler.beginFrame();
+    await this.kernel.profiler.withFrameChunk("Scene sync", () => this.sceneController.syncFromState());
     if (this.disposed) {
+      this.kernel.profiler.clearDrawHooks();
       return;
     }
     pruneInvalidSceneGraph(this.sceneController.scene);
     const _rf1 = performance.now();
     const _rf2 = _rf1;
     this.enforceActorCompatibility("webgl2");
-    this.syncCameraState();
-    this.cameraController.update(performance.now());
-    this.curveEditController?.setCamera(this.activeCamera);
-    this.actorTransformController?.setCamera(this.activeCamera);
-    this.curveEditController?.update();
-    this.actorTransformController?.update();
-    this.controls.update();
-    this.syncCameraToState();
+    await this.kernel.profiler.withFrameChunk("Viewport sync", () => {
+      this.syncCameraState();
+      this.cameraController.update(performance.now());
+      this.curveEditController?.setCamera(this.activeCamera);
+      this.actorTransformController?.setCamera(this.activeCamera);
+      this.curveEditController?.update();
+      this.actorTransformController?.update();
+      this.controls.update();
+      this.syncCameraToState();
+    });
     const _rf3 = performance.now();
     const tonemapping = this.kernel.store.getState().state.scene.tonemapping;
     const postProcessing = this.kernel.store.getState().state.scene.postProcessing;
@@ -348,9 +413,38 @@ export class WebGlViewport {
     this.bloomPass.threshold = postProcessing.bloom.threshold;
     this.sceneOutputPass.setDitherEnabled(tonemapping.dither);
     this.sceneOutputPass.setPostProcessingSettings(postProcessing);
-    this.composer.render();
-    this.sceneController.flushDeferredGpuDisposals();
+    const gpuQuery = this.kernel.profiler.shouldProfileGpuTimings() ? this.getOrCreateGpuTimer().begin() : null;
+    await this.kernel.profiler.withFrameChunk("Render submission", () => {
+      this.kernel.profiler.syncDrawHooks(
+        this.sceneController.listActorObjectsForProfiling().map(({ actorId, object }) => {
+          const actor = this.kernel.store.getState().state.actors[actorId];
+          return {
+            actor: {
+              actorId,
+              actorName: actor?.name ?? actorId,
+              actorType: actor?.actorType ?? "empty",
+              pluginType: actor?.pluginType
+            },
+            object
+          };
+        })
+      );
+      this.composer.render();
+    });
+    if (gpuQuery) {
+      this.getOrCreateGpuTimer().end();
+    }
+    await this.kernel.profiler.withFrameChunk("GPU resource cleanup", () => {
+      this.sceneController.flushDeferredGpuDisposals();
+    });
+    const gpu = this.kernel.profiler.shouldProfileGpuTimings()
+      ? await this.kernel.profiler.withFrameChunk("GPU readback", () => this.resolveGpuProfile(gpuQuery))
+      : undefined;
     const _rf4 = performance.now();
+    this.kernel.profiler.finishFrame({
+      cpuTotalDurationMs: _rf4 - _rf0,
+      gpu
+    });
     if (collectStats) {
       reportSlowFrame(this.kernel, {
         backend: "webgl2",
@@ -766,5 +860,31 @@ export class WebGlViewport {
     }
     this.textureByteCache.set(texture, bytes);
     return bytes;
+  }
+
+  private getOrCreateGpuTimer(): WebGlGpuTimer {
+    this.gpuTimer ??= new WebGlGpuTimer(this.renderer.getContext() as WebGL2RenderingContext);
+    return this.gpuTimer;
+  }
+
+  private async resolveGpuProfile(query: WebGLQuery | null): Promise<ProfileFrameGpuInput> {
+    if (!query) {
+      return { status: "unavailable" };
+    }
+    const gpuMs = await this.getOrCreateGpuTimer().resolve(query);
+    if (gpuMs === null) {
+      return { status: "unavailable" };
+    }
+    return {
+      status: "captured",
+      roots: [
+        {
+          id: "gpu:render",
+          label: "Render",
+          durationMs: gpuMs,
+          children: []
+        }
+      ]
+    };
   }
 }

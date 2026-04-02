@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import {
   faCamera,
+  faChartColumn,
   faCirclePause,
   faCirclePlay,
   faForwardStep,
@@ -16,6 +17,7 @@ import { useKernel } from "@/app/useKernel";
 import { useAppStore } from "@/app/useAppStore";
 import type { CameraPreset, TimeSpeedPreset } from "@/core/types";
 import { formatFramePacingLabel } from "@/render/framePacing";
+import type { ProfilingPublicState } from "@/render/profiling";
 import { MaterialsModal } from "@/ui/components/MaterialsModal";
 import { DigitScrubInput } from "@/ui/widgets";
 
@@ -61,6 +63,8 @@ interface TopBarPanelProps {
   onCaptureViewportScreenshot: () => void;
   canCaptureViewportScreenshot: boolean;
   viewportScreenshotBusy: boolean;
+  onOpenProfiling: () => void;
+  profilingState: ProfilingPublicState;
   requestTextInput(args: {
     title: string;
     label: string;
@@ -106,6 +110,26 @@ export function TopBarPanel(props: TopBarPanelProps) {
   const tcTotalMinutes = Math.floor(tcTotalSeconds / 60);
   const tcMinutes = tcTotalMinutes % 60;
   const tcHours = Math.floor(tcTotalMinutes / 60);
+  const profileCaptureProgress =
+    props.profilingState.requestedFrameCount > 0
+      ? Math.max(0, Math.min(1, props.profilingState.capturedFrameCount / props.profilingState.requestedFrameCount))
+      : 0;
+  const profileProgressLabel =
+    props.profilingState.phase === "capturing"
+      ? props.profilingState.pendingGpuFrames > 0
+        ? `GPU ${props.profilingState.capturedFrameCount}/${props.profilingState.requestedFrameCount}`
+        : `${props.profilingState.capturedFrameCount}/${props.profilingState.requestedFrameCount}`
+      : props.profilingState.result
+        ? `Ready (${props.profilingState.result.frames.length}f)`
+        : "Idle";
+  const profileProgressTitle =
+    props.profilingState.phase === "capturing"
+      ? props.profilingState.pendingGpuFrames > 0
+        ? `Profiling ${props.profilingState.capturedFrameCount}/${props.profilingState.requestedFrameCount} frames. Waiting for GPU timestamps.`
+        : `Profiling ${props.profilingState.capturedFrameCount}/${props.profilingState.requestedFrameCount} frames.`
+      : props.profilingState.result
+        ? `Latest profile captured ${props.profilingState.result.frames.length} frames.`
+        : "No active profile capture.";
 
   const setTimecodeParts = (next: { hours?: number; minutes?: number; seconds?: number; frames?: number }) => {
     const hours = clampInteger(next.hours ?? tcHours, 0, 9999);
@@ -406,6 +430,30 @@ export function TopBarPanel(props: TopBarPanelProps) {
         >
           <FontAwesomeIcon icon={faCamera} />
         </button>
+      </div>
+
+      <div className="toolbar-group toolbar-profile-group">
+        <label className="toolbar-group-label" title="Actor profiler">Profile</label>
+        <button
+          type="button"
+          title={props.profilingState.phase === "capturing" ? "Actor profiling in progress" : "Capture actor performance profile"}
+          aria-label="Open actor profiler"
+          onClick={props.profilingState.phase === "capturing" ? undefined : props.onOpenProfiling}
+          disabled={props.profilingState.phase === "capturing"}
+        >
+          <FontAwesomeIcon icon={faChartColumn} />
+        </button>
+        <div className={`toolbar-profile-progress${props.profilingState.phase === "capturing" ? " is-active" : ""}`} title={profileProgressTitle}>
+          <div className="toolbar-profile-progress-track">
+            <div
+              className="toolbar-profile-progress-fill"
+              style={{
+                width: `${profileCaptureProgress * 100}%`
+              }}
+            />
+          </div>
+          <span className="toolbar-profile-progress-label">{profileProgressLabel}</span>
+        </div>
       </div>
 
       <div className="toolbar-group">

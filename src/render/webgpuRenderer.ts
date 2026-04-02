@@ -23,6 +23,7 @@ import type { MistVolumeQualityMode } from "./mistVolumeController";
 import { buildWebGpuToneMappedOutputNode, threeToneMappingForMode } from "./tonemapping";
 import { pruneInvalidSceneGraph } from "./sceneGraphUtils";
 import { captureViewportScreenshotFromCanvas, type ViewportScreenshotResult } from "@/features/render/viewportScreenshot";
+import type { ProfileFrameGpuInput } from "./profiling";
 
 const FAST_STATS_INTERVAL_MS = 500;
 const SLOW_STATS_INTERVAL_MS = 2000;
@@ -105,7 +106,8 @@ export class WebGpuViewport {
     this.renderer = new WebGPURenderer({
       antialias: this.colorBufferPrecision.activeAntialiasing,
       alpha: false,
-      colorBufferType: this.colorBufferPrecision.bufferType
+      colorBufferType: this.colorBufferPrecision.bufferType,
+      trackTimestamp: true
     });
     this.sceneController.setRenderer(this.renderer as unknown as any);
     const initialWidth = this.fixedViewportSize?.width ?? Math.max(1, this.mountEl.clientWidth);
@@ -228,6 +230,7 @@ export class WebGpuViewport {
     this.controls.dispose();
     this.actorTransformController?.dispose();
     this.curveEditController?.dispose();
+    this.kernel.profiler.clearDrawHooks();
     this.sceneController.setRenderer(null);
     this.sceneController.dispose();
     this.clearCompatibilityStatus();
@@ -328,22 +331,26 @@ export class WebGpuViewport {
   private async renderFrame(options?: { collectStats?: boolean }): Promise<void> {
     const collectStats = options?.collectStats ?? true;
     const _rf0 = performance.now();
-    await this.sceneController.syncFromState();
+    this.kernel.profiler.beginFrame();
+    await this.kernel.profiler.withFrameChunk("Scene sync", () => this.sceneController.syncFromState());
     if (this.disposed) {
+      this.kernel.profiler.clearDrawHooks();
       return;
     }
     pruneInvalidSceneGraph(this.sceneController.scene);
     const _rf1 = performance.now();
-    this.syncCameraState();
-    this.cameraController.update(performance.now());
-    this.curveEditController?.setCamera(this.activeCamera);
-    this.actorTransformController?.setCamera(this.activeCamera);
-    this.curveEditController?.update();
-    this.actorTransformController?.update();
-    this.controls.update();
-    this.enforceActorCompatibility("webgpu");
-    this.syncCameraToState();
-    this.syncToneMappingOutput();
+    await this.kernel.profiler.withFrameChunk("Viewport sync", () => {
+      this.syncCameraState();
+      this.cameraController.update(performance.now());
+      this.curveEditController?.setCamera(this.activeCamera);
+      this.actorTransformController?.setCamera(this.activeCamera);
+      this.curveEditController?.update();
+      this.actorTransformController?.update();
+      this.controls.update();
+      this.enforceActorCompatibility("webgpu");
+      this.syncCameraToState();
+      this.syncToneMappingOutput();
+    });
     const _rf2 = performance.now();
     const renderOnce = async (): Promise<void> => {
       const renderPromise =
@@ -352,23 +359,46 @@ export class WebGpuViewport {
           : Promise.resolve((this.postProcessing as any).render());
       await Promise.resolve(renderPromise);
     };
-    try {
-      await renderOnce();
-    } catch (error) {
-      if (this.disposed) {
-        return;
-      }
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes("Cannot read properties of null") && message.includes("visible")) {
-        pruneInvalidSceneGraph(this.sceneController.scene);
-        this.postProcessing.needsUpdate = true;
+    await this.kernel.profiler.withFrameChunk("Render submission", async () => {
+      this.kernel.profiler.syncDrawHooks(
+        this.sceneController.listActorObjectsForProfiling().map(({ actorId, object }) => {
+          const actor = this.kernel.store.getState().state.actors[actorId];
+          return {
+            actor: {
+              actorId,
+              actorName: actor?.name ?? actorId,
+              actorType: actor?.actorType ?? "empty",
+              pluginType: actor?.pluginType
+            },
+            object
+          };
+        })
+      );
+      try {
         await renderOnce();
-      } else {
-        throw error;
+      } catch (error) {
+        if (this.disposed) {
+          return;
+        }
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("Cannot read properties of null") && message.includes("visible")) {
+          pruneInvalidSceneGraph(this.sceneController.scene);
+          this.postProcessing.needsUpdate = true;
+          await renderOnce();
+        } else {
+          throw error;
+        }
       }
-    }
-    await this.flushDeferredGpuDisposals();
+    });
+    await this.kernel.profiler.withFrameChunk("GPU resource cleanup", () => this.flushDeferredGpuDisposals());
+    const gpu = this.kernel.profiler.shouldProfileGpuTimings()
+      ? await this.kernel.profiler.withFrameChunk("GPU readback", () => this.resolveGpuProfile())
+      : undefined;
     const _rf3 = performance.now();
+    this.kernel.profiler.finishFrame({
+      cpuTotalDurationMs: _rf3 - _rf0,
+      gpu
+    });
     if (collectStats) {
       reportSlowFrame(this.kernel, {
         backend: "webgpu",
@@ -824,5 +854,43 @@ export class WebGpuViewport {
       await rendererWithWait.waitForGPU();
     }
     this.sceneController.flushDeferredGpuDisposals();
+  }
+
+  private async resolveGpuProfile(): Promise<ProfileFrameGpuInput> {
+    const backend = (this.renderer as WebGPURenderer & { backend?: { trackTimestamp?: boolean } }).backend;
+    const rendererWithTimestamps = this.renderer as WebGPURenderer & {
+      resolveTimestampsAsync?: (type?: "render" | "compute") => Promise<number | undefined>;
+    };
+    const canResolve =
+      backend?.trackTimestamp === true && typeof rendererWithTimestamps.resolveTimestampsAsync === "function";
+    if (!canResolve) {
+      return { status: "unavailable" };
+    }
+    try {
+      const [renderMs, computeMs] = await Promise.all([
+        rendererWithTimestamps.resolveTimestampsAsync!("render"),
+        rendererWithTimestamps.resolveTimestampsAsync!("compute")
+      ]);
+      const roots = [];
+      if (typeof renderMs === "number" && Number.isFinite(renderMs)) {
+        roots.push({
+          id: "gpu:render",
+          label: "Render",
+          durationMs: renderMs,
+          children: []
+        });
+      }
+      if (typeof computeMs === "number" && Number.isFinite(computeMs) && computeMs > 0) {
+        roots.push({
+          id: "gpu:compute",
+          label: "Compute",
+          durationMs: computeMs,
+          children: []
+        });
+      }
+      return roots.length > 0 ? { status: "captured", roots } : { status: "unavailable" };
+    } catch {
+      return { status: "unavailable" };
+    }
   }
 }

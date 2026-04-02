@@ -85,11 +85,26 @@ Main execute request:
 ### Console
 Use renderer console mode for normal app/runtime commands:
 - `scene.stats()`
+- `scene.profile.state()`
+- `scene.profile.latestSummary()`
+- `scene.profile.latestRaw()`
 - `actor.list()`
 - `camera.state()`
 - `project.status()`
 
 This path preserves the same execution semantics and result shape as the in-app console panel.
+
+Profiler examples:
+
+```bash
+node scripts/debug-session.mjs renderer --console "scene.profile.state()"
+node scripts/debug-session.mjs renderer --console "scene.profile.latestSummary()"
+node scripts/debug-session.mjs renderer --console "scene.profile.latestRaw()"
+```
+
+- `scene.profile.state()` returns the live capture state and progress.
+- `scene.profile.latestSummary()` returns compact LLM-friendly JSON summaries.
+- `scene.profile.latestRaw()` returns the full hierarchical result tree for deeper analysis.
 
 ### Eval
 Use renderer eval mode for direct access to live renderer state. Available bindings include:

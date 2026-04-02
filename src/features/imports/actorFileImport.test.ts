@@ -9,6 +9,7 @@ import {
   resolveNewActorFileDropAction,
   resolveSelectedActorFileImportTarget
 } from "@/features/imports/actorFileImport";
+import { ActorProfilingService } from "@/render/profiling";
 
 const fileDefinition: FileParameterDefinition = {
   key: "assetId",
@@ -121,7 +122,8 @@ function createKernelStub(): AppKernel {
       },
       listByKind: (kind: string) => (kind === "actor" ? [descriptor, multiFileDescriptor] : [])
     } as unknown as AppKernel["descriptorRegistry"],
-    clock: {} as AppKernel["clock"]
+    clock: {} as AppKernel["clock"],
+    profiler: new ActorProfilingService()
   };
 }
 

@@ -35,6 +35,7 @@ import { FileImportModal } from "@/ui/components/FileImportModal";
 import { KeyboardMapModal } from "@/ui/components/KeyboardMapModal";
 import { TextInputModal } from "@/ui/components/TextInputModal";
 import { RenderSettingsModal } from "@/ui/components/RenderSettingsModal";
+import { ProfileCaptureModal } from "@/ui/components/ProfileCaptureModal";
 import { RenderOverlay } from "@/ui/components/RenderOverlay";
 import type { CameraState, SelectionEntry } from "@/core/types";
 import type { RenderProgress, RenderSettings } from "@/features/render/types";
@@ -49,6 +50,7 @@ import { canvasToPngBytes, createRenderExporter } from "@/features/render/export
 import { createQueuedRenderExporter } from "@/features/render/queuedExporter";
 import { WebGlViewport } from "@/render/webglRenderer";
 import { WebGpuViewport } from "@/render/webgpuRenderer";
+import type { ProfileCaptureOptions, ProfileSessionResult, ProfilingPublicState } from "@/render/profiling";
 
 const RENDER_QUEUE_BUDGET_BYTES = 512 * 1024 * 1024;
 const RENDER_PROGRESS_UPDATE_INTERVAL_MS = 125;
@@ -134,6 +136,7 @@ export function App() {
     resolve: (value: string | null) => void;
   } | null>(null);
   const [renderModalOpen, setRenderModalOpen] = useState(false);
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [renderOverlayOpen, setRenderOverlayOpen] = useState(false);
   const [renderProgress, setRenderProgress] = useState<RenderProgress | null>(null);
   const [viewportScreenshotRequestId, setViewportScreenshotRequestId] = useState(0);
@@ -142,6 +145,9 @@ export function App() {
   const renderHostElRef = useRef<HTMLDivElement | null>(null);
   const renderPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [mainViewportSuspended, setMainViewportSuspended] = useState(false);
+  const [profilingState, setProfilingState] = useState<ProfilingPublicState>(() => kernel.profiler.getState());
+  const [profileResults, setProfileResults] = useState<ProfileSessionResult | null>(null);
+  const [profileResultsOpen, setProfileResultsOpen] = useState(false);
   const renderCancelRequestedRef = useRef(false);
   const activeProjectName = useAppStore((store) => store.state.activeProjectName);
   const activeSnapshotName = useAppStore((store) => store.state.activeSnapshotName);
@@ -196,6 +202,17 @@ export function App() {
     },
     [syncRealViewportFullscreen]
   );
+
+  useEffect(() => {
+    return kernel.profiler.subscribe(() => {
+      const nextState = kernel.profiler.getState();
+      setProfilingState(nextState);
+      if (nextState.phase === "completed" && nextState.result) {
+        setProfileResults(nextState.result);
+        setProfileResultsOpen(true);
+      }
+    });
+  }, [kernel]);
 
   useEffect(() => {
     if (window.electronAPI?.onWindowStateChange) {
@@ -1154,6 +1171,7 @@ export function App() {
       <TopBarPanel
         onToggleKeyboardMap={() => setKeyboardMapOpen((value) => !value)}
         onOpenRender={() => setRenderModalOpen(true)}
+        onOpenProfiling={() => setProfileModalOpen(true)}
         onCaptureViewportScreenshot={() => {
           if (viewportScreenshotBusy) {
             return;
@@ -1163,10 +1181,11 @@ export function App() {
         }}
         canCaptureViewportScreenshot={Boolean(window.electronAPI?.writeClipboardImagePng)}
         viewportScreenshotBusy={viewportScreenshotBusy}
+        profilingState={profilingState}
         requestTextInput={requestTextInput}
       />
     ),
-    [requestTextInput, viewportScreenshotBusy]
+    [profilingState, requestTextInput, viewportScreenshotBusy]
   );
   const titleBar = useMemo(
     () => <TitleBarPanel requestTextInput={requestTextInput} />,
@@ -1189,6 +1208,13 @@ export function App() {
         viewportFullscreen={viewportFullscreen}
         viewportScreenshotRequestId={viewportScreenshotRequestId}
         onViewportScreenshotBusyChange={setViewportScreenshotBusy}
+        profileResults={profileResults}
+        profileResultsOpen={profileResultsOpen}
+        onCloseProfileResults={() => {
+          setProfileResultsOpen(false);
+          setProfileResults(null);
+          kernel.profiler.clearResult();
+        }}
       />
       {dragImportState ? (
         <div className={`file-drop-overlay${dragImportState.hasResolvedFileMetadata ? "" : " is-pending"}`}>
@@ -1305,6 +1331,17 @@ export function App() {
         onCancel={() => setRenderModalOpen(false)}
         onConfirm={(settings) => {
           void runRender(settings);
+        }}
+      />
+      <ProfileCaptureModal
+        open={profileModalOpen}
+        profilingState={profilingState}
+        onCancel={() => setProfileModalOpen(false)}
+        onConfirm={(options: ProfileCaptureOptions) => {
+          setProfileModalOpen(false);
+          if (!kernel.profiler.startCapture(options)) {
+            kernel.store.getState().actions.setStatus("Actor profiling is already capturing.");
+          }
         }}
       />
       <RenderOverlay

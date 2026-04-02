@@ -1,5 +1,6 @@
 import type { ActorRuntimeStatus, ActorNode, AppState, VolumetricRayFieldResource } from "@/core/types";
 import type { ReloadableDescriptor, RuntimeInstanceHandle } from "@/core/hotReload/types";
+import type { ActorProfilingService } from "@/render/profiling";
 
 interface ManagedRuntimeHandle extends RuntimeInstanceHandle {
   descriptor: ReloadableDescriptor;
@@ -20,6 +21,7 @@ export interface PluginActorRuntimeControllerOptions {
   resolveDescriptor(actor: ActorNode): ReloadableDescriptor | null | undefined;
   setActorStatus(actorId: string, status: ActorRuntimeStatus | null): void;
   addLog?(entry: { level: "warn" | "error"; message: string; details?: string }): void;
+  profiler?: ActorProfilingService;
 }
 
 function descriptorKey(descriptor: ReloadableDescriptor): string {
@@ -101,10 +103,28 @@ export class PluginActorRuntimeController {
       }
 
       try {
-        descriptor.updateRuntime(handle.runtime, {
-          params: actor.params,
-          dtSeconds
-        });
+        const updateRuntime = () =>
+          descriptor.updateRuntime(handle.runtime, {
+            params: actor.params,
+            dtSeconds
+          });
+        if (this.options.profiler?.shouldProfileUpdates()) {
+          this.options.profiler.withActorPhase(
+            {
+              actorId: actor.id,
+              actorName: actor.name,
+              actorType: actor.actorType,
+              pluginType: actor.pluginType
+            },
+            "update",
+            () =>
+              this.options.profiler?.getDetailPreset() === "standard"
+                ? this.options.profiler.withChunk("Runtime update", updateRuntime)
+                : updateRuntime()
+          );
+        } else {
+          updateRuntime();
+        }
         handle.status = "running";
         const runtimeStatus = readRuntimeStatus(handle.runtime);
         if (runtimeStatus !== undefined) {

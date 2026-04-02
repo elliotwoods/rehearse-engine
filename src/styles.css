@@ -298,6 +298,48 @@ body {
   justify-content: flex-end;
 }
 
+.toolbar-profile-group {
+  min-width: 252px;
+}
+
+.toolbar-profile-progress {
+  width: 176px;
+  min-width: 176px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbar-profile-progress-track {
+  width: 100%;
+  height: 10px;
+  border: 1px solid var(--line);
+  background: #0a1524;
+  overflow: hidden;
+}
+
+.toolbar-profile-progress-fill {
+  height: 100%;
+  width: 0;
+  background: linear-gradient(90deg, #1f7bd0 0%, #4fb3ff 100%);
+  transition: width 120ms ease;
+}
+
+.toolbar-profile-progress-label {
+  min-width: 70px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: right;
+}
+
+.toolbar-profile-progress:not(.is-active) .toolbar-profile-progress-fill {
+  width: 0 !important;
+}
+
 .top-toolbar.is-wrapped .toolbar-fps-group,
 .top-toolbar.is-scroll .toolbar-fps-group {
   margin-left: 0;
@@ -3662,6 +3704,285 @@ body.is-dragging-viewport-axes * {
   margin: 0;
   color: var(--danger);
   font-size: 12px;
+}
+
+.profile-modal {
+  width: min(520px, 92vw);
+}
+
+.profile-modal-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.profile-modal-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+}
+
+.profile-modal-toggle input {
+  width: 16px;
+  height: 16px;
+}
+
+.profile-modal-status {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.profile-panel {
+  gap: 10px;
+  padding: 10px;
+  overflow: auto;
+}
+
+.profile-panel-header {
+  display: grid;
+  gap: 6px;
+}
+
+.profile-section {
+  display: grid;
+  gap: 8px;
+}
+
+.profile-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.profile-section-header span {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.profile-rows {
+  display: grid;
+  gap: 12px;
+}
+
+.profile-row {
+  display: grid;
+  gap: 6px;
+}
+
+.profile-frame-row {
+  gap: 8px;
+}
+
+.profile-frame-group {
+  gap: 10px;
+}
+
+.profile-row-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.profile-row-meta span {
+  color: var(--text-muted);
+}
+
+.profile-frame-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  border: 1px solid var(--line);
+  background: #08111c;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.profile-frame-toggle.is-expanded {
+  border-color: var(--line-strong);
+}
+
+.profile-frame-label {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.profile-frame-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.profile-frame-stats strong {
+  color: var(--text);
+}
+
+.profile-frame-expanded {
+  display: grid;
+  gap: 10px;
+}
+
+.profile-frame-segment {
+  min-width: 0;
+  justify-content: center;
+  text-align: center;
+}
+
+.profile-node-view {
+  display: grid;
+  gap: 8px;
+}
+
+.profile-bar {
+  min-height: 28px;
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--line);
+  background: #08111c;
+  overflow: hidden;
+}
+
+.profile-bar-empty {
+  width: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.profile-bar-segment {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+  border: 0;
+  color: #041019;
+  font-size: 11px;
+  font-weight: 700;
+  text-align: left;
+  padding: 4px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-bar-segment.is-drillable {
+  cursor: pointer;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.profile-bar-segment.is-drillable::after {
+  content: "";
+  position: absolute;
+  right: 5px;
+  top: 5px;
+  width: 0;
+  height: 0;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid rgba(4, 16, 25, 0.85);
+  opacity: 0.75;
+}
+
+.profile-bar-segment.is-expanded {
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 255, 255, 0.42),
+    inset 0 -2px 0 rgba(255, 255, 255, 0.32);
+}
+
+.profile-bar-segment-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-right: 10px;
+}
+
+.profile-bar-segment-mark {
+  margin-left: auto;
+  padding-right: 8px;
+}
+
+.profile-inline-drilldown {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 8px;
+  row-gap: 6px;
+}
+
+.profile-inline-drilldown-rail {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 8px;
+  min-height: 28px;
+}
+
+.profile-inline-drilldown-graphic {
+  width: 100%;
+  height: 28px;
+  overflow: visible;
+}
+
+.profile-inline-drilldown-graphic line {
+  stroke: var(--line-strong);
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+}
+
+.profile-inline-drilldown-close {
+  grid-column: 2;
+  min-width: 24px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.profile-inline-drilldown-meta {
+  grid-column: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.profile-inline-drilldown-meta strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.profile-inline-drilldown > .profile-node-view {
+  grid-column: 1;
+}
+
+.profile-section-break {
+  margin-top: 18px;
 }
 
 .render-overlay {
