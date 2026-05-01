@@ -31,6 +31,9 @@ import { PluginRuntimeHost } from "@/features/plugins/PluginRuntimeHost";
 import { FlexLayoutHost } from "@/ui/FlexLayoutHost";
 import { TopBarPanel } from "@/ui/panels/TopBarPanel";
 import { TitleBarPanel } from "@/ui/panels/TitleBarPanel";
+import { WelcomeScreen } from "@/ui/welcome/WelcomeScreen";
+import { MigrationModal } from "@/ui/migration/MigrationModal";
+import type { LegacyProjectInfo } from "@/types/ipc";
 import { FileImportModal } from "@/ui/components/FileImportModal";
 import { KeyboardMapModal } from "@/ui/components/KeyboardMapModal";
 import { TextInputModal } from "@/ui/components/TextInputModal";
@@ -149,8 +152,9 @@ export function App() {
   const [profileResults, setProfileResults] = useState<ProfileSessionResult | null>(null);
   const [profileResultsOpen, setProfileResultsOpen] = useState(false);
   const renderCancelRequestedRef = useRef(false);
-  const activeProjectName = useAppStore((store) => store.state.activeProjectName);
+  const activeProject = useAppStore((store) => store.state.activeProject);
   const activeSnapshotName = useAppStore((store) => store.state.activeSnapshotName);
+  const [legacyProjectsToMigrate, setLegacyProjectsToMigrate] = useState<LegacyProjectInfo[] | null>(null);
   const mode = useAppStore((store) => store.state.mode);
   const sceneRenderEngine = useAppStore((store) => store.state.scene.renderEngine);
   const sceneAntialiasing = useAppStore((store) => store.state.scene.antialiasing);
@@ -320,19 +324,23 @@ export function App() {
           .actions.setStatus("Unable to import dropped file: local file path could not be resolved from Electron.");
         return;
       }
+      if (!activeProject) {
+        kernel.store.getState().actions.setStatus("Open a project before importing files.");
+        return;
+      }
       try {
         await importFileAsActor(kernel, {
           descriptorId: input.descriptorId,
           sourcePath: input.sourcePath,
           fileName: input.fileName,
-          projectName: activeProjectName
+          projectPath: activeProject.path
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown file import error";
         kernel.store.getState().actions.setStatus(`Unable to import ${input.fileName}: ${message}`);
       }
     },
-    [activeProjectName, kernel]
+    [activeProject, kernel]
   );
 
   const performReplacementImport = useCallback(
@@ -343,12 +351,16 @@ export function App() {
           .actions.setStatus("Unable to import dropped file: local file path could not be resolved from Electron.");
         return;
       }
+      if (!activeProject) {
+        kernel.store.getState().actions.setStatus("Open a project before importing files.");
+        return;
+      }
       try {
         const imported = await importFileIntoActor(kernel, {
           actorId: input.target.actorId,
           definition: input.target.fileDefinition,
           sourcePath: input.sourcePath,
-          projectName: activeProjectName
+          projectPath: activeProject.path
         });
         kernel.store
           .getState()
@@ -358,7 +370,7 @@ export function App() {
         kernel.store.getState().actions.setStatus(`Unable to replace ${input.target.actorName}: ${message}`);
       }
     },
-    [activeProjectName, kernel]
+    [activeProject, kernel]
   );
 
   const handleNewActorDrop = useCallback(
@@ -693,7 +705,7 @@ export function App() {
         const startTime = settings.startTimeMode === "zero" ? 0 : previousTime.elapsedSimSeconds;
         const simulationStartTime = startTime + settings.preRunSeconds;
         const baseExporter = await createRenderExporter(settings, {
-          projectName: activeProjectName
+          projectName: activeProject?.name ?? "untitled"
         });
         const queuedExporter = createQueuedRenderExporter(baseExporter, {
           queueBudgetBytes: RENDER_QUEUE_BUDGET_BYTES,
@@ -807,7 +819,7 @@ export function App() {
       }
     },
     [
-      activeProjectName,
+      activeProject,
       cameraPathActors,
       drawRenderPreview,
       kernel,
@@ -877,6 +889,19 @@ export function App() {
         } catch (error) {
           const message = error instanceof Error ? error.message : "Unknown plugin discovery error";
           kernel.store.getState().actions.setStatus(`Plugin auto-load failed: ${message}`);
+        }
+        // Detect legacy savedata projects and surface the migration modal before
+        // proceeding with the normal startup. Re-runs on the next launch if anything
+        // is left over.
+        try {
+          const legacy = await kernel.storage.detectLegacyProjects();
+          if (legacy.length > 0) {
+            setLegacyProjectsToMigrate(legacy);
+            return;
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Unknown migration detect error";
+          kernel.store.getState().actions.setStatus(`Legacy project detection failed: ${message}`);
         }
       }
       await kernel.projectService.loadDefaultProject();
@@ -1200,22 +1225,38 @@ export function App() {
       onDragLeave={handleDragLeave}
       onDrop={handleRootDrop}
     >
-      <FlexLayoutHost
-        titleBar={titleBar}
-        topBar={topBar}
-        pendingDropFileName={dragImportState?.fileName ?? null}
-        viewportSuspended={mainViewportSuspended}
-        viewportFullscreen={viewportFullscreen}
-        viewportScreenshotRequestId={viewportScreenshotRequestId}
-        onViewportScreenshotBusyChange={setViewportScreenshotBusy}
-        profileResults={profileResults}
-        profileResultsOpen={profileResultsOpen}
-        onCloseProfileResults={() => {
-          setProfileResultsOpen(false);
-          setProfileResults(null);
-          kernel.profiler.clearResult();
-        }}
-      />
+      {legacyProjectsToMigrate ? (
+        <MigrationModal
+          legacy={legacyProjectsToMigrate}
+          onComplete={() => {
+            setLegacyProjectsToMigrate(null);
+            void kernel.projectService.loadDefaultProject();
+          }}
+        />
+      ) : null}
+      {activeProject ? (
+        <FlexLayoutHost
+          titleBar={titleBar}
+          topBar={topBar}
+          pendingDropFileName={dragImportState?.fileName ?? null}
+          viewportSuspended={mainViewportSuspended}
+          viewportFullscreen={viewportFullscreen}
+          viewportScreenshotRequestId={viewportScreenshotRequestId}
+          onViewportScreenshotBusyChange={setViewportScreenshotBusy}
+          profileResults={profileResults}
+          profileResultsOpen={profileResultsOpen}
+          onCloseProfileResults={() => {
+            setProfileResultsOpen(false);
+            setProfileResults(null);
+            kernel.profiler.clearResult();
+          }}
+        />
+      ) : (
+        <>
+          {titleBar}
+          <WelcomeScreen requestTextInput={requestTextInput} />
+        </>
+      )}
       {dragImportState ? (
         <div className={`file-drop-overlay${dragImportState.hasResolvedFileMetadata ? "" : " is-pending"}`}>
           <div className="file-drop-overlay-head">

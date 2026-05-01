@@ -715,14 +715,17 @@ function buildRuntimeApi(kernel: AppKernel) {
     actor,
     component,
     project: {
-      list() {
-        return kernel.projectService.listProjects();
+      async list() {
+        const recents = await kernel.projectService.loadRecents();
+        return recents.map((entry) => entry.cachedName);
       },
       status() {
         const state = kernel.store.getState().state;
         return {
           mode: state.mode,
-          activeProjectName: state.activeProjectName,
+          activeProjectName: state.activeProject?.name ?? "",
+          activeProjectPath: state.activeProject?.path ?? null,
+          activeProjectUuid: state.activeProject?.uuid ?? null,
           activeSnapshotName: state.activeSnapshotName,
           dirty: state.dirty,
           actorCount: Object.keys(state.actors).length
@@ -730,24 +733,23 @@ function buildRuntimeApi(kernel: AppKernel) {
       },
       async new(name: string) {
         assertWritable(kernel);
-        await kernel.projectService.createNewProject(name);
+        await kernel.projectService.createNewProject({ projectName: name });
         return {
-          activeProjectName: kernel.store.getState().state.activeProjectName,
+          activeProjectName: kernel.store.getState().state.activeProject?.name ?? "",
           activeSnapshotName: kernel.store.getState().state.activeSnapshotName
         };
       },
-      async load(name: string, snapshot = "main") {
-        await kernel.projectService.loadProject(name, snapshot);
+      async open(simularcaPath: string, snapshot: string | null = null) {
+        await kernel.projectService.openProject(simularcaPath, snapshot);
         return {
-          activeProjectName: kernel.store.getState().state.activeProjectName,
+          activeProjectName: kernel.store.getState().state.activeProject?.name ?? "",
           activeSnapshotName: kernel.store.getState().state.activeSnapshotName
         };
       },
       async reload() {
-        const state = kernel.store.getState().state;
-        await kernel.projectService.loadProject(state.activeProjectName, state.activeSnapshotName);
+        await kernel.projectService.loadSnapshot(kernel.store.getState().state.activeSnapshotName);
         return {
-          activeProjectName: kernel.store.getState().state.activeProjectName,
+          activeProjectName: kernel.store.getState().state.activeProject?.name ?? "",
           activeSnapshotName: kernel.store.getState().state.activeSnapshotName
         };
       },
@@ -758,10 +760,9 @@ function buildRuntimeApi(kernel: AppKernel) {
       },
       async rename(nextName: string) {
         assertWritable(kernel);
-        const current = kernel.store.getState().state.activeProjectName;
-        await kernel.projectService.renameProject(current, nextName);
+        await kernel.projectService.renameProject(nextName);
         return {
-          activeProjectName: kernel.store.getState().state.activeProjectName,
+          activeProjectName: kernel.store.getState().state.activeProject?.name ?? "",
           activeSnapshotName: kernel.store.getState().state.activeSnapshotName
         };
       },

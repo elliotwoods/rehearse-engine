@@ -4,11 +4,13 @@ import {
   faCircleInfo,
   faClone,
   faFloppyDisk,
+  faFolderOpen,
   faPenToSquare,
   faPlus,
   faRotateRight,
   faStar,
-  faTrash
+  faTrash,
+  faUpRightFromSquare
 } from "@fortawesome/free-solid-svg-icons";
 import { BUILD_INFO, formatBuildTimestamp } from "@/app/buildInfo";
 import { useKernel } from "@/app/useKernel";
@@ -17,7 +19,11 @@ import { AboutModal } from "@/ui/components/AboutModal";
 import { GitDirtyBadge } from "@/ui/components/GitDirtyBadge";
 import { WindowControls } from "@/ui/components/WindowControls";
 import { useGitDirtyStatus } from "@/ui/useGitDirtyStatus";
-import type { DefaultProjectPointer, ProjectSnapshotListEntry } from "@/types/ipc";
+import type {
+  DefaultProjectPointer,
+  ProjectSnapshotListEntry,
+  RecentsEntry
+} from "@/types/ipc";
 import appIconUrl from "../../../icon.png";
 
 const APP_NAME = "Simularca";
@@ -32,27 +38,12 @@ interface TitleBarPanelProps {
   }): Promise<string | null>;
 }
 
-function nextUntitledName(existingNames: string[], baseName: string): string {
-  const used = new Set(existingNames);
-  if (!used.has(baseName)) {
-    return baseName;
-  }
-  let index = 2;
-  while (used.has(`${baseName}-${String(index)}`)) {
-    index += 1;
-  }
-  return `${baseName}-${String(index)}`;
-}
-
 export function TitleBarPanel(props: TitleBarPanelProps) {
   const kernel = useKernel();
   const state = useAppStore((store) => store.state);
-  const [availableProjects, setAvailableProjects] = useState<string[]>([]);
+  const [recents, setRecents] = useState<RecentsEntry[]>([]);
   const [availableSnapshots, setAvailableSnapshots] = useState<ProjectSnapshotListEntry[]>([]);
-  const [defaults, setDefaults] = useState<DefaultProjectPointer>({
-    defaultProjectName: state.activeProjectName,
-    defaultSnapshotName: state.activeSnapshotName
-  });
+  const [defaults, setDefaults] = useState<DefaultProjectPointer | null>(null);
   const [editingSnapshot, setEditingSnapshot] = useState<{
     mode: "create" | "rename";
     originalName: string | null;
@@ -67,13 +58,7 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
   const isReadOnly = state.mode === "web-ro";
   const buildMeta = `${BUILD_INFO.commitShortSha || "unknown"} | ${formatBuildTimestamp(BUILD_INFO.buildTimestampIso)}`;
   const gitDirtyStatus = useGitDirtyStatus([]);
-
-  const projectOptions = useMemo(() => {
-    if (availableProjects.includes(state.activeProjectName)) {
-      return availableProjects;
-    }
-    return [state.activeProjectName, ...availableProjects];
-  }, [availableProjects, state.activeProjectName]);
+  const activeProject = state.activeProject;
 
   const snapshotOptions = useMemo(() => {
     if (availableSnapshots.some((entry) => entry.name === state.activeSnapshotName)) {
@@ -82,10 +67,10 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
     return [{ name: state.activeSnapshotName, updatedAtIso: null }, ...availableSnapshots];
   }, [availableSnapshots, state.activeSnapshotName]);
 
-  const isDefaultProject = (projectName: string): boolean => defaults.defaultProjectName === projectName;
+  const isDefaultProject = (uuid: string): boolean => defaults?.uuid === uuid;
 
   const isDefaultSnapshot = (snapshotName: string): boolean =>
-    defaults.defaultProjectName === state.activeProjectName && defaults.defaultSnapshotName === snapshotName;
+    Boolean(defaults && activeProject && defaults.uuid === activeProject.uuid && defaults.lastSnapshotName === snapshotName);
 
   const formatSnapshotDate = (updatedAtIso: string | null): string => {
     if (!updatedAtIso) {
@@ -105,18 +90,17 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
   };
 
   useEffect(() => {
-    void kernel.projectService.listProjects().then(setAvailableProjects);
-  }, [kernel, state.activeProjectName]);
-
-  useEffect(() => {
-    void kernel.projectService.listSnapshots(state.activeProjectName).then(setAvailableSnapshots);
-  }, [kernel, state.activeProjectName, state.activeSnapshotName]);
-
-  useEffect(() => {
-    if (!isMenuOpen) {
+    if (!activeProject) {
+      setAvailableSnapshots([]);
       return;
     }
-    void kernel.projectService.loadDefaultsPointer().then(setDefaults);
+    void kernel.projectService.listSnapshots(activeProject.path).then(setAvailableSnapshots);
+  }, [kernel, activeProject?.path, state.activeSnapshotName]);
+
+  useEffect(() => {
+    if (!isMenuOpen) return;
+    void kernel.projectService.loadDefaults().then(setDefaults);
+    void kernel.projectService.loadRecents().then(setRecents);
   }, [isMenuOpen, kernel]);
 
   useEffect(() => {
@@ -125,7 +109,7 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
     }
     snapshotInputRef.current?.focus();
     snapshotInputRef.current?.select();
-  }, [editingSnapshotKey]);
+  }, [editingSnapshotKey, editingSnapshot]);
 
   useEffect(() => {
     if (isMenuOpen) {
@@ -149,16 +133,20 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
     };
   }, [isMenuOpen]);
 
-  const refreshProjects = (): void => {
-    void kernel.projectService.listProjects().then(setAvailableProjects);
-  };
-
   const refreshSnapshots = (): void => {
-    void kernel.projectService.listSnapshots(state.activeProjectName).then(setAvailableSnapshots);
+    if (!activeProject) {
+      setAvailableSnapshots([]);
+      return;
+    }
+    void kernel.projectService.listSnapshots(activeProject.path).then(setAvailableSnapshots);
   };
 
   const refreshDefaults = (): void => {
-    void kernel.projectService.loadDefaultsPointer().then(setDefaults);
+    void kernel.projectService.loadDefaults().then(setDefaults);
+  };
+
+  const refreshRecents = (): void => {
+    void kernel.projectService.loadRecents().then(setRecents);
   };
 
   const reportActionError = (context: string, error: unknown): void => {
@@ -166,72 +154,167 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
     kernel.store.getState().actions.setStatus(`${context}: ${message}`);
   };
 
-  const suggestProjectCopyName = (projectName: string): string =>
-    nextUntitledName(projectOptions, `${projectName}-copy`);
-
-  const handleProjectSaveAs = (sourceProjectName: string): void => {
-    void props
-      .requestTextInput({
-        title: "Save Project As",
-        label: "Project name",
-        initialValue: suggestProjectCopyName(sourceProjectName),
-        confirmLabel: "Save As"
-      })
-      .then(async (nextName) => {
-        if (!nextName) {
-          return;
-        }
-        try {
-          await kernel.projectService.saveProjectAs(nextName);
-          refreshProjects();
-          refreshSnapshots();
-          refreshDefaults();
-          setMenuOpen(false);
-        } catch (error) {
-          reportActionError("Unable to save project as", error);
-        }
-      });
-  };
-
-  const handleDuplicateProject = (sourceProjectName: string): void => {
-    void props
-      .requestTextInput({
-        title: "Duplicate Project",
-        label: "Project name",
-        initialValue: suggestProjectCopyName(sourceProjectName),
-        confirmLabel: "Duplicate"
-      })
-      .then(async (nextName) => {
-        if (!nextName) {
-          return;
-        }
-        try {
-          await kernel.projectService.duplicateProject(sourceProjectName, nextName);
-          refreshProjects();
-          refreshDefaults();
-        } catch (error) {
-          reportActionError("Unable to duplicate project", error);
-        }
-      });
-  };
-
-  const handleDeleteProject = (projectName: string): void => {
-    const activeWarning =
-      projectName === state.activeProjectName && state.dirty ? "\n\nUnsaved changes in the current project will be lost." : "";
-    const confirmed = window.confirm(`Delete project "${projectName}"?${activeWarning}`);
-    if (!confirmed) {
-      return;
+  const handleOpenProject = async (): Promise<void> => {
+    if (!window.electronAPI) return;
+    const picked = await window.electronAPI.selectSimularcaFile({ title: "Open Simularca project" });
+    if (!picked) return;
+    try {
+      await kernel.projectService.openProject(picked);
+      refreshSnapshots();
+      refreshDefaults();
+      refreshRecents();
+      setMenuOpen(false);
+    } catch (error) {
+      reportActionError("Unable to open project", error);
     }
+  };
+
+  const handleNewProject = async (): Promise<void> => {
+    if (!window.electronAPI) return;
+    const defaultRoot = await window.electronAPI.getDefaultProjectsRoot();
+    const parent = await window.electronAPI.selectFolder({
+      title: "Choose a parent folder for the new project",
+      defaultPath: defaultRoot
+    });
+    if (!parent) return;
+    const projectName = await props.requestTextInput({
+      title: "Create New Project",
+      label: "Project name",
+      initialValue: "untitled",
+      confirmLabel: "Create"
+    });
+    if (!projectName) return;
+    try {
+      await kernel.projectService.createNewProject({ parentFolder: parent, projectName });
+      refreshSnapshots();
+      refreshDefaults();
+      refreshRecents();
+      setMenuOpen(false);
+    } catch (error) {
+      reportActionError("Unable to create project", error);
+    }
+  };
+
+  const handleSaveProjectAs = async (): Promise<void> => {
+    if (!window.electronAPI || !activeProject) return;
+    const defaultRoot = await window.electronAPI.getDefaultProjectsRoot();
+    const parent = await window.electronAPI.selectFolder({
+      title: "Choose a parent folder for the new copy",
+      defaultPath: defaultRoot
+    });
+    if (!parent) return;
+    const newName = await props.requestTextInput({
+      title: "Save Project As",
+      label: "New project name",
+      initialValue: `${activeProject.name}-copy`,
+      confirmLabel: "Save As"
+    });
+    if (!newName) return;
+    try {
+      await kernel.projectService.saveProjectAs({ newParentFolder: parent, newProjectName: newName });
+      refreshSnapshots();
+      refreshDefaults();
+      refreshRecents();
+      setMenuOpen(false);
+    } catch (error) {
+      reportActionError("Unable to save project as", error);
+    }
+  };
+
+  const handleMoveProject = async (): Promise<void> => {
+    if (!window.electronAPI || !activeProject) return;
+    const defaultRoot = await window.electronAPI.getDefaultProjectsRoot();
+    const parent = await window.electronAPI.selectFolder({
+      title: "Move project to which folder?",
+      defaultPath: defaultRoot
+    });
+    if (!parent) return;
+    try {
+      await kernel.projectService.moveProject(parent);
+      refreshSnapshots();
+      refreshDefaults();
+      refreshRecents();
+      setMenuOpen(false);
+    } catch (error) {
+      reportActionError("Unable to move project", error);
+    }
+  };
+
+  const handleRenameProject = async (): Promise<void> => {
+    if (!activeProject) return;
+    const nextName = await props.requestTextInput({
+      title: "Rename Project",
+      label: "Project name",
+      initialValue: activeProject.name,
+      confirmLabel: "Rename"
+    });
+    if (!nextName) return;
+    try {
+      await kernel.projectService.renameProject(nextName);
+      refreshSnapshots();
+      refreshDefaults();
+      refreshRecents();
+      setMenuOpen(false);
+    } catch (error) {
+      reportActionError("Unable to rename project", error);
+    }
+  };
+
+  const handleDeleteProject = (): void => {
+    if (!activeProject) return;
+    const confirmed = window.confirm(
+      `Delete project "${activeProject.name}"?\n\nThis removes the entire folder at:\n${activeProject.path}` +
+        (state.dirty ? "\n\nUnsaved changes will be lost." : "")
+    );
+    if (!confirmed) return;
     void kernel.projectService
-      .deleteProject(projectName)
+      .deleteProject(activeProject.path)
       .then(() => {
-        refreshProjects();
         refreshSnapshots();
         refreshDefaults();
+        refreshRecents();
+        setMenuOpen(false);
       })
       .catch((error) => {
         reportActionError("Unable to delete project", error);
       });
+  };
+
+  const handleOpenRecent = async (entry: RecentsEntry): Promise<void> => {
+    try {
+      await kernel.projectService.openProject(entry.path, entry.lastSnapshotName);
+      refreshSnapshots();
+      refreshDefaults();
+      refreshRecents();
+      setMenuOpen(false);
+    } catch (error) {
+      reportActionError(`Unable to open "${entry.cachedName}"`, error);
+    }
+  };
+
+  const handleLocateRecent = async (entry: RecentsEntry): Promise<void> => {
+    if (!window.electronAPI) return;
+    try {
+      const located = await window.electronAPI.locateRecent({
+        uuid: entry.uuid,
+        title: `Locate "${entry.cachedName}"`
+      });
+      if (located) {
+        refreshRecents();
+      }
+    } catch (error) {
+      reportActionError("Unable to locate project", error);
+    }
+  };
+
+  const handleRemoveRecent = async (entry: RecentsEntry): Promise<void> => {
+    if (!window.electronAPI) return;
+    try {
+      await window.electronAPI.removeRecent({ uuid: entry.uuid });
+      refreshRecents();
+    } catch (error) {
+      reportActionError("Unable to remove recent", error);
+    }
   };
 
   const cancelSnapshotEdit = (): void => {
@@ -320,6 +403,8 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
     cancelSnapshotEdit();
   };
 
+  const projectLabel = activeProject ? activeProject.name : "(no project)";
+
   return (
     <div className="titlebar">
       <div className="titlebar-left titlebar-interactive">
@@ -352,13 +437,13 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
             <button
               type="button"
               className="titlebar-project-trigger"
-              title="Switch project or snapshot"
+              title={activeProject ? `Project: ${activeProject.path}` : "No project open"}
               onClick={() => setMenuOpen((value) => !value)}
             >
-              Project: <strong>{state.activeProjectName}</strong> / Snapshot: <strong>{state.activeSnapshotName}</strong>
+              Project: <strong>{projectLabel}</strong> / Snapshot: <strong>{state.activeSnapshotName}</strong>
               {state.dirty ? <em>*</em> : null}
             </button>
-            {state.dirty ? (
+            {state.dirty && activeProject ? (
               <button
                 type="button"
                 className="titlebar-project-save-stale"
@@ -375,65 +460,54 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
           {isMenuOpen ? (
             <div className="titlebar-project-popover">
               <div className="titlebar-project-section">
-                <label>Active Project</label>
-                <div className="titlebar-project-list" role="listbox" aria-label="Projects">
-                  {projectOptions.map((projectName) => {
-                    const isActive = projectName === state.activeProjectName;
+                <label>Recent Projects</label>
+                <div className="titlebar-project-list" role="listbox" aria-label="Recent projects">
+                  {recents.length === 0 ? (
+                    <div className="titlebar-project-list-empty">No recent projects.</div>
+                  ) : null}
+                  {recents.map((entry) => {
+                    const isActive = activeProject?.uuid === entry.uuid;
                     return (
                       <div
-                        key={projectName}
+                        key={entry.uuid}
                         className={`titlebar-project-list-item${isActive ? " is-active" : ""}`}
                       >
                         <button
                           type="button"
                           className="titlebar-project-list-main"
                           aria-selected={isActive}
+                          title={entry.path}
                           onClick={() => {
-                            setMenuOpen(false);
-                            void kernel.projectService.loadProject(projectName, "main");
+                            void handleOpenRecent(entry);
                           }}
                         >
-                          <span className="titlebar-project-list-name">{projectName}</span>
+                          <span className="titlebar-project-list-name">{entry.cachedName}</span>
                         </button>
                         <div className="titlebar-project-list-side">
-                          {!isReadOnly ? (
-                            <div className="titlebar-project-actions-inline">
-                              <button
-                                type="button"
-                                className={`titlebar-project-action${isDefaultProject(projectName) ? " is-active" : ""}`}
-                                title="Set as default project"
-                                onClick={() => {
-                                  void kernel.projectService.setDefaultSnapshot("main", projectName).then(() => {
-                                    refreshDefaults();
-                                  });
-                                }}
-                              >
-                                <FontAwesomeIcon icon={faStar} />
-                              </button>
-                              <button
-                                type="button"
-                                className="titlebar-project-action"
-                                title="Duplicate project"
-                                onClick={() => {
-                                  handleDuplicateProject(projectName);
-                                }}
-                              >
-                                <FontAwesomeIcon icon={faClone} />
-                              </button>
-                              <button
-                                type="button"
-                                className="titlebar-project-action"
-                                title="Delete project"
-                                onClick={() => {
-                                  handleDeleteProject(projectName);
-                                }}
-                              >
-                                <FontAwesomeIcon icon={faTrash} />
-                              </button>
-                            </div>
-                          ) : null}
+                          <div className="titlebar-project-actions-inline">
+                            <button
+                              type="button"
+                              className="titlebar-project-action"
+                              title="Locate moved project"
+                              onClick={() => {
+                                void handleLocateRecent(entry);
+                              }}
+                            >
+                              <FontAwesomeIcon icon={faFolderOpen} />
+                            </button>
+                            <button
+                              type="button"
+                              className="titlebar-project-action"
+                              title="Remove from recents"
+                              onClick={() => {
+                                void handleRemoveRecent(entry);
+                              }}
+                            >
+                              <FontAwesomeIcon icon={faTrash} />
+                            </button>
+                          </div>
                           <span className="titlebar-project-list-indicator" aria-hidden="true">
-                            {isDefaultProject(projectName) ? <FontAwesomeIcon icon={faStar} /> : null}
+                            {isDefaultProject(entry.uuid) ? <FontAwesomeIcon icon={faStar} /> : null}
                           </span>
                         </div>
                       </div>
@@ -444,77 +518,56 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
                 <div className="titlebar-project-actions">
                   <button
                     type="button"
+                    title="Open project from disk"
+                    onClick={() => {
+                      void handleOpenProject();
+                    }}
+                  >
+                    <FontAwesomeIcon icon={faUpRightFromSquare} />
+                  </button>
+                  <button
+                    type="button"
                     disabled={isReadOnly}
                     title="New project"
                     onClick={() => {
-                      void props
-                        .requestTextInput({
-                          title: "Create New Project",
-                          label: "Project name",
-                          initialValue: nextUntitledName(projectOptions, "untitled"),
-                          confirmLabel: "Create"
-                        })
-                        .then(async (nextName) => {
-                          if (!nextName) {
-                            return;
-                          }
-                          try {
-                            await kernel.projectService.createNewProject(nextName);
-                            refreshProjects();
-                            refreshSnapshots();
-                            refreshDefaults();
-                            setMenuOpen(false);
-                          } catch (error) {
-                            reportActionError("Unable to create project", error);
-                          }
-                        });
+                      void handleNewProject();
                     }}
                   >
                     <FontAwesomeIcon icon={faPlus} />
                   </button>
                   <button
                     type="button"
-                    disabled={isReadOnly}
-                    title="Save project as"
+                    disabled={isReadOnly || !activeProject}
+                    title="Save project as…"
                     onClick={() => {
-                      handleProjectSaveAs(state.activeProjectName);
+                      void handleSaveProjectAs();
                     }}
                   >
                     <FontAwesomeIcon icon={faClone} />
                   </button>
                   <button
                     type="button"
-                    disabled={isReadOnly}
+                    disabled={isReadOnly || !activeProject}
+                    title="Move project to a new folder"
+                    onClick={() => {
+                      void handleMoveProject();
+                    }}
+                  >
+                    <FontAwesomeIcon icon={faFolderOpen} />
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isReadOnly || !activeProject}
                     title="Rename project"
                     onClick={() => {
-                      void props
-                        .requestTextInput({
-                          title: "Rename Project",
-                          label: "Project name",
-                          initialValue: state.activeProjectName,
-                          confirmLabel: "Rename"
-                        })
-                        .then(async (nextName) => {
-                          if (!nextName) {
-                            return;
-                          }
-                          try {
-                            await kernel.projectService.renameProject(state.activeProjectName, nextName);
-                            refreshProjects();
-                            refreshSnapshots();
-                            refreshDefaults();
-                            setMenuOpen(false);
-                          } catch (error) {
-                            reportActionError("Unable to rename project", error);
-                          }
-                        });
+                      void handleRenameProject();
                     }}
                   >
                     <FontAwesomeIcon icon={faPenToSquare} />
                   </button>
                   <button
                     type="button"
-                    disabled={isReadOnly}
+                    disabled={isReadOnly || !activeProject}
                     title="Save project"
                     onClick={() => {
                       setMenuOpen(false);
@@ -525,41 +578,141 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
                   </button>
                   <button
                     type="button"
-                    disabled={isReadOnly}
+                    disabled={isReadOnly || !activeProject}
                     title="Set as default project"
                     onClick={() => {
                       setMenuOpen(false);
-                      void kernel.projectService.setDefaultProject();
+                      void kernel.projectService.setDefaultProject().then(refreshDefaults);
                     }}
                   >
                     <FontAwesomeIcon icon={faStar} />
                   </button>
+                  <button
+                    type="button"
+                    disabled={isReadOnly || !activeProject}
+                    title="Delete project"
+                    onClick={handleDeleteProject}
+                  >
+                    <FontAwesomeIcon icon={faTrash} />
+                  </button>
                 </div>
               </div>
 
-              <div className="titlebar-project-divider" />
-
-              <div className="titlebar-project-section">
-                <label>Active Snapshot</label>
-                <div className="titlebar-project-snapshot-list" role="listbox" aria-label="Project snapshots">
-                  {snapshotOptions.map((snapshot) => {
-                    const isActive = snapshot.name === state.activeSnapshotName;
-                    const isEditing =
-                      editingSnapshot?.mode === "rename" && editingSnapshot.originalName === snapshot.name;
-                    if (isEditing && editingSnapshot) {
-                      return (
-                        <div
-                          key={snapshot.name}
-                          className="titlebar-project-snapshot-item is-editing"
-                          onClick={(event) => event.stopPropagation()}
-                        >
+              {activeProject ? (
+                <>
+                  <div className="titlebar-project-divider" />
+                  <div className="titlebar-project-section">
+                    <label>Active Snapshot</label>
+                    <div className="titlebar-project-snapshot-list" role="listbox" aria-label="Project snapshots">
+                      {snapshotOptions.map((snapshot) => {
+                        const isActive = snapshot.name === state.activeSnapshotName;
+                        const isEditing =
+                          editingSnapshot?.mode === "rename" && editingSnapshot.originalName === snapshot.name;
+                        if (isEditing && editingSnapshot) {
+                          return (
+                            <div
+                              key={snapshot.name}
+                              className="titlebar-project-snapshot-item is-editing"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <div className="titlebar-project-snapshot-editor">
+                                <input
+                                  ref={snapshotInputRef}
+                                  type="text"
+                                  className="titlebar-project-snapshot-input"
+                                  value={editingSnapshot.value}
+                                  aria-label={`Rename snapshot ${snapshot.name}`}
+                                  onChange={(event) => {
+                                    const nextValue = event.target.value;
+                                    setEditingSnapshot((current) =>
+                                      current
+                                        ? {
+                                            ...current,
+                                            value: nextValue,
+                                            error: validateSnapshotName(nextValue, current.originalName)
+                                          }
+                                        : current
+                                    );
+                                  }}
+                                  onKeyDown={handleSnapshotInputKeyDown}
+                                  onBlur={handleSnapshotInputBlur}
+                                />
+                                {editingSnapshot.error ? (
+                                  <span className="titlebar-project-snapshot-error">{editingSnapshot.error}</span>
+                                ) : null}
+                              </div>
+                            </div>
+                          );
+                        }
+                        return (
+                          <div
+                            key={snapshot.name}
+                            className={`titlebar-project-snapshot-item${isActive ? " is-active" : ""}`}
+                          >
+                            <button
+                              type="button"
+                              className="titlebar-project-snapshot-main"
+                              aria-selected={isActive}
+                              onClick={() => {
+                                setMenuOpen(false);
+                                void kernel.projectService.loadSnapshot(snapshot.name);
+                              }}
+                            >
+                              <span className="titlebar-project-snapshot-name">{snapshot.name}</span>
+                              <span className="titlebar-project-snapshot-date">
+                                {formatSnapshotDate(snapshot.updatedAtIso)}
+                              </span>
+                            </button>
+                            <div className="titlebar-project-snapshot-side">
+                              <span className="titlebar-project-snapshot-default-indicator" aria-hidden="true">
+                                {isDefaultSnapshot(snapshot.name) ? <FontAwesomeIcon icon={faStar} /> : null}
+                              </span>
+                              {!isReadOnly ? (
+                                <div className="titlebar-project-snapshot-actions">
+                                  <button
+                                    type="button"
+                                    className="titlebar-project-snapshot-action"
+                                    title="Rename snapshot"
+                                    onClick={() => {
+                                      startSnapshotRename(snapshot.name);
+                                    }}
+                                  >
+                                    <FontAwesomeIcon icon={faPenToSquare} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="titlebar-project-snapshot-action"
+                                    title="Delete snapshot"
+                                    disabled={snapshotOptions.length <= 1}
+                                    onClick={() => {
+                                      const confirmed = window.confirm(`Delete snapshot "${snapshot.name}"?`);
+                                      if (!confirmed) {
+                                        return;
+                                      }
+                                      void kernel.projectService.deleteSnapshot(snapshot.name).then(() => {
+                                        refreshSnapshots();
+                                        refreshDefaults();
+                                      });
+                                    }}
+                                  >
+                                    <FontAwesomeIcon icon={faTrash} />
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {editingSnapshot?.mode === "create" ? (
+                        <div className="titlebar-project-snapshot-item is-editing">
                           <div className="titlebar-project-snapshot-editor">
                             <input
                               ref={snapshotInputRef}
                               type="text"
                               className="titlebar-project-snapshot-input"
                               value={editingSnapshot.value}
-                              aria-label={`Rename snapshot ${snapshot.name}`}
+                              placeholder="New snapshot name"
+                              aria-label="New snapshot name"
                               onChange={(event) => {
                                 const nextValue = event.target.value;
                                 setEditingSnapshot((current) =>
@@ -580,140 +733,43 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
                             ) : null}
                           </div>
                         </div>
-                      );
-                    }
-                    return (
-                      <div
-                        key={snapshot.name}
-                        className={`titlebar-project-snapshot-item${isActive ? " is-active" : ""}`}
-                      >
+                      ) : (
                         <button
                           type="button"
-                          className="titlebar-project-snapshot-main"
-                          aria-selected={isActive}
+                          className="titlebar-project-new-snapshot"
+                          disabled={isReadOnly}
                           onClick={() => {
-                            setMenuOpen(false);
-                            void kernel.projectService.loadProject(state.activeProjectName, snapshot.name);
+                            startSnapshotCreate();
                           }}
                         >
-                          <span className="titlebar-project-snapshot-name">{snapshot.name}</span>
-                          <span className="titlebar-project-snapshot-date">{formatSnapshotDate(snapshot.updatedAtIso)}</span>
+                          <span>New snapshot...</span>
                         </button>
-                        <div className="titlebar-project-snapshot-side">
-                          <span className="titlebar-project-snapshot-default-indicator" aria-hidden="true">
-                            {isDefaultSnapshot(snapshot.name) ? <FontAwesomeIcon icon={faStar} /> : null}
-                          </span>
-                          {!isReadOnly ? (
-                            <div className="titlebar-project-snapshot-actions">
-                              <button
-                                type="button"
-                                className={`titlebar-project-snapshot-action${isDefaultSnapshot(snapshot.name) ? " is-active" : ""}`}
-                                title="Set as default snapshot"
-                                onClick={() => {
-                                  void kernel.projectService.setDefaultSnapshot(snapshot.name, state.activeProjectName).then(() => {
-                                    refreshDefaults();
-                                  });
-                                }}
-                              >
-                                <FontAwesomeIcon icon={faStar} />
-                              </button>
-                              <button
-                                type="button"
-                                className="titlebar-project-snapshot-action"
-                                title="Rename snapshot"
-                                onClick={() => {
-                                  startSnapshotRename(snapshot.name);
-                                }}
-                              >
-                                <FontAwesomeIcon icon={faPenToSquare} />
-                              </button>
-                              <button
-                                type="button"
-                                className="titlebar-project-snapshot-action"
-                                title="Delete snapshot"
-                                disabled={snapshotOptions.length <= 1}
-                                onClick={() => {
-                                  const confirmed = window.confirm(`Delete snapshot "${snapshot.name}"?`);
-                                  if (!confirmed) {
-                                    return;
-                                  }
-                                  void kernel.projectService.deleteSnapshot(snapshot.name).then(() => {
-                                    refreshSnapshots();
-                                    refreshDefaults();
-                                  });
-                                }}
-                              >
-                                <FontAwesomeIcon icon={faTrash} />
-                              </button>
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                    );
-                  })}
-                  {editingSnapshot?.mode === "create" ? (
-                    <div className="titlebar-project-snapshot-item is-editing">
-                      <div className="titlebar-project-snapshot-editor">
-                        <input
-                          ref={snapshotInputRef}
-                          type="text"
-                          className="titlebar-project-snapshot-input"
-                          value={editingSnapshot.value}
-                          placeholder="New snapshot name"
-                          aria-label="New snapshot name"
-                          onChange={(event) => {
-                            const nextValue = event.target.value;
-                            setEditingSnapshot((current) =>
-                              current
-                                ? {
-                                    ...current,
-                                    value: nextValue,
-                                    error: validateSnapshotName(nextValue, current.originalName)
-                                  }
-                                : current
-                            );
-                          }}
-                          onKeyDown={handleSnapshotInputKeyDown}
-                          onBlur={handleSnapshotInputBlur}
-                        />
-                        {editingSnapshot.error ? (
-                          <span className="titlebar-project-snapshot-error">{editingSnapshot.error}</span>
-                        ) : null}
-                      </div>
+                      )}
                     </div>
-                  ) : (
+                  </div>
+
+                  <div className="titlebar-project-actions">
                     <button
                       type="button"
-                      className="titlebar-project-new-snapshot"
-                      disabled={isReadOnly}
+                      title="Reload current snapshot"
                       onClick={() => {
-                        startSnapshotCreate();
+                        if (state.dirty) {
+                          const confirmed = window.confirm(
+                            "Discard unsaved changes and reload this snapshot from disk?"
+                          );
+                          if (!confirmed) {
+                            return;
+                          }
+                        }
+                        setMenuOpen(false);
+                        void kernel.projectService.loadSnapshot(state.activeSnapshotName);
                       }}
                     >
-                      <span>New snapshot...</span>
+                      <FontAwesomeIcon icon={faRotateRight} />
                     </button>
-                  )}
-                </div>
-              </div>
-
-              <div className="titlebar-project-actions">
-                <button
-                  type="button"
-                  title="Reload current snapshot"
-                  onClick={() => {
-                    if (state.dirty) {
-                      const confirmed = window.confirm("Discard unsaved changes and reload this snapshot from disk?");
-                      if (!confirmed) {
-                        return;
-                      }
-                    }
-                    setMenuOpen(false);
-                    void kernel.projectService.loadProject(state.activeProjectName, state.activeSnapshotName);
-                  }}
-                >
-                  <FontAwesomeIcon icon={faRotateRight} />
-                </button>
-              </div>
+                  </div>
+                </>
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -726,5 +782,3 @@ export function TitleBarPanel(props: TitleBarPanelProps) {
     </div>
   );
 }
-
-

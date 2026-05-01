@@ -1,93 +1,110 @@
-import type { ProjectAssetRef, ProjectSnapshotListEntry } from "@/types/ipc";
 import type { StorageAdapter } from "./storageAdapter";
 
-const DEFAULTS_PATH = "/sessions/defaults.json";
-
-async function fetchText(path: string): Promise<string> {
-  const response = await fetch(path);
-  if (!response.ok) {
-    throw new Error(`Unable to fetch ${path}.`);
-  }
-  return response.text();
-}
+const READ_ONLY_MESSAGE = "Read-only mode: this operation is not supported.";
 
 export function createWebStorageAdapter(): StorageAdapter {
+  function readOnly(): never {
+    throw new Error(READ_ONLY_MESSAGE);
+  }
+
   return {
     mode: "web-ro",
     isReadOnly: true,
-    async listProjects() {
-      const defaults = await this.loadDefaults();
-      return [defaults.defaultProjectName];
+    async loadRecents() {
+      return [];
     },
-    async listSnapshots(_projectName) {
-      const defaults = await this.loadDefaults();
-      return [{ name: defaults.defaultSnapshotName, updatedAtIso: null }] satisfies ProjectSnapshotListEntry[];
+    async saveRecents() {
+      readOnly();
+    },
+    async removeRecent() {
+      readOnly();
+    },
+    async locateRecent() {
+      return null;
     },
     async loadDefaults() {
-      const raw = await fetchText(DEFAULTS_PATH);
-      const parsed = JSON.parse(raw) as { defaultProjectName?: string; defaultSnapshotName?: string; defaultSessionName?: string };
-      return {
-        defaultProjectName: parsed.defaultProjectName ?? parsed.defaultSessionName ?? "demo",
-        defaultSnapshotName: parsed.defaultSnapshotName ?? "main"
-      };
+      return null;
     },
     async saveDefaults() {
-      throw new Error("Read-only mode: defaults cannot be saved.");
+      readOnly();
     },
-    async loadProjectSnapshot(projectName, snapshotName) {
-      if (snapshotName !== "main") {
-        try {
-          return await fetchText(`/sessions/${projectName}/snapshots/${snapshotName}.json`);
-        } catch {
-          // Fall back to legacy single-snapshot layout.
-        }
-      }
-      return await fetchText(`/sessions/${projectName}/session.json`);
+    async selectSimularcaFile() {
+      return null;
     },
-    async saveProjectSnapshot() {
-      throw new Error("Read-only mode: project cannot be saved.");
+    async selectFolder() {
+      return null;
     },
-    async cloneProject() {
-      throw new Error("Read-only mode: projects cannot be cloned.");
+    async getDefaultProjectsRoot() {
+      return "";
     },
-    async deleteProject() {
-      throw new Error("Read-only mode: projects cannot be deleted.");
+    async createNewProject() {
+      readOnly();
+    },
+    async openProject() {
+      readOnly();
+    },
+    async saveProjectAs() {
+      readOnly();
+    },
+    async moveProject() {
+      readOnly();
     },
     async renameProject() {
-      throw new Error("Read-only mode: projects cannot be renamed.");
+      readOnly();
+    },
+    async deleteProject() {
+      readOnly();
+    },
+    async repairPointer() {
+      readOnly();
+    },
+    async listSnapshots() {
+      return [];
+    },
+    async loadSnapshot() {
+      return "{}";
+    },
+    async saveSnapshot() {
+      readOnly();
     },
     async duplicateSnapshot() {
-      throw new Error("Read-only mode: snapshots cannot be duplicated.");
+      readOnly();
     },
     async renameSnapshot() {
-      throw new Error("Read-only mode: snapshots cannot be renamed.");
+      readOnly();
     },
     async deleteSnapshot() {
-      throw new Error("Read-only mode: snapshots cannot be deleted.");
+      readOnly();
     },
-    async importAsset(_args: {
-      projectName: string;
-      sourcePath: string;
-      kind: ProjectAssetRef["kind"];
-    }) {
-      throw new Error("Read-only mode: assets cannot be imported.");
+    async detectLegacyProjects() {
+      return [];
+    },
+    async migrateLegacyProject() {
+      readOnly();
+    },
+    async writeMigrationReadme() {
+      readOnly();
+    },
+    async deleteLegacyProject() {
+      readOnly();
+    },
+    async importAsset() {
+      readOnly();
     },
     async importDae() {
-      throw new Error("Read-only mode: DAE assets cannot be imported.");
+      readOnly();
     },
     async transcodeHdriToKtx2() {
-      throw new Error("Read-only mode: HDRI transcoding is disabled.");
+      readOnly();
     },
     async deleteAsset() {
-      throw new Error("Read-only mode: assets cannot be deleted.");
+      readOnly();
     },
-    resolveAssetPath: async ({ projectName, relativePath }) => `/sessions/${projectName}/${relativePath}`,
-    async readAssetBytes({ projectName, relativePath }) {
-      const response = await fetch(`/sessions/${projectName}/${relativePath}`);
-      if (!response.ok) {
-        throw new Error(`Unable to fetch asset bytes: ${relativePath}`);
-      }
-      return new Uint8Array(await response.arrayBuffer());
+    async resolveAssetPath({ projectUuid, relativePath }) {
+      return `simularca-asset://${encodeURIComponent(projectUuid)}/${relativePath}`;
+    },
+    async readAssetBytes() {
+      readOnly();
     }
   };
 }

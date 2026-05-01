@@ -8,7 +8,7 @@ function buildSessionInfo(kernel: AppKernel): RendererDebugSessionInfo {
   return {
     ready: true,
     buildKind: BUILD_INFO.buildKind,
-    activeProjectName: state.activeProjectName,
+    activeProjectName: state.activeProject?.name ?? "",
     activeSnapshotName: state.activeSnapshotName,
     mode: state.mode,
     selection: state.selection.map((entry) => ({ kind: entry.kind, id: entry.id })),

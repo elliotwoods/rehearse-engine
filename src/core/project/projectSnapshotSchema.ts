@@ -429,6 +429,7 @@ const projectSnapshotSchema = z.object({
     elapsedSimSeconds: z.number()
   }),
   pluginViews: z.record(pluginViewSchema).default({}),
+  pluginsEnabled: z.record(z.boolean()).default({}),
   materials: z.record(materialSchema).default({}),
   assets: z.array(
     z.object({

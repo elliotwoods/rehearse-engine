@@ -2889,7 +2889,7 @@ export function InspectorPane() {
   const assets = appState.assets;
   const actorStatusByActorId = appState.actorStatusByActorId;
   const mode = appState.mode;
-  const projectName = appState.activeProjectName;
+  const activeProject = appState.activeProject;
   const autosaveTimeoutRef = useRef<number | null>(null);
 
   const actorDescriptors = kernel.descriptorRegistry.listByKind("actor");
@@ -5377,8 +5377,14 @@ export function InspectorPane() {
                       return;
                     }
 
+                    if (!activeProject) {
+                      kernel.store
+                        .getState()
+                        .actions.setStatus("Open a project before importing files.");
+                      return;
+                    }
                     const imported = await importFileForActorParam(kernel, {
-                      projectName,
+                      projectPath: activeProject.path,
                       sourcePath,
                       definition
                     });

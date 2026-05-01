@@ -33,7 +33,7 @@ import type {
   SelectionEntry,
   TimeSpeedPreset
 } from "@/core/types";
-import type { AppMode, ProjectAssetRef } from "@/types/ipc";
+import type { AppMode, ProjectAssetRef, ProjectIdentity } from "@/types/ipc";
 
 export interface HistoryEntry {
   label: string;
@@ -52,7 +52,7 @@ export interface AppActions {
   pushHistory(label: string): void;
   undo(): void;
   redo(): void;
-  setProjectName(name: string): void;
+  setActiveProject(identity: ProjectIdentity | null): void;
   setSnapshotName(name: string): void;
   setSceneBackgroundColor(color: string): void;
   setSceneRenderSettings(
@@ -100,6 +100,7 @@ export interface AppActions {
   setActorTransformNoHistory(actorId: string, key: "position" | "rotation" | "scale", value: [number, number, number]): void;
   setActorVisibilityMode(actorId: string, mode: ActorVisibilityMode): void;
   setNodeEnabled(node: SelectionEntry, enabled: boolean): void;
+  setPluginEnabled(pluginId: string, enabled: boolean): void;
   select(nodes: SelectionEntry[], additive?: boolean): void;
   clearSelection(): void;
   reorderActor(actorId: string, newParentId: string | null, index: number): void;
@@ -408,11 +409,10 @@ export function createAppStore(mode: AppMode): AppStoreApi {
           state: cloneState(next.snapshot)
         });
       },
-      setProjectName(name) {
+      setActiveProject(identity) {
         set({
           state: produce(get().state, (draft) => {
-            draft.activeProjectName = name;
-            draft.dirty = true;
+            draft.activeProject = identity;
           })
         });
       },
@@ -703,6 +703,15 @@ export function createAppStore(mode: AppMode): AppStoreApi {
                 component.enabled = enabled;
               }
             }
+            draft.dirty = true;
+          })
+        });
+      },
+      setPluginEnabled(pluginId, enabled) {
+        withHistory(get, set, "Toggle plugin enabled");
+        set({
+          state: produce(get().state, (draft) => {
+            draft.pluginsEnabled[pluginId] = enabled;
             draft.dirty = true;
           })
         });

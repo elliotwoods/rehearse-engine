@@ -7,23 +7,45 @@ import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { normalizeRenderPipeFrameBytes } from "./renderPipeFrameBytes.js";
 import { RotoControlHost } from "./rotoControlHost.js";
-import type {
-  DefaultProjectPointer,
-  DaeImportResult,
-  FileDialogFilter,
-  GitDirtyBadge,
-  GitDirtyStatusRequest,
-  GitDirtyStatusResponse,
-  HdriTranscodeOptions,
-  ProjectAssetRef,
-  ProjectSnapshotListEntry,
-  RotoControlBank,
-  RotoControlDawEmulation,
-  RotoControlInputEvent,
-  RotoControlState
-} from "../src/types/ipc";
+import {
+  SIMULARCA_EXTENSION,
+  type DefaultProjectPointer,
+  type DaeImportResult,
+  type FileDialogFilter,
+  type GitDirtyBadge,
+  type GitDirtyStatusRequest,
+  type GitDirtyStatusResponse,
+  type HdriTranscodeOptions,
+  type LegacyProjectInfo,
+  type OpenProjectResult,
+  type ProjectAssetRef,
+  type ProjectIdentity,
+  type ProjectSnapshotListEntry,
+  type RecentsEntry,
+  type RotoControlBank,
+  type RotoControlDawEmulation,
+  type RotoControlInputEvent,
+  type RotoControlState
+} from "../src/types/ipc.js";
 import { isIgnorablePipeError, startLiveDebugServer, type LiveDebugServerController } from "./liveDebugServer.js";
 import { toCompactYaml } from "./loggerUtils.js";
+import {
+  createPointer,
+  discoverAllSimularcaFiles,
+  discoverSimularcaFile,
+  pointerFilePath,
+  projectNameFromSimularcaPath,
+  readPointer,
+  repairPointer,
+  writePointer
+} from "./projectPointer.js";
+import {
+  findRecentByUuid,
+  loadRecents,
+  removeRecentByUuid,
+  saveRecents,
+  updateRecentPath
+} from "./recentsStore.js";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".svg"]);
 // 1×1 transparent PNG
@@ -92,8 +114,6 @@ if (IS_DEV) {
 
 const APP_DISPLAY_NAME = "Simularca";
 const DEFAULTS_FILE_NAME = "defaults.json";
-const LEGACY_PROJECT_FILE_NAME = "session.json";
-const SNAPSHOT_DIRECTORY_NAME = "snapshots";
 const RUNTIME_LOG_FILE_NAME = "electron-runtime.log";
 const WINDOW_STATE_FILE_NAME = "window-state.json";
 const ASSET_PROTOCOL = "simularca-asset";
@@ -153,6 +173,61 @@ function getRepoRoot(): string {
 
 function getLogsRoot(): string {
   return path.join(getRepoRoot(), "logs");
+}
+
+function getUserDataRoot(): string {
+  return app.getPath("userData");
+}
+
+function getRecentsFilePath(): string {
+  return path.join(getUserDataRoot(), "recents.json");
+}
+
+function getDefaultsFilePath(): string {
+  return path.join(getUserDataRoot(), DEFAULTS_FILE_NAME);
+}
+
+function getPreferencesFilePath(): string {
+  return path.join(getUserDataRoot(), "preferences.json");
+}
+
+function getDocumentsProjectsRoot(): string {
+  return path.join(app.getPath("documents"), "Simularca Projects");
+}
+
+const SNAPSHOTS_DIR = "snapshots";
+const ASSETS_DIR = "assets";
+
+function projectFolderForPath(simularcaPath: string): string {
+  return path.dirname(simularcaPath);
+}
+
+function snapshotsDirForPath(simularcaPath: string): string {
+  return path.join(projectFolderForPath(simularcaPath), SNAPSHOTS_DIR);
+}
+
+function snapshotFileForPath(simularcaPath: string, snapshotName: string): string {
+  return path.join(snapshotsDirForPath(simularcaPath), `${snapshotName}.json`);
+}
+
+function assetsDirForPath(simularcaPath: string, kind?: ProjectAssetRef["kind"]): string {
+  const root = path.join(projectFolderForPath(simularcaPath), ASSETS_DIR);
+  return kind ? path.join(root, kind) : root;
+}
+
+/**
+ * Maps the in-session uuid → project folder path. Populated when the renderer
+ * opens a project; consulted by the simularca-asset:// protocol handler when
+ * resolving asset URLs that encode the uuid.
+ */
+const openProjectFoldersByUuid = new Map<string, string>();
+
+function rememberProjectFolder(identity: ProjectIdentity): void {
+  openProjectFoldersByUuid.set(identity.uuid, projectFolderForPath(identity.path));
+}
+
+function forgetProjectFolder(uuid: string): void {
+  openProjectFoldersByUuid.delete(uuid);
 }
 
 function getAppIconPath(): string {
@@ -361,12 +436,14 @@ let rotoControlHost: RotoControlHost | null = null;
 
 app.setName(APP_DISPLAY_NAME);
 
-function getSaveDataRoot(): string {
+/** Legacy savedata location, kept for migration only. */
+function getLegacySaveDataRoot(): string {
   return path.join(getRepoRoot(), "savedata");
 }
 
-function getProjectDirectory(projectName: string): string {
-  return path.join(getSaveDataRoot(), projectName);
+/** Legacy project folder layout, kept for migration only. */
+function getLegacyProjectDirectory(projectName: string): string {
+  return path.join(getLegacySaveDataRoot(), projectName);
 }
 
 interface PersistedWindowState {
@@ -378,7 +455,32 @@ interface PersistedWindowState {
 }
 
 function getWindowStateFilePath(): string {
-  return path.join(getSaveDataRoot(), WINDOW_STATE_FILE_NAME);
+  return path.join(getUserDataRoot(), WINDOW_STATE_FILE_NAME);
+}
+
+function getLegacyWindowStateFilePath(): string {
+  return path.join(getLegacySaveDataRoot(), WINDOW_STATE_FILE_NAME);
+}
+
+function migrateLegacyWindowState(): void {
+  const legacyPath = getLegacyWindowStateFilePath();
+  const newPath = getWindowStateFilePath();
+  try {
+    if (!fsSync.existsSync(legacyPath)) {
+      return;
+    }
+    if (fsSync.existsSync(newPath)) {
+      return;
+    }
+    fsSync.mkdirSync(path.dirname(newPath), { recursive: true });
+    fsSync.copyFileSync(legacyPath, newPath);
+    void writeRuntimeLog("window", "Migrated legacy window state to userData", {
+      from: legacyPath,
+      to: newPath
+    });
+  } catch (error) {
+    void writeRuntimeLog("window", "Failed to migrate legacy window state", error, "warn");
+  }
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -441,23 +543,11 @@ function isWindowBoundsVisible(state: PersistedWindowState): boolean {
 
 function persistWindowState(state: PersistedWindowState): void {
   try {
-    fsSync.mkdirSync(getSaveDataRoot(), { recursive: true });
+    fsSync.mkdirSync(getUserDataRoot(), { recursive: true });
     fsSync.writeFileSync(getWindowStateFilePath(), JSON.stringify(state, null, 2), "utf8");
   } catch (error) {
     void writeRuntimeLog("window", "Failed to persist window state", error, "warn");
   }
-}
-
-function getLegacyProjectFile(projectName: string): string {
-  return path.join(getProjectDirectory(projectName), LEGACY_PROJECT_FILE_NAME);
-}
-
-function getSnapshotDirectory(projectName: string): string {
-  return path.join(getProjectDirectory(projectName), SNAPSHOT_DIRECTORY_NAME);
-}
-
-function getSnapshotFile(projectName: string, snapshotName: string): string {
-  return path.join(getSnapshotDirectory(projectName), `${snapshotName}.json`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -480,10 +570,6 @@ async function readSnapshotUpdatedAtIso(filePath: string): Promise<string | null
   } catch {
     return null;
   }
-}
-
-function getAssetDirectory(projectName: string, kind: ProjectAssetRef["kind"]): string {
-  return path.join(getProjectDirectory(projectName), "assets", kind);
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -657,13 +743,18 @@ async function registerAssetProtocol(): Promise<void> {
   protocol.handle(ASSET_PROTOCOL, async (request) => {
     try {
       const parsed = new URL(request.url);
-      const projectName = decodeURIComponent(parsed.hostname);
+      const projectUuid = decodeURIComponent(parsed.hostname);
+      const projectFolder = openProjectFoldersByUuid.get(projectUuid);
+      if (!projectFolder) {
+        void writeRuntimeLog("asset-protocol", "Unknown project uuid", { uuid: projectUuid }, "warn");
+        return new Response("Unknown project", { status: 404 });
+      }
       const relativeParts = parsed.pathname
         .split("/")
         .filter((part) => part.length > 0)
         .map((part) => decodeURIComponent(part));
       const relativePath = relativeParts.join("/");
-      const projectRoot = path.resolve(getProjectDirectory(projectName));
+      const projectRoot = path.resolve(projectFolder);
       const targetPath = path.resolve(projectRoot, relativePath);
       if (!targetPath.startsWith(projectRoot)) {
         return new Response("Invalid asset path", { status: 400 });
@@ -711,33 +802,102 @@ async function registerAssetProtocol(): Promise<void> {
   });
 }
 
-async function ensureProjectDirectory(projectName: string): Promise<void> {
-  await fs.mkdir(getProjectDirectory(projectName), { recursive: true });
-  await fs.mkdir(path.join(getProjectDirectory(projectName), "assets"), { recursive: true });
-  await fs.mkdir(getSnapshotDirectory(projectName), { recursive: true });
+async function ensureProjectFolderStructure(simularcaPath: string): Promise<void> {
+  const folder = projectFolderForPath(simularcaPath);
+  await fs.mkdir(folder, { recursive: true });
+  await fs.mkdir(snapshotsDirForPath(simularcaPath), { recursive: true });
+  await fs.mkdir(assetsDirForPath(simularcaPath), { recursive: true });
 }
 
-async function ensureDefaultsFile(): Promise<void> {
-  const defaultsPath = path.join(getSaveDataRoot(), DEFAULTS_FILE_NAME);
+async function loadDefaultsFromUserData(): Promise<DefaultProjectPointer | null> {
+  const defaultsPath = getDefaultsFilePath();
   try {
     const raw = await fs.readFile(defaultsPath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<DefaultProjectPointer> & { defaultSessionName?: string };
-    const next: DefaultProjectPointer = {
-      defaultProjectName: parsed.defaultProjectName ?? parsed.defaultSessionName ?? "demo",
-      defaultSnapshotName: parsed.defaultSnapshotName ?? "main"
-    };
+    const parsed: unknown = JSON.parse(raw);
     if (
-      parsed.defaultProjectName !== next.defaultProjectName ||
-      parsed.defaultSnapshotName !== next.defaultSnapshotName ||
-      "defaultSessionName" in parsed
+      typeof parsed === "object" &&
+      parsed !== null &&
+      typeof (parsed as DefaultProjectPointer).uuid === "string" &&
+      typeof (parsed as DefaultProjectPointer).path === "string"
     ) {
-      await fs.writeFile(defaultsPath, JSON.stringify(next, null, 2), "utf8");
+      const candidate = parsed as DefaultProjectPointer;
+      return {
+        uuid: candidate.uuid,
+        path: candidate.path,
+        lastSnapshotName: candidate.lastSnapshotName ?? null
+      };
     }
+    return null;
   } catch {
-    const defaults: DefaultProjectPointer = { defaultProjectName: "demo", defaultSnapshotName: "main" };
-    await fs.mkdir(getSaveDataRoot(), { recursive: true });
-    await fs.writeFile(defaultsPath, JSON.stringify(defaults, null, 2), "utf8");
+    return null;
   }
+}
+
+async function saveDefaultsToUserData(pointer: DefaultProjectPointer | null): Promise<void> {
+  const defaultsPath = getDefaultsFilePath();
+  await fs.mkdir(path.dirname(defaultsPath), { recursive: true });
+  if (pointer === null) {
+    try {
+      await fs.rm(defaultsPath, { force: true });
+    } catch {
+      // Ignore.
+    }
+    return;
+  }
+  await fs.writeFile(defaultsPath, JSON.stringify(pointer, null, 2), "utf8");
+}
+
+async function copyDirectoryRecursive(source: string, destination: string): Promise<void> {
+  await fs.cp(source, destination, { recursive: true, errorOnExist: true, force: false });
+}
+
+async function readFolderEntryCount(folder: string): Promise<number> {
+  let count = 0;
+  async function walk(dir: string): Promise<void> {
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full);
+      } else if (entry.isFile()) {
+        count += 1;
+      }
+    }
+  }
+  await walk(folder);
+  return count;
+}
+
+async function readFolderTotalBytes(folder: string): Promise<number> {
+  let total = 0;
+  async function walk(dir: string): Promise<void> {
+    let entries;
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await walk(full);
+      } else if (entry.isFile()) {
+        try {
+          const stat = await fs.stat(full);
+          total += stat.size;
+        } catch {
+          // Skip unreadable.
+        }
+      }
+    }
+  }
+  await walk(folder);
+  return total;
 }
 
 async function runToktx({
@@ -1583,247 +1743,505 @@ function registerIpcHandlers(): void {
     }
   );
 
-  ipcMain.handle("projects:list", async () => {
-    await fs.mkdir(getSaveDataRoot(), { recursive: true });
-    const entries = await fs.readdir(getSaveDataRoot(), { withFileTypes: true });
-    return entries
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .sort((a, b) => a.localeCompare(b));
+  ipcMain.handle("recents:load", async (): Promise<RecentsEntry[]> => {
+    return loadRecents(getRecentsFilePath());
   });
 
-  ipcMain.handle("defaults:load", async () => {
-    await ensureDefaultsFile();
-    const raw = await fs.readFile(path.join(getSaveDataRoot(), DEFAULTS_FILE_NAME), "utf8");
-    return JSON.parse(raw) as DefaultProjectPointer;
+  ipcMain.handle("recents:save", async (_event, entries: RecentsEntry[]): Promise<void> => {
+    await saveRecents(getRecentsFilePath(), entries);
   });
 
-  ipcMain.handle("defaults:save", async (_event, pointer: DefaultProjectPointer) => {
-    await fs.mkdir(getSaveDataRoot(), { recursive: true });
-    await fs.writeFile(path.join(getSaveDataRoot(), DEFAULTS_FILE_NAME), JSON.stringify(pointer, null, 2), "utf8");
+  ipcMain.handle("recents:remove", async (_event, args: { uuid: string }): Promise<void> => {
+    const entries = await loadRecents(getRecentsFilePath());
+    await saveRecents(getRecentsFilePath(), removeRecentByUuid(entries, args.uuid));
   });
 
-  ipcMain.handle("snapshots:list", async (_event, projectName: string): Promise<ProjectSnapshotListEntry[]> => {
-    await ensureProjectDirectory(projectName);
-    const entries = await fs.readdir(getSnapshotDirectory(projectName), { withFileTypes: true }).catch(() => []);
-    const snapshotFiles = entries
-      .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".json"))
-      .map((entry) => ({
-        name: entry.name.replace(/\.json$/i, ""),
-        filePath: path.join(getSnapshotDirectory(projectName), entry.name)
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-    const snapshots = await Promise.all(
-      snapshotFiles.map(async (entry) => ({
-        name: entry.name,
-        updatedAtIso: await readSnapshotUpdatedAtIso(entry.filePath)
-      }))
-    );
-    const legacyMainFile = getLegacyProjectFile(projectName);
-    try {
-      await fs.access(legacyMainFile);
-      if (!snapshots.some((entry) => entry.name === "main")) {
-        snapshots.unshift({
-          name: "main",
-          updatedAtIso: await readSnapshotUpdatedAtIso(legacyMainFile)
-        });
-      }
-    } catch {
-      // Ignore absent legacy main snapshot.
-    }
-    if (snapshots.length === 0) {
-      return [{ name: "main", updatedAtIso: null }];
-    }
-    return snapshots.sort((a, b) => a.name.localeCompare(b.name));
-  });
-
-  ipcMain.handle("project:load-snapshot", async (_event, args: { projectName: string; snapshotName: string }) => {
-    await ensureProjectDirectory(args.projectName);
-    const snapshotFile = getSnapshotFile(args.projectName, args.snapshotName);
-    try {
-      await fs.access(snapshotFile);
-      return await fs.readFile(snapshotFile, "utf8");
-    } catch {
-      if (args.snapshotName === "main") {
-        const legacyFile = getLegacyProjectFile(args.projectName);
-        try {
-          await fs.access(legacyFile);
-          return await fs.readFile(legacyFile, "utf8");
-        } catch {
-          await fs.writeFile(snapshotFile, "{}", "utf8");
-          await fs.writeFile(legacyFile, "{}", "utf8");
-        }
-      } else {
-        await fs.writeFile(snapshotFile, "{}", "utf8");
-      }
-    }
-    return await fs.readFile(snapshotFile, "utf8");
-  });
-
-  ipcMain.handle("project:save-snapshot", async (_event, args: { projectName: string; snapshotName: string; payload: string }) => {
-    await ensureProjectDirectory(args.projectName);
-    await fs.writeFile(getSnapshotFile(args.projectName, args.snapshotName), args.payload, "utf8");
-    if (args.snapshotName === "main") {
-      await fs.writeFile(getLegacyProjectFile(args.projectName), args.payload, "utf8");
-    }
-  });
   ipcMain.handle(
-    "project:clone",
+    "recents:locate",
+    async (event, args: { uuid: string; title?: string }): Promise<RecentsEntry | null> => {
+      const window = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+      const dialogOptions: OpenDialogOptions = {
+        title: args.title ?? "Locate project",
+        properties: ["openFile"],
+        filters: [{ name: "Simularca Project", extensions: ["simularca"] }]
+      };
+      const result = window
+        ? await dialog.showOpenDialog(window, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
+      if (result.canceled || result.filePaths.length === 0) {
+        return null;
+      }
+      const picked = result.filePaths[0]!;
+      const pointer = await readPointer(picked);
+      if (pointer.uuid !== args.uuid) {
+        throw new Error(
+          `Selected file is a different project (uuid mismatch). Use "Open…" to add it as a new entry.`
+        );
+      }
+      const entries = await loadRecents(getRecentsFilePath());
+      const previous = findRecentByUuid(entries, args.uuid);
+      const now = new Date().toISOString();
+      const next: RecentsEntry = {
+        uuid: pointer.uuid,
+        path: picked,
+        cachedName: projectNameFromSimularcaPath(picked),
+        lastOpenedAtIso: previous?.lastOpenedAtIso ?? now,
+        lastSnapshotName: previous?.lastSnapshotName ?? null
+      };
+      await saveRecents(getRecentsFilePath(), updateRecentPath(entries, args.uuid, picked, next.cachedName));
+      return next;
+    }
+  );
+
+  ipcMain.handle("defaults:load", async (): Promise<DefaultProjectPointer | null> => {
+    return loadDefaultsFromUserData();
+  });
+
+  ipcMain.handle("defaults:save", async (_event, pointer: DefaultProjectPointer | null): Promise<void> => {
+    await saveDefaultsToUserData(pointer);
+  });
+
+  ipcMain.handle(
+    "dialog:select-simularca",
+    async (event, args: { title?: string } = {}): Promise<string | null> => {
+      const window = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+      const dialogOptions: OpenDialogOptions = {
+        title: args.title ?? "Open project",
+        properties: ["openFile"],
+        filters: [{ name: "Simularca Project", extensions: ["simularca"] }]
+      };
+      const result = window
+        ? await dialog.showOpenDialog(window, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
+      return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]!;
+    }
+  );
+
+  ipcMain.handle(
+    "dialog:select-folder",
+    async (event, args: { title?: string; defaultPath?: string } = {}): Promise<string | null> => {
+      const window = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+      const dialogOptions: OpenDialogOptions = {
+        title: args.title ?? "Select folder",
+        properties: ["openDirectory", "createDirectory"],
+        defaultPath: args.defaultPath ?? getDocumentsProjectsRoot()
+      };
+      const result = window
+        ? await dialog.showOpenDialog(window, dialogOptions)
+        : await dialog.showOpenDialog(dialogOptions);
+      return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0]!;
+    }
+  );
+
+  ipcMain.handle("paths:default-projects-root", async (): Promise<string> => getDocumentsProjectsRoot());
+
+  ipcMain.handle(
+    "project:create-new",
     async (
       _event,
-      args: {
-        previousName: string;
-        nextName: string;
+      args: { parentFolder?: string; projectName: string; initialSnapshotPayload: string }
+    ): Promise<ProjectIdentity> => {
+      const trimmedName = args.projectName.trim();
+      if (!trimmedName) {
+        throw new Error("Project name is required.");
       }
-    ) => {
-      if (args.previousName === args.nextName) {
-        return;
-      }
-      const fromDir = getProjectDirectory(args.previousName);
-      const toDir = getProjectDirectory(args.nextName);
-      await ensureProjectDirectory(args.previousName);
+      const parent = args.parentFolder?.trim() ? args.parentFolder : getDocumentsProjectsRoot();
+      await fs.mkdir(parent, { recursive: true });
+      const projectFolder = path.join(parent, trimmedName);
       try {
-        await fs.access(toDir);
-        throw new Error(`Project "${args.nextName}" already exists.`);
+        await fs.access(projectFolder);
+        throw new Error(`A project folder named "${trimmedName}" already exists at ${parent}.`);
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code && code !== "ENOENT") {
           throw error;
         }
       }
-      await fs.cp(fromDir, toDir, {
-        recursive: true,
-        errorOnExist: true,
-        force: false
-      });
+      await fs.mkdir(projectFolder, { recursive: true });
+      const simularcaPath = pointerFilePath(projectFolder, trimmedName);
+      const pointer = createPointer();
+      await writePointer(simularcaPath, pointer);
+      await ensureProjectFolderStructure(simularcaPath);
+      await fs.writeFile(snapshotFileForPath(simularcaPath, "main"), args.initialSnapshotPayload, "utf8");
+      const identity: ProjectIdentity = { uuid: pointer.uuid, path: simularcaPath, name: trimmedName };
+      rememberProjectFolder(identity);
+      return identity;
     }
   );
+
   ipcMain.handle(
-    "project:delete",
+    "project:open",
+    async (_event, args: { simularcaPath: string }): Promise<OpenProjectResult> => {
+      const pointer = await readPointer(args.simularcaPath);
+      let identity: ProjectIdentity = {
+        uuid: pointer.uuid,
+        path: args.simularcaPath,
+        name: projectNameFromSimularcaPath(args.simularcaPath)
+      };
+
+      // Collision detection: if another open project shares this uuid at a different
+      // path, the user must have duplicated the folder by hand. Re-issue a new uuid
+      // into the just-opened pointer so the two projects diverge.
+      const existingPath = openProjectFoldersByUuid.get(pointer.uuid);
+      if (existingPath && path.resolve(existingPath) !== path.resolve(projectFolderForPath(args.simularcaPath))) {
+        const fresh = createPointer();
+        await writePointer(args.simularcaPath, fresh);
+        identity = { ...identity, uuid: fresh.uuid };
+        void writeRuntimeLog(
+          "project:open",
+          "UUID collision detected; reissued new uuid",
+          { previousUuid: pointer.uuid, newUuid: fresh.uuid, path: args.simularcaPath },
+          "warn"
+        );
+      }
+
+      await ensureProjectFolderStructure(args.simularcaPath);
+      rememberProjectFolder(identity);
+
+      const snapshotsDir = snapshotsDirForPath(args.simularcaPath);
+      const entries = await fs.readdir(snapshotsDir, { withFileTypes: true }).catch(() => []);
+      const snapshotFiles = entries
+        .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".json"))
+        .map((entry) => ({
+          name: entry.name.replace(/\.json$/i, ""),
+          filePath: path.join(snapshotsDir, entry.name)
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      const snapshots = await Promise.all(
+        snapshotFiles.map(async (entry) => ({
+          name: entry.name,
+          updatedAtIso: await readSnapshotUpdatedAtIso(entry.filePath)
+        }))
+      );
+
+      const recents = await loadRecents(getRecentsFilePath());
+      const previousRecent = findRecentByUuid(recents, identity.uuid);
+      return {
+        identity,
+        snapshots: snapshots.length === 0 ? [{ name: "main", updatedAtIso: null }] : snapshots,
+        lastSnapshotName: previousRecent?.lastSnapshotName ?? null
+      };
+    }
+  );
+
+  ipcMain.handle(
+    "project:save-snapshot",
     async (
       _event,
-      args: {
-        projectName: string;
-      }
-    ) => {
-      await fs.rm(getProjectDirectory(args.projectName), {
-        recursive: true,
-        force: true
-      });
+      args: { projectPath: string; snapshotName: string; payload: string }
+    ): Promise<void> => {
+      await ensureProjectFolderStructure(args.projectPath);
+      await fs.writeFile(snapshotFileForPath(args.projectPath, args.snapshotName), args.payload, "utf8");
     }
   );
+
+  ipcMain.handle(
+    "snapshot:load",
+    async (_event, args: { projectPath: string; snapshotName: string }): Promise<string> => {
+      await ensureProjectFolderStructure(args.projectPath);
+      const file = snapshotFileForPath(args.projectPath, args.snapshotName);
+      try {
+        await fs.access(file);
+        return await fs.readFile(file, "utf8");
+      } catch {
+        await fs.writeFile(file, "{}", "utf8");
+        return "{}";
+      }
+    }
+  );
+
+  ipcMain.handle(
+    "snapshots:list",
+    async (_event, args: { projectPath: string }): Promise<ProjectSnapshotListEntry[]> => {
+      await ensureProjectFolderStructure(args.projectPath);
+      const dir = snapshotsDirForPath(args.projectPath);
+      const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+      const snapshotFiles = entries
+        .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".json"))
+        .map((entry) => ({
+          name: entry.name.replace(/\.json$/i, ""),
+          filePath: path.join(dir, entry.name)
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      const snapshots = await Promise.all(
+        snapshotFiles.map(async (entry) => ({
+          name: entry.name,
+          updatedAtIso: await readSnapshotUpdatedAtIso(entry.filePath)
+        }))
+      );
+      if (snapshots.length === 0) {
+        return [{ name: "main", updatedAtIso: null }];
+      }
+      return snapshots;
+    }
+  );
+
+  ipcMain.handle(
+    "snapshot:duplicate",
+    async (
+      _event,
+      args: { projectPath: string; previousName: string; nextName: string }
+    ): Promise<void> => {
+      await ensureProjectFolderStructure(args.projectPath);
+      await fs.copyFile(
+        snapshotFileForPath(args.projectPath, args.previousName),
+        snapshotFileForPath(args.projectPath, args.nextName)
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "snapshot:rename",
+    async (
+      _event,
+      args: { projectPath: string; previousName: string; nextName: string }
+    ): Promise<void> => {
+      await ensureProjectFolderStructure(args.projectPath);
+      await fs.rename(
+        snapshotFileForPath(args.projectPath, args.previousName),
+        snapshotFileForPath(args.projectPath, args.nextName)
+      );
+    }
+  );
+
+  ipcMain.handle(
+    "snapshot:delete",
+    async (_event, args: { projectPath: string; snapshotName: string }): Promise<void> => {
+      await ensureProjectFolderStructure(args.projectPath);
+      await fs.rm(snapshotFileForPath(args.projectPath, args.snapshotName), { force: true });
+    }
+  );
+
+  ipcMain.handle(
+    "project:save-as",
+    async (
+      _event,
+      args: { currentPath: string; newParentFolder: string; newProjectName: string }
+    ): Promise<ProjectIdentity> => {
+      const trimmed = args.newProjectName.trim();
+      if (!trimmed) {
+        throw new Error("Project name is required.");
+      }
+      const sourceFolder = projectFolderForPath(args.currentPath);
+      const destFolder = path.join(args.newParentFolder, trimmed);
+      try {
+        await fs.access(destFolder);
+        throw new Error(`A project folder named "${trimmed}" already exists at ${args.newParentFolder}.`);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code && code !== "ENOENT") {
+          throw error;
+        }
+      }
+      await fs.mkdir(args.newParentFolder, { recursive: true });
+      try {
+        await copyDirectoryRecursive(sourceFolder, destFolder);
+      } catch (error) {
+        await fs.rm(destFolder, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+      }
+      // Verify file count parity before swapping in the new pointer.
+      const srcCount = await readFolderEntryCount(sourceFolder);
+      const dstCount = await readFolderEntryCount(destFolder);
+      if (srcCount !== dstCount) {
+        await fs.rm(destFolder, { recursive: true, force: true }).catch(() => undefined);
+        throw new Error(
+          `Save As verification failed: source had ${srcCount} files but destination has ${dstCount}.`
+        );
+      }
+      // Drop any pointer files copied from the source and write a fresh one.
+      const copiedPointers = await discoverAllSimularcaFiles(destFolder);
+      for (const p of copiedPointers) {
+        await fs.rm(p, { force: true });
+      }
+      const newPointerPath = pointerFilePath(destFolder, trimmed);
+      const fresh = createPointer();
+      await writePointer(newPointerPath, fresh);
+      const identity: ProjectIdentity = { uuid: fresh.uuid, path: newPointerPath, name: trimmed };
+      rememberProjectFolder(identity);
+      return identity;
+    }
+  );
+
+  ipcMain.handle(
+    "project:move",
+    async (_event, args: { currentPath: string; newParentFolder: string }): Promise<ProjectIdentity> => {
+      const pointer = await readPointer(args.currentPath);
+      const sourceFolder = projectFolderForPath(args.currentPath);
+      const folderName = path.basename(sourceFolder);
+      const destFolder = path.join(args.newParentFolder, folderName);
+      if (path.resolve(sourceFolder) === path.resolve(destFolder)) {
+        return {
+          uuid: pointer.uuid,
+          path: args.currentPath,
+          name: projectNameFromSimularcaPath(args.currentPath)
+        };
+      }
+      try {
+        await fs.access(destFolder);
+        throw new Error(`A folder named "${folderName}" already exists at ${args.newParentFolder}.`);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code && code !== "ENOENT") {
+          throw error;
+        }
+      }
+      await fs.mkdir(args.newParentFolder, { recursive: true });
+      try {
+        await copyDirectoryRecursive(sourceFolder, destFolder);
+      } catch (error) {
+        await fs.rm(destFolder, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+      }
+      const srcCount = await readFolderEntryCount(sourceFolder);
+      const dstCount = await readFolderEntryCount(destFolder);
+      if (srcCount !== dstCount) {
+        await fs.rm(destFolder, { recursive: true, force: true }).catch(() => undefined);
+        throw new Error(
+          `Move verification failed: source had ${srcCount} files but destination has ${dstCount}.`
+        );
+      }
+      // Source verified copied; remove original.
+      try {
+        await fs.rm(sourceFolder, { recursive: true, force: true });
+      } catch (error) {
+        void writeRuntimeLog(
+          "project:move",
+          "Failed to remove source folder after move; destination is intact",
+          { sourceFolder, destFolder, error },
+          "warn"
+        );
+      }
+      const newPath = path.join(destFolder, path.basename(args.currentPath));
+      const identity: ProjectIdentity = {
+        uuid: pointer.uuid,
+        path: newPath,
+        name: projectNameFromSimularcaPath(newPath)
+      };
+      forgetProjectFolder(pointer.uuid);
+      rememberProjectFolder(identity);
+      return identity;
+    }
+  );
+
   ipcMain.handle(
     "project:rename",
-    async (
-      _event,
-      args: {
-        previousName: string;
-        nextName: string;
+    async (_event, args: { currentPath: string; newProjectName: string }): Promise<ProjectIdentity> => {
+      const trimmed = args.newProjectName.trim();
+      if (!trimmed) {
+        throw new Error("Project name is required.");
       }
-    ) => {
-      const fromDir = getProjectDirectory(args.previousName);
-      const toDir = getProjectDirectory(args.nextName);
-      if (args.previousName === args.nextName) {
-        return;
+      const pointer = await readPointer(args.currentPath);
+      const sourceFolder = projectFolderForPath(args.currentPath);
+      const parent = path.dirname(sourceFolder);
+      const oldName = path.basename(args.currentPath, SIMULARCA_EXTENSION);
+      if (oldName === trimmed) {
+        return {
+          uuid: pointer.uuid,
+          path: args.currentPath,
+          name: oldName
+        };
       }
+      const newPointerPath = pointerFilePath(sourceFolder, trimmed);
       try {
-        await fs.access(toDir);
-        throw new Error(`Project "${args.nextName}" already exists.`);
+        await fs.access(newPointerPath);
+        throw new Error(`A file named "${trimmed}${SIMULARCA_EXTENSION}" already exists in this folder.`);
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
         if (code && code !== "ENOENT") {
           throw error;
         }
       }
-      try {
-        await fs.rename(fromDir, toDir);
-      } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code !== "EPERM" && code !== "EACCES") {
-          throw error;
-        }
-        // Windows can lock active files (e.g. currently loaded assets). Fallback to copy + best-effort cleanup.
-        await fs.cp(fromDir, toDir, {
-          recursive: true,
-          errorOnExist: true,
-          force: false
-        });
+      // Rename the pointer file.
+      await fs.rename(args.currentPath, newPointerPath);
+
+      // Rename the containing folder when its basename matches the old project name.
+      let finalFolder = sourceFolder;
+      if (path.basename(sourceFolder) === oldName) {
+        const newFolder = path.join(parent, trimmed);
+        const sameCaseInsensitive =
+          sourceFolder !== newFolder && sourceFolder.toLowerCase() === newFolder.toLowerCase();
         try {
-          await fs.rm(fromDir, {
-            recursive: true,
-            force: true
-          });
-        } catch (cleanupError) {
-          void writeRuntimeLog("project:rename", "Unable to remove old project directory after fallback copy", {
-            previousName: args.previousName,
-            nextName: args.nextName,
-            cleanupError
-          }, "warn");
-        }
-      }
-      const defaultsPath = path.join(getSaveDataRoot(), DEFAULTS_FILE_NAME);
-      try {
-        const raw = await fs.readFile(defaultsPath, "utf8");
-        const current = JSON.parse(raw) as DefaultProjectPointer;
-        if (current.defaultProjectName === args.previousName) {
-          await fs.writeFile(
-            defaultsPath,
-            JSON.stringify({ ...current, defaultProjectName: args.nextName } satisfies DefaultProjectPointer, null, 2),
-            "utf8"
+          if (sameCaseInsensitive) {
+            // Two-step rename for case-only changes on case-insensitive filesystems.
+            const tempFolder = path.join(parent, `${oldName}.__rename__${Date.now()}`);
+            await fs.rename(sourceFolder, tempFolder);
+            await fs.rename(tempFolder, newFolder);
+          } else {
+            await fs.rename(sourceFolder, newFolder);
+          }
+          finalFolder = newFolder;
+        } catch (error) {
+          void writeRuntimeLog(
+            "project:rename",
+            "Pointer renamed but folder rename failed; project still works",
+            { sourceFolder, newFolder, error },
+            "warn"
           );
         }
+      }
+
+      const finalPointerPath = pointerFilePath(finalFolder, trimmed);
+      const identity: ProjectIdentity = { uuid: pointer.uuid, path: finalPointerPath, name: trimmed };
+      forgetProjectFolder(pointer.uuid);
+      rememberProjectFolder(identity);
+      return identity;
+    }
+  );
+
+  ipcMain.handle(
+    "project:delete",
+    async (_event, args: { projectPath: string }): Promise<void> => {
+      let uuid: string | null = null;
+      try {
+        const pointer = await readPointer(args.projectPath);
+        uuid = pointer.uuid;
       } catch {
-        // defaults file may be absent; ignore.
+        // Pointer might be corrupt; still attempt folder removal.
+      }
+      const folder = projectFolderForPath(args.projectPath);
+      await fs.rm(folder, { recursive: true, force: true });
+      if (uuid) {
+        forgetProjectFolder(uuid);
+        const recents = await loadRecents(getRecentsFilePath());
+        await saveRecents(getRecentsFilePath(), removeRecentByUuid(recents, uuid));
+        const defaults = await loadDefaultsFromUserData();
+        if (defaults && defaults.uuid === uuid) {
+          await saveDefaultsToUserData(null);
+        }
       }
     }
   );
-  ipcMain.handle("snapshot:duplicate", async (_event, args: { projectName: string; previousName: string; nextName: string }) => {
-    await ensureProjectDirectory(args.projectName);
-    const fromFile = getSnapshotFile(args.projectName, args.previousName);
-    const toFile = getSnapshotFile(args.projectName, args.nextName);
-    await fs.copyFile(fromFile, toFile);
-  });
-  ipcMain.handle("snapshot:rename", async (_event, args: { projectName: string; previousName: string; nextName: string }) => {
-    await ensureProjectDirectory(args.projectName);
-    const fromFile = getSnapshotFile(args.projectName, args.previousName);
-    const toFile = getSnapshotFile(args.projectName, args.nextName);
-    await fs.rename(fromFile, toFile);
-    if (args.previousName === "main") {
-      try {
-        await fs.rm(getLegacyProjectFile(args.projectName), { force: true });
-      } catch {
-        // Ignore missing legacy mirror.
-      }
+
+  ipcMain.handle(
+    "project:repair-pointer",
+    async (_event, args: { folderPath: string }): Promise<ProjectIdentity> => {
+      const identity = await repairPointer(args.folderPath);
+      rememberProjectFolder(identity);
+      return identity;
     }
-  });
-  ipcMain.handle("snapshot:delete", async (_event, args: { projectName: string; snapshotName: string }) => {
-    await ensureProjectDirectory(args.projectName);
-    await fs.rm(getSnapshotFile(args.projectName, args.snapshotName), { force: true });
-    if (args.snapshotName === "main") {
-      await fs.rm(getLegacyProjectFile(args.projectName), { force: true });
-    }
-  });
+  );
 
   ipcMain.handle(
     "asset:import",
     async (
       _event,
       args: {
-        projectName: string;
+        projectPath: string;
         sourcePath: string;
         kind: ProjectAssetRef["kind"];
       }
     ) => {
-      await ensureProjectDirectory(args.projectName);
+      await ensureProjectFolderStructure(args.projectPath);
       const sourceFileName = path.basename(args.sourcePath);
       const extension = path.extname(sourceFileName);
       const targetName = `${Date.now()}-${randomUUID()}${extension}`;
-      const assetDirectory = getAssetDirectory(args.projectName, args.kind);
+      const assetDirectory = assetsDirForPath(args.projectPath, args.kind);
       await fs.mkdir(assetDirectory, { recursive: true });
       const targetPath = path.join(assetDirectory, targetName);
       await fs.copyFile(args.sourcePath, targetPath);
       const stat = await fs.stat(targetPath);
-      const relativePath = path.relative(getProjectDirectory(args.projectName), targetPath).replaceAll("\\", "/");
+      const relativePath = path.relative(projectFolderForPath(args.projectPath), targetPath).replaceAll("\\", "/");
 
       const assetRef: ProjectAssetRef = {
         id: randomUUID(),
@@ -1842,28 +2260,28 @@ function registerIpcHandlers(): void {
     async (
       _event,
       args: {
-        projectName: string;
+        projectPath: string;
         sourcePath: string;
       }
     ): Promise<DaeImportResult> => {
-      await ensureProjectDirectory(args.projectName);
+      await ensureProjectFolderStructure(args.projectPath);
 
       // 1. Read the .dae source (needed for both XML patching and image extraction)
       const sourceFileName = path.basename(args.sourcePath);
       const extension = path.extname(sourceFileName);
       const daeTargetName = `${Date.now()}-${randomUUID()}${extension}`;
-      const genericDir = getAssetDirectory(args.projectName, "generic");
+      const genericDir = assetsDirForPath(args.projectPath, "generic");
       await fs.mkdir(genericDir, { recursive: true });
       const daeTargetPath = path.join(genericDir, daeTargetName);
       // Read source text first; we will patch and write it rather than copying
       const daeSourceText = await fs.readFile(args.sourcePath, "utf8");
-      const daeRelPath = path.relative(getProjectDirectory(args.projectName), daeTargetPath).replaceAll("\\", "/");
+      const daeRelPath = path.relative(projectFolderForPath(args.projectPath), daeTargetPath).replaceAll("\\", "/");
       // daeAsset is built after patching and writing so byteSize reflects the written file
 
       // 2. Parse DAE XML for texture references and material definitions
       const daeText = daeSourceText;
       const sourceDir = path.dirname(args.sourcePath);
-      const imageDir = getAssetDirectory(args.projectName, "image");
+      const imageDir = assetsDirForPath(args.projectPath, "image");
       await fs.mkdir(imageDir, { recursive: true });
 
       // Extract image paths from <init_from> elements
@@ -1885,7 +2303,7 @@ function registerIpcHandlers(): void {
           const imgTargetPath = path.join(imageDir, imgTargetName);
           await fs.copyFile(imgPath, imgTargetPath);
           const imgStat = await fs.stat(imgTargetPath);
-          const imgRelPath = path.relative(getProjectDirectory(args.projectName), imgTargetPath).replaceAll("\\", "/");
+          const imgRelPath = path.relative(projectFolderForPath(args.projectPath), imgTargetPath).replaceAll("\\", "/");
           const imgAsset: ProjectAssetRef = {
             id: randomUUID(),
             kind: "image",
@@ -2045,13 +2463,13 @@ function registerIpcHandlers(): void {
     async (
       _event,
       args: {
-        projectName: string;
+        projectPath: string;
         sourcePath: string;
         options?: HdriTranscodeOptions;
       }
     ) => {
-      await ensureProjectDirectory(args.projectName);
-      const assetDirectory = getAssetDirectory(args.projectName, "hdri");
+      await ensureProjectFolderStructure(args.projectPath);
+      const assetDirectory = assetsDirForPath(args.projectPath, "hdri");
       await fs.mkdir(assetDirectory, { recursive: true });
       const targetName = `${Date.now()}-${randomUUID()}.ktx2`;
       const targetPath = path.join(assetDirectory, targetName);
@@ -2061,7 +2479,7 @@ function registerIpcHandlers(): void {
         options: args.options
       });
       const stat = await fs.stat(targetPath);
-      const relativePath = path.relative(getProjectDirectory(args.projectName), targetPath).replaceAll("\\", "/");
+      const relativePath = path.relative(projectFolderForPath(args.projectPath), targetPath).replaceAll("\\", "/");
       const sourceFileName = path.basename(args.sourcePath);
       const assetRef: ProjectAssetRef = {
         id: randomUUID(),
@@ -2080,11 +2498,11 @@ function registerIpcHandlers(): void {
     async (
       _event,
       args: {
-        projectName: string;
+        projectPath: string;
         relativePath: string;
       }
     ) => {
-      const absolute = path.resolve(getProjectDirectory(args.projectName), args.relativePath);
+      const absolute = path.resolve(projectFolderForPath(args.projectPath), args.relativePath);
       await fs.rm(absolute, { force: true });
     }
   );
@@ -2094,17 +2512,17 @@ function registerIpcHandlers(): void {
     async (
       _event,
       args: {
-        projectName: string;
+        projectUuid: string;
         relativePath: string;
       }
     ) => {
-      const encodedSession = encodeURIComponent(args.projectName);
+      const encodedUuid = encodeURIComponent(args.projectUuid);
       const encodedPath = args.relativePath
         .split("/")
         .filter((part) => part.length > 0)
         .map((part) => encodeURIComponent(part))
         .join("/");
-      return `${ASSET_PROTOCOL}://${encodedSession}/${encodedPath}`;
+      return `${ASSET_PROTOCOL}://${encodedUuid}/${encodedPath}`;
     }
   );
 
@@ -2113,17 +2531,186 @@ function registerIpcHandlers(): void {
     async (
       _event,
       args: {
-        projectName: string;
+        projectPath: string;
         relativePath: string;
       }
     ) => {
-      const projectRoot = path.resolve(getProjectDirectory(args.projectName));
+      const projectRoot = path.resolve(projectFolderForPath(args.projectPath));
       const absolutePath = path.resolve(projectRoot, args.relativePath);
       if (!absolutePath.startsWith(projectRoot)) {
         throw new Error("Invalid asset path");
       }
       const bytes = await fs.readFile(absolutePath);
       return Uint8Array.from(bytes);
+    }
+  );
+
+  // Migration handlers (legacy savedata → user-chosen project locations).
+  ipcMain.handle(
+    "migration:detect-legacy",
+    async (): Promise<LegacyProjectInfo[]> => {
+      const root = getLegacySaveDataRoot();
+      let entries;
+      try {
+        entries = await fs.readdir(root, { withFileTypes: true });
+      } catch {
+        return [];
+      }
+      const projects: LegacyProjectInfo[] = [];
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const folder = path.join(root, entry.name);
+        // Skip if the folder has already been migrated (has a .simularca pointer).
+        const existing = await discoverSimularcaFile(folder);
+        if (existing) continue;
+        const snapshotsDir = path.join(folder, SNAPSHOTS_DIR);
+        let snapshotCount = 0;
+        try {
+          const snapEntries = await fs.readdir(snapshotsDir, { withFileTypes: true });
+          snapshotCount = snapEntries.filter(
+            (e) => e.isFile() && e.name.toLowerCase().endsWith(".json")
+          ).length;
+        } catch {
+          // No snapshots dir; check for legacy session.json.
+          try {
+            await fs.access(path.join(folder, "session.json"));
+            snapshotCount = 1;
+          } catch {
+            // No project content; skip.
+            continue;
+          }
+        }
+        const totalBytes = await readFolderTotalBytes(folder);
+        projects.push({ legacyName: entry.name, snapshotCount, totalBytes });
+      }
+      return projects.sort((a, b) => a.legacyName.localeCompare(b.legacyName));
+    }
+  );
+
+  ipcMain.handle(
+    "migration:run",
+    async (
+      _event,
+      args: { legacyName: string; targetParentFolder: string }
+    ): Promise<ProjectIdentity> => {
+      const sourceFolder = getLegacyProjectDirectory(args.legacyName);
+      const trimmedName = args.legacyName.trim();
+      await fs.mkdir(args.targetParentFolder, { recursive: true });
+      const destFolder = path.join(args.targetParentFolder, trimmedName);
+      try {
+        await fs.access(destFolder);
+        throw new Error(
+          `A folder named "${trimmedName}" already exists at ${args.targetParentFolder}.`
+        );
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code && code !== "ENOENT") {
+          throw error;
+        }
+      }
+      try {
+        await copyDirectoryRecursive(sourceFolder, destFolder);
+      } catch (error) {
+        await fs.rm(destFolder, { recursive: true, force: true }).catch(() => undefined);
+        throw error;
+      }
+      const srcCount = await readFolderEntryCount(sourceFolder);
+      const dstCount = await readFolderEntryCount(destFolder);
+      if (srcCount !== dstCount) {
+        await fs.rm(destFolder, { recursive: true, force: true }).catch(() => undefined);
+        throw new Error(
+          `Migration verification failed: source had ${srcCount} files but destination has ${dstCount}.`
+        );
+      }
+      // Migrate legacy session.json → snapshots/main.json if needed.
+      const legacySession = path.join(destFolder, "session.json");
+      const snapshotsDir = path.join(destFolder, SNAPSHOTS_DIR);
+      await fs.mkdir(snapshotsDir, { recursive: true });
+      try {
+        await fs.access(legacySession);
+        const mainSnapshot = path.join(snapshotsDir, "main.json");
+        try {
+          await fs.access(mainSnapshot);
+          // main.json already exists; legacy session.json is redundant.
+        } catch {
+          await fs.copyFile(legacySession, mainSnapshot);
+        }
+        await fs.rm(legacySession, { force: true });
+      } catch {
+        // No legacy session.json.
+      }
+      const pointerPath = pointerFilePath(destFolder, trimmedName);
+      const pointer = createPointer();
+      await writePointer(pointerPath, pointer);
+      // Verified copy + pointer written; remove original.
+      await fs.rm(sourceFolder, { recursive: true, force: true }).catch((error) => {
+        void writeRuntimeLog(
+          "migration:run",
+          "Failed to remove source folder after successful migration",
+          { sourceFolder, error },
+          "warn"
+        );
+      });
+      const identity: ProjectIdentity = {
+        uuid: pointer.uuid,
+        path: pointerPath,
+        name: trimmedName
+      };
+      rememberProjectFolder(identity);
+      return identity;
+    }
+  );
+
+  ipcMain.handle(
+    "migration:write-readme",
+    async (
+      _event,
+      args: { failedProjectNames: string[]; skippedProjectNames: string[] }
+    ): Promise<void> => {
+      const root = getLegacySaveDataRoot();
+      try {
+        await fs.access(root);
+      } catch {
+        return;
+      }
+      const lines: string[] = [
+        "Simularca — your project storage has moved",
+        "",
+        "Projects are no longer stored under this folder. Pick any location you like",
+        "(including cloud-synced folders) and use \"Open Project…\" or \"New Project…\"",
+        "from the app's title bar to get started.",
+        "",
+        "App-internal state now lives in:",
+        "  Windows:  %APPDATA%/Simularca/",
+        "  macOS:    ~/Library/Application Support/Simularca/",
+        "  Linux:    ~/.config/Simularca/",
+        ""
+      ];
+      if (args.failedProjectNames.length > 0) {
+        lines.push("Projects that failed to migrate (still in this folder):");
+        for (const name of args.failedProjectNames) {
+          lines.push(`  - ${name}`);
+        }
+        lines.push("");
+      }
+      if (args.skippedProjectNames.length > 0) {
+        lines.push("Projects you skipped during migration (still in this folder):");
+        for (const name of args.skippedProjectNames) {
+          lines.push(`  - ${name}`);
+        }
+        lines.push("");
+      }
+      lines.push("You can re-run the migration any time by relaunching Simularca.");
+      lines.push("");
+      await fs.writeFile(path.join(root, "README.txt"), lines.join("\n"), "utf8");
+    }
+  );
+
+  ipcMain.handle(
+    "migration:delete-legacy",
+    async (_event, args: { legacyName: string }): Promise<void> => {
+      const folder = getLegacyProjectDirectory(args.legacyName);
+      await fs.rm(folder, { recursive: true, force: true });
     }
   );
 }
@@ -2152,8 +2739,10 @@ void app.whenReady().then(async () => {
 
   void writeRuntimeLog("app", "App starting", {
     isDev: IS_DEV,
-    devServerUrl: DEV_SERVER_URL ?? null
+    devServerUrl: DEV_SERVER_URL ?? null,
+    userDataRoot: getUserDataRoot()
   });
+  migrateLegacyWindowState();
   const pushRotoState = (state: RotoControlState) => {
     for (const window of BrowserWindow.getAllWindows()) {
       window.webContents.send("roto-control:state", state);
@@ -2171,7 +2760,6 @@ void app.whenReady().then(async () => {
       void writeRuntimeLog("roto", message, metadata);
     }
   });
-  await ensureDefaultsFile();
   await registerAssetProtocol();
   registerIpcHandlers();
   liveDebugServerController = await startLiveDebugServer({

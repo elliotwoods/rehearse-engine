@@ -1582,8 +1582,11 @@ export class SceneController {
       });
       return null;
     }
+    if (!state.activeProject) {
+      return null;
+    }
     const url = await this.kernel.storage.resolveAssetPath({
-      projectName: state.activeProjectName,
+      projectUuid: state.activeProject.uuid,
       relativePath: asset.relativePath
     });
     const extension = asset.relativePath.split(".").pop()?.toLowerCase();
@@ -2132,8 +2135,8 @@ export class SceneController {
     return canvas.toDataURL("image/png");
   }
 
-  private buildAssetUrl(projectName: string, relativePath: string): string {
-    return `simularca-asset://${encodeURIComponent(projectName)}/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
+  private buildAssetUrl(projectUuid: string, relativePath: string): string {
+    return `simularca-asset://${encodeURIComponent(projectUuid)}/${relativePath.split("/").map(encodeURIComponent).join("/")}`;
   }
 
   private loadCachedTexture(url: string, colorSpace: THREE.ColorSpace = THREE.LinearSRGBColorSpace): THREE.Texture {
@@ -2171,7 +2174,7 @@ export class SceneController {
     } else if (mat.albedo.mode === "image") {
       const asset = state.assets.find((a) => a.id === (mat.albedo as any).assetId && a.kind === "image");
       if (asset) {
-        material.map = this.loadCachedTexture(this.buildAssetUrl(state.activeProjectName, asset.relativePath), THREE.SRGBColorSpace);
+        material.map = this.loadCachedTexture(this.buildAssetUrl(state.activeProject?.uuid ?? "", asset.relativePath), THREE.SRGBColorSpace);
         material.color.set(0xffffff);
       }
     }
@@ -2183,7 +2186,7 @@ export class SceneController {
     } else if (mat.roughness.mode === "image") {
       const asset = state.assets.find((a) => a.id === (mat.roughness as any).assetId && a.kind === "image");
       if (asset) {
-        material.roughnessMap = this.loadCachedTexture(this.buildAssetUrl(state.activeProjectName, asset.relativePath));
+        material.roughnessMap = this.loadCachedTexture(this.buildAssetUrl(state.activeProject?.uuid ?? "", asset.relativePath));
         material.roughness = 1;
       }
     }
@@ -2195,7 +2198,7 @@ export class SceneController {
     } else if (mat.metalness.mode === "image") {
       const asset = state.assets.find((a) => a.id === (mat.metalness as any).assetId && a.kind === "image");
       if (asset) {
-        material.metalnessMap = this.loadCachedTexture(this.buildAssetUrl(state.activeProjectName, asset.relativePath));
+        material.metalnessMap = this.loadCachedTexture(this.buildAssetUrl(state.activeProject?.uuid ?? "", asset.relativePath));
         material.metalness = 1;
       }
     }
@@ -2204,7 +2207,7 @@ export class SceneController {
     if (mat.normalMap) {
       const asset = state.assets.find((a) => a.id === (mat.normalMap as any).assetId && a.kind === "image");
       if (asset) {
-        material.normalMap = this.loadCachedTexture(this.buildAssetUrl(state.activeProjectName, asset.relativePath));
+        material.normalMap = this.loadCachedTexture(this.buildAssetUrl(state.activeProject?.uuid ?? "", asset.relativePath));
         material.normalMapType = THREE.TangentSpaceNormalMap;
       }
     } else {
@@ -2218,7 +2221,7 @@ export class SceneController {
     } else if (mat.emissive.mode === "image") {
       const asset = state.assets.find((a) => a.id === (mat.emissive as any).assetId && a.kind === "image");
       if (asset) {
-        material.emissiveMap = this.loadCachedTexture(this.buildAssetUrl(state.activeProjectName, asset.relativePath), THREE.SRGBColorSpace);
+        material.emissiveMap = this.loadCachedTexture(this.buildAssetUrl(state.activeProject?.uuid ?? "", asset.relativePath), THREE.SRGBColorSpace);
       }
     }
     material.emissiveIntensity = mat.emissiveIntensity;
@@ -2727,7 +2730,7 @@ export class SceneController {
 
     try {
       const bytes = await this.kernel.storage.readAssetBytes({
-        projectName: state.activeProjectName,
+        projectPath: state.activeProject?.path ?? "",
         relativePath: asset.relativePath
       });
       const text = new TextDecoder("utf-8").decode(bytes);
@@ -2953,7 +2956,7 @@ export class SceneController {
     });
     try {
       const rawBytes = await this.kernel.storage.readAssetBytes({
-        projectName: state.activeProjectName,
+        projectPath: state.activeProject?.path ?? "",
         relativePath: asset.relativePath
       });
       const parsed = tryParseSplatBinary(rawBytes);
@@ -3154,7 +3157,7 @@ export class SceneController {
 
     const extension = asset.relativePath.split(".").pop()?.toLowerCase() ?? "";
     // Build the asset URL locally Ã¢â‚¬â€ no IPC round-trip needed.
-    const encodedProject = encodeURIComponent(state.activeProjectName);
+    const encodedProject = encodeURIComponent(state.activeProject?.uuid ?? "");
     const encodedPath = asset.relativePath
       .split("/")
       .filter((part) => part.length > 0)
@@ -3681,7 +3684,7 @@ export class SceneController {
               return Promise.reject(new Error(`Asset not found: ${assetId}`));
             }
             return this.kernel.storage.readAssetBytes({
-              projectName: state.activeProjectName,
+              projectPath: state.activeProject?.path ?? "",
               relativePath: asset.relativePath
             });
           }

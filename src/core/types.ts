@@ -1,6 +1,7 @@
-import type { AppMode, HdriTranscodeOptions, ProjectAssetRef } from "@/types/ipc";
+import type { AppMode, HdriTranscodeOptions, ProjectAssetRef, ProjectIdentity } from "@/types/ipc";
 
-export const PROJECT_SCHEMA_VERSION = 6;
+export const PROJECT_SCHEMA_VERSION = 7;
+export { POINTER_SCHEMA_VERSION, SIMULARCA_EXTENSION, DEFAULT_PROJECTS_FOLDER_NAME } from "@/types/ipc";
 
 export type SceneNodeKind = "scene" | "actor" | "component";
 export type RenderEngine = "webgl2" | "webgpu";
@@ -344,6 +345,7 @@ export interface ProjectSnapshotManifest {
   lastPerspectiveCamera: CameraState | null;
   time: TimeState;
   pluginViews: Record<string, PluginViewState>;
+  pluginsEnabled: Record<string, boolean>;
   materials: Record<string, Material>;
   assets: ProjectAssetRef[];
 }
@@ -445,7 +447,7 @@ export type ConsoleEntry = ConsoleLogEntry | ConsoleCommandEntry;
 
 export interface AppState {
   mode: AppMode;
-  activeProjectName: string;
+  activeProject: ProjectIdentity | null;
   activeSnapshotName: string;
   scene: SceneState;
   actors: Record<string, ActorNode>;
@@ -455,6 +457,7 @@ export interface AppState {
   time: TimeState;
   pluginViews: Record<string, PluginViewState>;
   focusedPluginViewId: string | null;
+  pluginsEnabled: Record<string, boolean>;
   materials: Record<string, Material>;
   assets: ProjectAssetRef[];
   selection: SelectionEntry[];

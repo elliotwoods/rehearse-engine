@@ -1,6 +1,46 @@
 export type AppMode = "electron-rw" | "web-ro";
 
+export const POINTER_SCHEMA_VERSION = 1;
+export const SIMULARCA_EXTENSION = ".simularca";
+export const DEFAULT_PROJECTS_FOLDER_NAME = "Simularca Projects";
+
+/**
+ * On-disk pointer file content (`<ProjectName>.simularca`).
+ * Source of truth for the project's stable UUID.
+ */
+export interface ProjectPointer {
+  uuid: string;
+  pointerSchemaVersion: 1;
+  format: "folder";
+}
+
+/**
+ * In-memory identity of an opened project.
+ * `name` is derived from the `.simularca` filename; `path` is the absolute
+ * path to that file; `uuid` is read from the pointer's contents.
+ */
+export interface ProjectIdentity {
+  uuid: string;
+  path: string;
+  name: string;
+}
+
+export interface RecentsEntry {
+  uuid: string;
+  path: string;
+  cachedName: string;
+  lastOpenedAtIso: string;
+  lastSnapshotName: string | null;
+}
+
 export interface DefaultProjectPointer {
+  uuid: string;
+  path: string;
+  lastSnapshotName: string | null;
+}
+
+/** Pre-redesign defaults shape, kept for migration only. */
+export interface LegacyDefaultProjectPointer {
   defaultProjectName: string;
   defaultSnapshotName: string;
 }
@@ -8,6 +48,18 @@ export interface DefaultProjectPointer {
 export interface ProjectSnapshotListEntry {
   name: string;
   updatedAtIso: string | null;
+}
+
+export interface LegacyProjectInfo {
+  legacyName: string;
+  snapshotCount: number;
+  totalBytes: number;
+}
+
+export interface OpenProjectResult {
+  identity: ProjectIdentity;
+  snapshots: ProjectSnapshotListEntry[];
+  lastSnapshotName: string | null;
 }
 
 export interface ProjectAssetRef {
@@ -256,32 +308,57 @@ export type RotoControlInputEvent =
 export interface ElectronApi {
   mode: AppMode;
   getPathForFile(file: File): string | null;
-  listProjects(): Promise<string[]>;
-  listSnapshots(projectName: string): Promise<ProjectSnapshotListEntry[]>;
-  loadDefaults(): Promise<DefaultProjectPointer>;
-  saveDefaults(pointer: DefaultProjectPointer): Promise<void>;
-  loadProjectSnapshot(args: { projectName: string; snapshotName: string }): Promise<string>;
-  saveProjectSnapshot(args: { projectName: string; snapshotName: string; payload: string }): Promise<void>;
-  cloneProject(args: { previousName: string; nextName: string }): Promise<void>;
-  deleteProject(args: { projectName: string }): Promise<void>;
-  renameProject(args: { previousName: string; nextName: string }): Promise<void>;
-  duplicateSnapshot(args: { projectName: string; previousName: string; nextName: string }): Promise<void>;
-  renameSnapshot(args: { projectName: string; previousName: string; nextName: string }): Promise<void>;
-  deleteSnapshot(args: { projectName: string; snapshotName: string }): Promise<void>;
-  importAsset(args: {
+  loadRecents(): Promise<RecentsEntry[]>;
+  saveRecents(entries: RecentsEntry[]): Promise<void>;
+  removeRecent(args: { uuid: string }): Promise<void>;
+  locateRecent(args: { uuid: string; title?: string }): Promise<RecentsEntry | null>;
+  loadDefaults(): Promise<DefaultProjectPointer | null>;
+  saveDefaults(pointer: DefaultProjectPointer | null): Promise<void>;
+  selectSimularcaFile(args?: { title?: string }): Promise<string | null>;
+  selectFolder(args?: { title?: string; defaultPath?: string }): Promise<string | null>;
+  getDefaultProjectsRoot(): Promise<string>;
+  createNewProject(args: {
+    parentFolder?: string;
     projectName: string;
+    initialSnapshotPayload: string;
+  }): Promise<ProjectIdentity>;
+  openProject(args: { simularcaPath: string }): Promise<OpenProjectResult>;
+  saveProjectSnapshot(args: { projectPath: string; snapshotName: string; payload: string }): Promise<void>;
+  loadSnapshot(args: { projectPath: string; snapshotName: string }): Promise<string>;
+  listSnapshots(args: { projectPath: string }): Promise<ProjectSnapshotListEntry[]>;
+  saveProjectAs(args: {
+    currentPath: string;
+    newParentFolder: string;
+    newProjectName: string;
+  }): Promise<ProjectIdentity>;
+  moveProject(args: { currentPath: string; newParentFolder: string }): Promise<ProjectIdentity>;
+  renameProject(args: { currentPath: string; newProjectName: string }): Promise<ProjectIdentity>;
+  deleteProject(args: { projectPath: string }): Promise<void>;
+  repairProjectPointer(args: { folderPath: string }): Promise<ProjectIdentity>;
+  duplicateSnapshot(args: { projectPath: string; previousName: string; nextName: string }): Promise<void>;
+  renameSnapshot(args: { projectPath: string; previousName: string; nextName: string }): Promise<void>;
+  deleteSnapshot(args: { projectPath: string; snapshotName: string }): Promise<void>;
+  detectLegacyProjects(): Promise<LegacyProjectInfo[]>;
+  migrateLegacyProject(args: { legacyName: string; targetParentFolder: string }): Promise<ProjectIdentity>;
+  writeMigrationReadme(args: {
+    failedProjectNames: string[];
+    skippedProjectNames: string[];
+  }): Promise<void>;
+  deleteLegacyProject(args: { legacyName: string }): Promise<void>;
+  importAsset(args: {
+    projectPath: string;
     sourcePath: string;
     kind: ProjectAssetRef["kind"];
   }): Promise<ProjectAssetRef>;
-  importDae(args: { projectName: string; sourcePath: string }): Promise<DaeImportResult>;
+  importDae(args: { projectPath: string; sourcePath: string }): Promise<DaeImportResult>;
   transcodeHdriToKtx2(args: {
-    projectName: string;
+    projectPath: string;
     sourcePath: string;
     options?: HdriTranscodeOptions;
   }): Promise<ProjectAssetRef>;
-  deleteAsset(args: { projectName: string; relativePath: string }): Promise<void>;
-  resolveAssetPath(args: { projectName: string; relativePath: string }): Promise<string>;
-  readAssetBytes(args: { projectName: string; relativePath: string }): Promise<Uint8Array>;
+  deleteAsset(args: { projectPath: string; relativePath: string }): Promise<void>;
+  resolveAssetPath(args: { projectUuid: string; relativePath: string }): Promise<string>;
+  readAssetBytes(args: { projectPath: string; relativePath: string }): Promise<Uint8Array>;
   openFileDialog(args: { title?: string; filters?: FileDialogFilter[] }): Promise<string | null>;
   openSaveDialog(args: SaveDialogArgs): Promise<string | null>;
   openDirectoryDialog(args: DirectoryDialogArgs): Promise<string | null>;

@@ -12,6 +12,7 @@ import type {
   SceneState,
   TimeState
 } from "./types";
+import type { ProjectIdentity } from "@/types/ipc";
 
 export function createInitialMaterials(): Record<string, Material> {
   const materials: Material[] = [
@@ -248,11 +249,19 @@ export function createDefaultScene(): {
   };
 }
 
-export function createInitialState(mode: AppState["mode"], projectName = "demo", snapshotName = "main"): AppState {
+export function createInitialState(
+  mode: AppState["mode"],
+  activeProjectOrName: ProjectIdentity | string | null = null,
+  snapshotName = "main"
+): AppState {
+  const activeProject: ProjectIdentity | null =
+    typeof activeProjectOrName === "string"
+      ? { uuid: `synthetic-${activeProjectOrName}`, path: `/synthetic/${activeProjectOrName}.simularca`, name: activeProjectOrName }
+      : activeProjectOrName;
   const defaults = createDefaultScene();
   return {
     mode,
-    activeProjectName: projectName,
+    activeProject,
     activeSnapshotName: snapshotName,
     scene: defaults.scene,
     actors: defaults.actors,
@@ -262,6 +271,7 @@ export function createInitialState(mode: AppState["mode"], projectName = "demo",
     time: DEFAULT_TIME,
     pluginViews: {},
     focusedPluginViewId: null,
+    pluginsEnabled: {},
     materials: createInitialMaterials(),
     assets: [],
     selection: [],
