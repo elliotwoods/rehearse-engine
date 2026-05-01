@@ -12,7 +12,7 @@ Build, light, and animate a virtual version of an installation before any motors
 - **Gaussian splat rendering** — drop a captured splat of the real venue into your scene and animate against it. Native Spark WebGL path plus a custom WebGPU path with GPU sorting for high splat counts.
 - **Hardware in the loop** — MIDI input/output and serial device support, including built-in integration for the Melbourne Instruments **Roto Control** surface. Map controllers directly to actor parameters.
 - **Plugin-based actors** — every artwork is a plugin. Ship a custom actor type with its own runtime, shaders, parameters, and inspector UI without forking the host. A reference plugin and template are included.
-- **Project + snapshot workflow** — projects are folders on disk; snapshots are named variants inside a project, so you can branch a lighting test or a choreography pass without losing the last good state.
+- **Project + snapshot workflow** — projects are folders you store anywhere on disk (including cloud-synced folders), identified by a `.simularca` pointer file with a stable UUID; snapshots are named variants inside a project, so you can branch a lighting test or a choreography pass without losing the last good state.
 - **Camera paths and curves** — spline-based camera animation with keyframes and curve/actor targeting, plus a curve editor for path-driven motion.
 - **Multi-panel workspace** — drag-and-dock layout (viewport, scene tree, inspector, console, profiler, plugin views) you can rearrange per project.
 - **Imports** — DXF (CAD layers, plane and unit selection), Collada `.dae` meshes, PLY and `.splatbin` Gaussian splats, HDRI environments transcoded to KTX2.
@@ -36,7 +36,7 @@ Simularca is desktop-first and runs through Electron. The repository builds and 
 ### Get it running
 
 ```bash
-git clone https://github.com/<owner>/simularca.git
+git clone https://github.com/elliotwoods/simularca.git
 cd simularca
 npm install
 npm run dev
@@ -44,7 +44,15 @@ npm run dev
 
 `npm run dev` starts the plugin watcher, the Vite dev server on `http://localhost:5180`, and Electron together. The app window opens once the dev server is up.
 
-Projects are written to `savedata/<projectName>/` next to the repository. Open or create a project from the app's title bar.
+On first launch the welcome screen lets you create a new project or open an existing one. Projects are folders you choose (default location: `~/Documents/Simularca Projects/<ProjectName>/`); each contains a `<ProjectName>.simularca` pointer file plus `snapshots/` and `assets/`. App-internal state (recents list, default project, window layout) lives in your OS user-data folder:
+
+| Platform | Path |
+| --- | --- |
+| Windows | `%APPDATA%/Simularca/` |
+| macOS | `~/Library/Application Support/Simularca/` |
+| Linux | `~/.config/Simularca/` |
+
+If you previously had projects under `savedata/` next to the repo, the app shows a migration dialog on startup so you can pick a destination for each one.
 
 ### Other run modes
 
