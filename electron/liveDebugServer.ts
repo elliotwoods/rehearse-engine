@@ -23,7 +23,7 @@ interface LiveDebugServerOptions {
   buildKind: "dev" | "build";
   getLogsRoot(): string;
   getRuntimeLogFilePath(): string;
-  writeRuntimeLog(scope: string, message: string, metadata?: unknown): void;
+  writeRuntimeLog(scope: string, message: string, metadata?: unknown, severity?: "error" | "warn" | "info"): void;
 }
 
 interface JsonResponseInit {
@@ -328,7 +328,7 @@ export async function startLiveDebugServer(options: LiveDebugServerOptions): Pro
           method: request.method,
           url: request.url,
           error: error instanceof Error ? { message: error.message, stack: error.stack } : String(error)
-        });
+        }, "warn");
       }
     });
     if (!isLoopbackAddress(request.socket.remoteAddress)) {
@@ -395,7 +395,7 @@ export async function startLiveDebugServer(options: LiveDebugServerOptions): Pro
         method: request.method,
         url: request.url,
         error: error instanceof Error ? { message: error.message, stack: error.stack } : String(error)
-      });
+      }, "warn");
       writeJsonSafe(response, toExecutionError("Debug bridge request failed.", error), { status: 500 });
     }
   });
@@ -406,7 +406,7 @@ export async function startLiveDebugServer(options: LiveDebugServerOptions): Pro
     }
     options.writeRuntimeLog("debug-bridge", "Client error", {
       error: error instanceof Error ? { message: error.message, stack: error.stack } : String(error)
-    });
+    }, "warn");
     if (!socket.destroyed) {
       socket.destroy();
     }

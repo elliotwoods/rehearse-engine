@@ -173,7 +173,7 @@ export const DEFAULT_FRAME_PACING: SceneFramePacingSettings = {
   targetFps: 60
 };
 export const DEFAULT_RENDER_ENGINE: RenderEngine = "webgpu";
-export const DEFAULT_SCENE_COLOR_BUFFER_PRECISION: SceneColorBufferPrecision = "float32";
+export const DEFAULT_SCENE_COLOR_BUFFER_PRECISION: SceneColorBufferPrecision = "float16";
 export const DEFAULT_POST_PROCESSING: ScenePostProcessingSettings = {
   bloom: {
     enabled: false,

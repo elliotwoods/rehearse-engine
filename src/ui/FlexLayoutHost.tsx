@@ -361,7 +361,9 @@ export function FlexLayoutHost(props: FlexLayoutHostProps) {
       model,
       props.profileResultsOpen && Boolean(props.profileResults),
       profileResultsTabsetId,
-      props.profileResults ? `Profile (${props.profileResults.frames.length}f)` : "Profile"
+      props.profileResults
+        ? `Performance Profile (${props.profileResults.frames.length}f)`
+        : "Performance Profile"
     );
   }, [model, profileResultsTabsetId, props.profileResults, props.profileResultsOpen]);
 

@@ -221,7 +221,7 @@ describe("TopBarPanel screenshot button", () => {
     });
   });
 
-  it("opens actor profiling from the toolbar button", async () => {
+  it("opens performance profile capture from the toolbar button", async () => {
     const kernel = createKernelStub();
     const onOpenProfiling = vi.fn();
     const container = document.createElement("div");
@@ -247,7 +247,7 @@ describe("TopBarPanel screenshot button", () => {
       );
     });
 
-    const profileButton = container.querySelector("button[aria-label='Open actor profiler']") as
+    const profileButton = container.querySelector("button[aria-label='Open performance profile']") as
       | HTMLButtonElement
       | null;
     expect(profileButton).not.toBeNull();

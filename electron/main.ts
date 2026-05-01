@@ -23,6 +23,7 @@ import type {
   RotoControlState
 } from "../src/types/ipc";
 import { isIgnorablePipeError, startLiveDebugServer, type LiveDebugServerController } from "./liveDebugServer.js";
+import { toCompactYaml } from "./loggerUtils.js";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tiff", ".tif", ".svg"]);
 // 1×1 transparent PNG
@@ -30,6 +31,57 @@ const FALLBACK_IMAGE_PNG = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIABQAABjE+ibYAAAAASUVORK5CYII=",
   "base64"
 );
+
+const ANSI_COLORS = {
+  reset: "\x1b[0m",
+  bold: "\x1b[1m",
+  dim: "\x1b[2m",
+  red: "\x1b[31m",
+  green: "\x1b[32m",
+  yellow: "\x1b[33m",
+  blue: "\x1b[34m",
+  magenta: "\x1b[35m",
+  cyan: "\x1b[36m",
+  white: "\x1b[37m"
+} as const;
+
+const SCOPE_COLORS: Record<string, string> = {
+  "renderer-console": ANSI_COLORS.cyan,
+  "app": ANSI_COLORS.green,
+  "boot": ANSI_COLORS.magenta,
+  "window": ANSI_COLORS.blue,
+  "webcontents": ANSI_COLORS.yellow,
+  "process": ANSI_COLORS.red,
+  "renderer": ANSI_COLORS.red,
+  "render:pipe": ANSI_COLORS.magenta,
+  "render:temp": ANSI_COLORS.magenta,
+  "asset-protocol": ANSI_COLORS.dim
+};
+
+type LogSeverity = "error" | "warn" | "info";
+
+const SEVERITY_COLORS: Record<LogSeverity, string> = {
+  error: ANSI_COLORS.red,
+  warn: ANSI_COLORS.yellow,
+  info: ANSI_COLORS.white
+};
+
+let logLastTime: Date | null = null;
+
+interface PendingDedup {
+  key: string;            // scope:message:serializedMetadata — for exact-match dedup
+  scope: string;
+  message: string;
+  metadata: unknown;
+  severity: LogSeverity;
+  count: number;
+  lastTime: Date;
+  timestamp: string;              // formatted timestamp from first write (reused on rewrites)
+  terminalNewlineCount: number;   // lines written to stdout (for cursor-up rewrite)
+  fileOffset: number;             // byte offset in log file before this entry (-1 = unknown)
+}
+let pendingDedup: PendingDedup | null = null;
+const LOG_DEDUP_WINDOW_MS = 60_000;
 
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL;
 const IS_DEV = Boolean(DEV_SERVER_URL);
@@ -110,12 +162,12 @@ function getAppIconPath(): string {
 function configureAppIcon(): string | undefined {
   const iconPath = getAppIconPath();
   if (!fsSync.existsSync(iconPath)) {
-    void writeRuntimeLog("app", "App icon file not found", { iconPath });
+    void writeRuntimeLog("app", "App icon file not found", { iconPath }, "warn");
     return undefined;
   }
   const icon = nativeImage.createFromPath(iconPath);
   if (icon.isEmpty()) {
-    void writeRuntimeLog("app", "App icon could not be loaded", { iconPath });
+    void writeRuntimeLog("app", "App icon could not be loaded", { iconPath }, "warn");
     return undefined;
   }
   if (process.platform === "darwin") {
@@ -134,11 +186,14 @@ function getCodexDebugManifestFilePath(): string {
 
 function toErrorPayload(input: unknown): Record<string, unknown> {
   if (input instanceof Error) {
-    return {
+    const result: Record<string, unknown> = {
       name: input.name,
       message: input.message,
-      stack: input.stack
     };
+    if (input.stack) {
+      result.stack = input.stack;
+    }
+    return result;
   }
   if (typeof input === "object" && input !== null) {
     return input as Record<string, unknown>;
@@ -178,21 +233,122 @@ function installBrokenPipeGuards(): void {
   });
 }
 
-function writeRuntimeLog(scope: string, message: string, metadata?: unknown): void {
-  const timestamp = new Date().toISOString();
-  const serialized = metadata === undefined ? "" : ` ${JSON.stringify(toErrorPayload(metadata))}`;
-  const line = `[${timestamp}] [${scope}] ${message}${serialized}`;
-  safeWriteToStream(process.stdout, line);
+function formatLogTimestamp(now: Date): string {
+  const timeStr = now.toISOString().slice(11, 19) + "Z";
+  const deltaMs = logLastTime !== null ? now.getTime() - logLastTime.getTime() : 0;
+  logLastTime = now;
+  return `${timeStr} +${deltaMs}ms`;
+}
+
+function buildLogLines(
+  scope: string,
+  message: string,
+  metadata: unknown,
+  severity: LogSeverity,
+  timestamp: string,
+  repeatCount: number
+): { fileLine: string; terminalLine: string; terminalNewlineCount: number } {
+  const metadataPayload = metadata === undefined ? undefined : toErrorPayload(metadata);
+  const metadataYaml = metadataPayload === undefined ? "" : `\n${toCompactYaml(metadataPayload, 1).trimEnd()}`;
+  const countSuffix = repeatCount > 1 ? ` (repeats ${repeatCount} times)` : "";
+
+  const fileLine = `[${timestamp}] [${scope}] ${message}${countSuffix}${metadataYaml}`;
+
+  const scopeColor = severity !== "info" ? SEVERITY_COLORS[severity] : (SCOPE_COLORS[scope] ?? ANSI_COLORS.white);
+  const coloredScope = `${scopeColor}${scope}${ANSI_COLORS.reset}`;
+  const coloredTimestamp = `${ANSI_COLORS.dim}${timestamp}${ANSI_COLORS.reset}`;
+  const coloredMessage = severity !== "info" ? `${scopeColor}${message}${ANSI_COLORS.reset}` : message;
+  const coloredCountSuffix = repeatCount > 1 ? ` ${ANSI_COLORS.dim}(repeats ${repeatCount} times)${ANSI_COLORS.reset}` : "";
+  const terminalLine = `[${coloredTimestamp}] [${coloredScope}] ${coloredMessage}${coloredCountSuffix}${metadataYaml}`;
+  const terminalNewlineCount = (terminalLine.match(/\n/g)?.length ?? 0) + 1;
+
+  return { fileLine, terminalLine, terminalNewlineCount };
+}
+
+function initializeRuntimeLog(): void {
+  const now = new Date();
+  logLastTime = now;
+  pendingDedup = null;
+  const header = [
+    "=== Rehearse Engine Runtime Log ===",
+    `Session Start: ${now.toISOString().slice(0, 19)}Z`,
+    `Platform:      ${process.platform}`,
+    `Node:          ${process.version}`,
+    "===================================",
+    ""
+  ].join("\n");
   try {
     fsSync.mkdirSync(getLogsRoot(), { recursive: true });
-    fsSync.appendFileSync(getRuntimeLogFilePath(), `${line}\n`, "utf8");
+    fsSync.writeFileSync(getRuntimeLogFilePath(), `${header}\n`, "utf8");
   } catch (error) {
-    const fallback = `[logger] Failed to write runtime log ${JSON.stringify(toErrorPayload(error))}`;
-    safeWriteToStream(process.stderr, fallback);
+    safeWriteToStream(process.stderr, `[logger] Failed to initialize runtime log ${JSON.stringify(toErrorPayload(error))}`);
   }
 }
 
+function writeRuntimeLog(scope: string, message: string, metadata?: unknown, severity: LogSeverity = "info"): void {
+  const now = new Date();
+  const metadataKey = metadata === undefined ? "" : JSON.stringify(toErrorPayload(metadata));
+  const key = `${scope}:${message}:${metadataKey}`;
+
+  if (pendingDedup !== null) {
+    if (pendingDedup.key === key && (now.getTime() - pendingDedup.lastTime.getTime()) < LOG_DEDUP_WINDOW_MS) {
+      // Same message+body within window: rewrite in place with updated count
+      pendingDedup.count++;
+      pendingDedup.lastTime = now;
+      const { fileLine, terminalLine, terminalNewlineCount } = buildLogLines(
+        pendingDedup.scope, pendingDedup.message, pendingDedup.metadata,
+        pendingDedup.severity, pendingDedup.timestamp, pendingDedup.count
+      );
+      // Terminal: cursor-up + clear + rewrite (TTY only; piped output just appends)
+      if (process.stdout.isTTY) {
+        try {
+          process.stdout.write(`\x1b[${pendingDedup.terminalNewlineCount}A\r\x1b[J${terminalLine}\n`);
+        } catch { /* ignore */ }
+      } else {
+        safeWriteToStream(process.stdout, terminalLine);
+      }
+      pendingDedup.terminalNewlineCount = terminalNewlineCount;
+      // File: truncate back to entry start + rewrite
+      if (pendingDedup.fileOffset >= 0) {
+        try {
+          const filePath = getRuntimeLogFilePath();
+          fsSync.truncateSync(filePath, pendingDedup.fileOffset);
+          fsSync.appendFileSync(filePath, `${fileLine}\n`, "utf8");
+        } catch { /* ignore */ }
+      }
+      return;
+    }
+    // Different message: previous entry already has the correct count, just reset
+    pendingDedup = null;
+  }
+
+  // Fresh write
+  const timestamp = formatLogTimestamp(now);
+  const { fileLine, terminalLine, terminalNewlineCount } = buildLogLines(
+    scope, message, metadata, severity, timestamp, 1
+  );
+
+  safeWriteToStream(process.stdout, terminalLine);
+
+  let fileOffset = -1;
+  try {
+    fsSync.mkdirSync(getLogsRoot(), { recursive: true });
+    const filePath = getRuntimeLogFilePath();
+    try { fileOffset = fsSync.statSync(filePath).size; } catch { /* file may not exist yet */ }
+    fsSync.appendFileSync(filePath, `${fileLine}\n`, "utf8");
+  } catch (error) {
+    safeWriteToStream(process.stderr, `[logger] Failed to write runtime log ${JSON.stringify(toErrorPayload(error))}`);
+  }
+
+  pendingDedup = {
+    key, scope, message, metadata, severity,
+    count: 1, lastTime: now,
+    timestamp, terminalNewlineCount, fileOffset
+  };
+}
+
 installBrokenPipeGuards();
+initializeRuntimeLog();
 
 void writeRuntimeLog("boot", "electron main module loaded", {
   cwd: process.cwd(),
@@ -259,7 +415,7 @@ function readPersistedWindowState(): PersistedWindowState | null {
     }
     return next;
   } catch (error) {
-    void writeRuntimeLog("window", "Failed to read persisted window state", error);
+    void writeRuntimeLog("window", "Failed to read persisted window state", error, "warn");
     return null;
   }
 }
@@ -288,7 +444,7 @@ function persistWindowState(state: PersistedWindowState): void {
     fsSync.mkdirSync(getSaveDataRoot(), { recursive: true });
     fsSync.writeFileSync(getWindowStateFilePath(), JSON.stringify(state, null, 2), "utf8");
   } catch (error) {
-    void writeRuntimeLog("window", "Failed to persist window state", error);
+    void writeRuntimeLog("window", "Failed to persist window state", error, "warn");
   }
 }
 
@@ -549,7 +705,7 @@ async function registerAssetProtocol(): Promise<void> {
       void writeRuntimeLog("asset-protocol", "Failed to resolve request", {
         url: request.url,
         error
-      });
+      }, "warn");
       return new Response("Not found", { status: 404 });
     }
   });
@@ -866,7 +1022,7 @@ function createWindow(): BrowserWindow {
         isMainFrame,
         frameProcessId,
         frameRoutingId
-      });
+      }, "error");
     }
   );
 
@@ -877,30 +1033,31 @@ function createWindow(): BrowserWindow {
   });
 
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
-    void writeRuntimeLog("webcontents", "render-process-gone", details);
+    void writeRuntimeLog("webcontents", "render-process-gone", details, "error");
   });
 
   mainWindow.webContents.on("preload-error", (_event, preloadPath, error) => {
     void writeRuntimeLog("webcontents", "preload-error", {
       preloadPath,
       error: toErrorPayload(error)
-    });
+    }, "error");
   });
 
   mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
     if (level <= 1) {
       return;
     }
+    const consoleSeverity: LogSeverity = level >= 3 ? "error" : "warn";
     void writeRuntimeLog("renderer-console", "console-message", {
       level,
       message,
       line,
       sourceId
-    });
+    }, consoleSeverity);
   });
 
   mainWindow.on("unresponsive", () => {
-    void writeRuntimeLog("window", "BrowserWindow became unresponsive");
+    void writeRuntimeLog("window", "BrowserWindow became unresponsive", undefined, "warn");
   });
 
   mainWindow.on("closed", () => {
@@ -954,12 +1111,12 @@ function createWindow(): BrowserWindow {
 
   if (IS_DEV && DEV_SERVER_URL) {
     void mainWindow.loadURL(DEV_SERVER_URL).catch((error) => {
-      void writeRuntimeLog("window", "Failed to load DEV server URL", error);
+      void writeRuntimeLog("window", "Failed to load DEV server URL", error, "error");
     });
     mainWindow.webContents.openDevTools({ mode: "detach" });
   } else {
     void mainWindow.loadFile(path.join(app.getAppPath(), "dist", "index.html")).catch((error) => {
-      void writeRuntimeLog("window", "Failed to load production index.html", error);
+      void writeRuntimeLog("window", "Failed to load production index.html", error, "error");
     });
   }
 
@@ -970,7 +1127,7 @@ function createWindow(): BrowserWindow {
 
 function registerIpcHandlers(): void {
   ipcMain.on("renderer:runtime-error", (_event, payload: unknown) => {
-    void writeRuntimeLog("renderer", "runtime-error", payload);
+    void writeRuntimeLog("renderer", "runtime-error", payload, "error");
   });
 
   ipcMain.handle("mode:get", () => "electron-rw");
@@ -1179,7 +1336,7 @@ function registerIpcHandlers(): void {
         stderrText += chunk.toString("utf8");
       });
       child.on("error", (error) => {
-        void writeRuntimeLog("render:pipe", "ffmpeg spawn failed", error);
+        void writeRuntimeLog("render:pipe", "ffmpeg spawn failed", error, "error");
       });
       (child as any).__stderrTextRef = () => stderrText;
       const childClosePromise = new Promise<void>((resolve, reject) => {
@@ -1601,7 +1758,7 @@ function registerIpcHandlers(): void {
             previousName: args.previousName,
             nextName: args.nextName,
             cleanupError
-          });
+          }, "warn");
         }
       }
       const defaultsPath = path.join(getSaveDataRoot(), DEFAULTS_FILE_NAME);
@@ -1977,20 +2134,20 @@ void app.whenReady().then(async () => {
       void writeRuntimeLog("process", "ignored uncaught transport disconnect", error);
       return;
     }
-    void writeRuntimeLog("process", "uncaughtException", error);
+    void writeRuntimeLog("process", "uncaughtException", error, "error");
   });
   process.on("unhandledRejection", (reason) => {
-    void writeRuntimeLog("process", "unhandledRejection", reason);
+    void writeRuntimeLog("process", "unhandledRejection", reason, "error");
   });
 
   app.on("render-process-gone", (_event, webContents, details) => {
     void writeRuntimeLog("app", "render-process-gone", {
       url: webContents.getURL(),
       details
-    });
+    }, "error");
   });
   app.on("child-process-gone", (_event, details) => {
-    void writeRuntimeLog("app", "child-process-gone", details);
+    void writeRuntimeLog("app", "child-process-gone", details, "warn");
   });
 
   void writeRuntimeLog("app", "App starting", {

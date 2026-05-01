@@ -1340,7 +1340,7 @@ export function App() {
         onConfirm={(options: ProfileCaptureOptions) => {
           setProfileModalOpen(false);
           if (!kernel.profiler.startCapture(options)) {
-            kernel.store.getState().actions.setStatus("Actor profiling is already capturing.");
+            kernel.store.getState().actions.setStatus("Performance profile capture is already running.");
           }
         }}
       />

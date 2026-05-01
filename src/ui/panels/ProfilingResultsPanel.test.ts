@@ -168,10 +168,16 @@ describe("ProfilingResultsPanel", () => {
       root.render(React.createElement(ProfilingResultsPanel, { result: createResult() }));
     });
 
+    expect(container.textContent).toContain("Performance Profile");
     const sectionTitles = Array.from(container.querySelectorAll(".profile-section-header strong")).map((node) =>
       node.textContent?.trim()
     );
-    expect(sectionTitles.slice(0, 4)).toEqual(["Summaries", "Frames", "Actor CPU Hotspots", "Plugin CPU Hotspots"]);
+    expect(sectionTitles.slice(0, 4)).toEqual([
+      "Summaries",
+      "Captured Frames",
+      "Actor CPU Hotspots",
+      "Plugin CPU Hotspots"
+    ]);
     expect(container.textContent).not.toContain("CPU Across Frames");
     expect(container.textContent).not.toContain("GPU Across Frames");
     expect(container.querySelector(".profile-section-break .profile-section-header strong")?.textContent).toBe(
@@ -195,6 +201,7 @@ describe("ProfilingResultsPanel", () => {
     expect(container.textContent ?? "").not.toContain("CPU Total");
     expect(container.textContent ?? "").toContain("Captured Frames");
     expect(container.textContent ?? "").not.toContain("Frame 1");
+    expect(container.querySelector(".profile-summary-chip-label")?.textContent).toBe("Frames");
 
     const frameButton = Array.from(container.querySelectorAll("button")).find((button) =>
       ((button as HTMLButtonElement).getAttribute("aria-label") ?? "").includes(
@@ -211,6 +218,8 @@ describe("ProfilingResultsPanel", () => {
     expect(container.textContent ?? "").toContain("CPU Total");
     expect(container.textContent ?? "").toContain("GPU Total");
     expect(container.textContent ?? "").toContain("#1");
+    expect(container.querySelector(".profile-frame-expanded-stack")).not.toBeNull();
+    expect(container.querySelectorAll(".profile-inline-drilldown-rail")).toHaveLength(1);
 
     const segmentButton = Array.from(container.querySelectorAll("button")).find((button) =>
       ((button as HTMLButtonElement).getAttribute("aria-label") ?? "").includes(
@@ -223,7 +232,7 @@ describe("ProfilingResultsPanel", () => {
       segmentButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
-    expect(container.querySelector(".profile-inline-drilldown-rail")).not.toBeNull();
+    expect(container.querySelectorAll(".profile-inline-drilldown-rail")).toHaveLength(2);
     expect(container.querySelector(".profile-inline-drilldown-card")).toBeNull();
     expect(container.querySelector(".profile-inline-drilldown-caption")).toBeNull();
     expect(container.querySelector(".profile-inline-drilldown-meta")?.textContent ?? "").toContain("Scene sync");
@@ -233,7 +242,7 @@ describe("ProfilingResultsPanel", () => {
       segmentButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
-    expect(container.querySelector(".profile-inline-drilldown-rail")).toBeNull();
+    expect(container.querySelectorAll(".profile-inline-drilldown-rail")).toHaveLength(1);
     expect(container.querySelector(".profile-inline-drilldown-meta")).toBeNull();
 
     await act(async () => {

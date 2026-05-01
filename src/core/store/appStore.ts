@@ -167,9 +167,14 @@ function appendConsoleLog(state: any, entry: { level: LogLevel; message: string;
   state.consoleEntries = [...state.consoleEntries, log].slice(-MAX_CONSOLE_ENTRIES);
 }
 
+const MAX_HISTORY_ENTRIES = 100;
+
 function withHistory(get: () => AppStore, set: (partial: Partial<AppStore>) => void, label: string): void {
   const snapshot = cloneState(get().state);
-  const nextPast = [...get().historyPast, { label, snapshot }];
+  const past = get().historyPast;
+  const nextPast = past.length >= MAX_HISTORY_ENTRIES
+    ? [...past.slice(past.length - MAX_HISTORY_ENTRIES + 1), { label, snapshot }]
+    : [...past, { label, snapshot }];
   set({
     historyPast: nextPast,
     historyFuture: []

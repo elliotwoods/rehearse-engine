@@ -316,7 +316,7 @@ export function TopBarPanel(props: TopBarPanelProps) {
 
   useEffect(() => {
     scheduleToolbarMeasurementRef.current?.();
-  });
+  }, [toolbarLayoutMode]);
 
   return (
     <div
@@ -433,11 +433,15 @@ export function TopBarPanel(props: TopBarPanelProps) {
       </div>
 
       <div className="toolbar-group toolbar-profile-group">
-        <label className="toolbar-group-label" title="Actor profiler">Profile</label>
+        <label className="toolbar-group-label" title="Performance Profile">Profile</label>
         <button
           type="button"
-          title={props.profilingState.phase === "capturing" ? "Actor profiling in progress" : "Capture actor performance profile"}
-          aria-label="Open actor profiler"
+          title={
+            props.profilingState.phase === "capturing"
+              ? "Performance profile capture in progress"
+              : "Open performance profile capture"
+          }
+          aria-label="Open performance profile"
           onClick={props.profilingState.phase === "capturing" ? undefined : props.onOpenProfiling}
           disabled={props.profilingState.phase === "capturing"}
         >

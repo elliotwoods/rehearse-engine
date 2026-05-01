@@ -248,43 +248,82 @@ function summarizeMetric(values: number[]): ProfileMetricSummary {
   };
 }
 
+interface ProcessAggregateEntry {
+  sum: number;
+  max: number;
+  count: number;
+}
+
+interface ActorAggregateEntry {
+  actorId: string;
+  actorName: string;
+  actorType: ActorNode["actorType"];
+  pluginType?: string;
+  cpuSum: number;
+  cpuMax: number;
+  gpuSum: number;
+  gpuMax: number;
+  count: number;
+}
+
+function accumulateProcess(
+  map: Map<string, ProcessAggregateEntry>,
+  path: string,
+  durationMs: number
+): void {
+  const existing = map.get(path);
+  if (existing) {
+    existing.sum += durationMs;
+    existing.max = Math.max(existing.max, durationMs);
+    existing.count += 1;
+    return;
+  }
+  map.set(path, {
+    sum: durationMs,
+    max: durationMs,
+    count: 1
+  });
+}
+
+function summarizeTopProcesses(
+  map: Map<string, ProcessAggregateEntry>,
+  divisor: number
+): ProfileProcessSummaryEntry[] {
+  return Array.from(map.entries())
+    .map(([path, entry]) => ({
+      path,
+      averageMs: Number((entry.sum / Math.max(1, divisor)).toFixed(2)),
+      maxMs: Number(entry.max.toFixed(2))
+    }))
+    .sort((a, b) => b.averageMs - a.averageMs || b.maxMs - a.maxMs || a.path.localeCompare(b.path))
+    .slice(0, 12);
+}
+
+function summarizeHotActors(map: Map<string, ActorAggregateEntry>): ProfileActorSummaryEntry[] {
+  return Array.from(map.values())
+    .map((entry) => ({
+      actorId: entry.actorId,
+      actorName: entry.actorName,
+      actorType: entry.actorType,
+      pluginType: entry.pluginType,
+      averageCpuMs: Number((entry.cpuSum / Math.max(1, entry.count)).toFixed(2)),
+      maxCpuMs: Number(entry.cpuMax.toFixed(2)),
+      averageGpuMs: Number((entry.gpuSum / Math.max(1, entry.count)).toFixed(2)),
+      maxGpuMs: Number(entry.gpuMax.toFixed(2))
+    }))
+    .sort((a, b) => b.averageCpuMs - a.averageCpuMs || b.maxCpuMs - a.maxCpuMs || a.actorName.localeCompare(b.actorName))
+    .slice(0, 20);
+}
+
 export function buildProfileSummary(result: Pick<ProfileSessionResult, "frames">): ProfileSessionSummary {
   const cpuFrameTotals = result.frames.map((frame) => frame.cpu.totalDurationMs);
   const gpuFrames = result.frames.filter((frame) => frame.gpu.status === "captured" && typeof frame.gpu.totalDurationMs === "number");
   const gpuFrameTotals = gpuFrames
     .map((frame) => frame.gpu.totalDurationMs)
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  const processStats = new Map<string, { sum: number; max: number; count: number }>();
-  const gpuProcessStats = new Map<string, { sum: number; max: number; count: number }>();
-  const actorStats = new Map<
-    string,
-    {
-      actorId: string;
-      actorName: string;
-      actorType: ActorNode["actorType"];
-      pluginType?: string;
-      cpuSum: number;
-      cpuMax: number;
-      gpuSum: number;
-      gpuMax: number;
-      count: number;
-    }
-  >();
-
-  const accumulateProcess = (map: Map<string, { sum: number; max: number; count: number }>, path: string, durationMs: number) => {
-    const existing = map.get(path);
-    if (existing) {
-      existing.sum += durationMs;
-      existing.max = Math.max(existing.max, durationMs);
-      existing.count += 1;
-      return;
-    }
-    map.set(path, {
-      sum: durationMs,
-      max: durationMs,
-      count: 1
-    });
-  };
+  const processStats = new Map<string, ProcessAggregateEntry>();
+  const gpuProcessStats = new Map<string, ProcessAggregateEntry>();
+  const actorStats = new Map<string, ActorAggregateEntry>();
 
   for (const frame of result.frames) {
     for (const process of flattenChunks(frame.cpu.roots, "cpu")) {
@@ -334,41 +373,15 @@ export function buildProfileSummary(result: Pick<ProfileSessionResult, "frames">
     frameCount: result.frames.length,
     cpu: {
       ...cpuMetrics,
-      topProcesses: Array.from(processStats.entries())
-        .map(([path, entry]) => ({
-          path,
-          averageMs: Number((entry.sum / Math.max(1, result.frames.length)).toFixed(2)),
-          maxMs: Number(entry.max.toFixed(2))
-        }))
-        .sort((a, b) => b.averageMs - a.averageMs || b.maxMs - a.maxMs || a.path.localeCompare(b.path))
-        .slice(0, 12)
+      topProcesses: summarizeTopProcesses(processStats, result.frames.length)
     },
     gpu: {
       status: gpuFrames.length > 0 ? "captured" : result.frames.some((frame) => frame.gpu.status === "unavailable") ? "unavailable" : "disabled",
       availableFrames: gpuFrames.length,
       metrics: gpuMetrics,
-      topProcesses: Array.from(gpuProcessStats.entries())
-        .map(([path, entry]) => ({
-          path,
-          averageMs: Number((entry.sum / Math.max(1, gpuFrames.length || result.frames.length)).toFixed(2)),
-          maxMs: Number(entry.max.toFixed(2))
-        }))
-        .sort((a, b) => b.averageMs - a.averageMs || b.maxMs - a.maxMs || a.path.localeCompare(b.path))
-        .slice(0, 12)
+      topProcesses: summarizeTopProcesses(gpuProcessStats, gpuFrames.length || result.frames.length)
     },
-    hotActors: Array.from(actorStats.values())
-      .map((entry) => ({
-        actorId: entry.actorId,
-        actorName: entry.actorName,
-        actorType: entry.actorType,
-        pluginType: entry.pluginType,
-        averageCpuMs: Number((entry.cpuSum / Math.max(1, entry.count)).toFixed(2)),
-        maxCpuMs: Number(entry.cpuMax.toFixed(2)),
-        averageGpuMs: Number((entry.gpuSum / Math.max(1, entry.count)).toFixed(2)),
-        maxGpuMs: Number(entry.gpuMax.toFixed(2))
-      }))
-      .sort((a, b) => b.averageCpuMs - a.averageCpuMs || b.maxCpuMs - a.maxCpuMs || a.actorName.localeCompare(b.actorName))
-      .slice(0, 20)
+    hotActors: summarizeHotActors(actorStats)
   };
 }
 

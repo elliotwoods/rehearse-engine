@@ -188,6 +188,7 @@ export class WebGpuViewport {
       await (this.renderer as any).init();
     }
     this.initialized = true;
+    this.setGpuTimestampTracking(false);
     this.onResize();
     if (!this.fixedViewportSize) {
       window.addEventListener("resize", this.onResize);
@@ -267,6 +268,7 @@ export class WebGpuViewport {
         await (this.renderer as any).init();
       }
       this.initialized = true;
+      this.setGpuTimestampTracking(false);
     }
     this.onResize();
     await this.renderFrame({ collectStats: false });
@@ -330,6 +332,8 @@ export class WebGpuViewport {
 
   private async renderFrame(options?: { collectStats?: boolean }): Promise<void> {
     const collectStats = options?.collectStats ?? true;
+    const wantsGpuTimings = this.kernel.profiler.shouldProfileGpuTimings();
+    this.setGpuTimestampTracking(wantsGpuTimings);
     const _rf0 = performance.now();
     this.kernel.profiler.beginFrame();
     await this.kernel.profiler.withFrameChunk("Scene sync", () => this.sceneController.syncFromState());
@@ -391,7 +395,7 @@ export class WebGpuViewport {
       }
     });
     await this.kernel.profiler.withFrameChunk("GPU resource cleanup", () => this.flushDeferredGpuDisposals());
-    const gpu = this.kernel.profiler.shouldProfileGpuTimings()
+    const gpu = wantsGpuTimings
       ? await this.kernel.profiler.withFrameChunk("GPU readback", () => this.resolveGpuProfile())
       : undefined;
     const _rf3 = performance.now();
@@ -854,6 +858,13 @@ export class WebGpuViewport {
       await rendererWithWait.waitForGPU();
     }
     this.sceneController.flushDeferredGpuDisposals();
+  }
+
+  private setGpuTimestampTracking(enabled: boolean): void {
+    const backend = (this.renderer as WebGPURenderer & { backend?: { trackTimestamp?: boolean } }).backend;
+    if (backend && backend.trackTimestamp !== enabled) {
+      backend.trackTimestamp = enabled;
+    }
   }
 
   private async resolveGpuProfile(): Promise<ProfileFrameGpuInput> {

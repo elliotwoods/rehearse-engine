@@ -1,4 +1,12 @@
 import { useMemo, useState } from "react";
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import {
+  faChartColumn,
+  faCircleDot,
+  faClone,
+  faForwardStep
+} from "@fortawesome/free-solid-svg-icons";
+import type { IconDefinition } from "@fortawesome/fontawesome-svg-core";
 import type {
   ProfileActorFrameSnapshot,
   ProfileChunkSnapshot,
@@ -16,6 +24,12 @@ interface ProfileGraphNode {
   label: string;
   durationMs: number;
   children: ProfileGraphNode[];
+}
+
+interface GraphSectionRow {
+  key: string;
+  label: string;
+  root: ProfileGraphNode;
 }
 
 interface DrilldownConnectorBounds {
@@ -223,7 +237,7 @@ function pathsEqual(left: string[] | null | undefined, right: string[]): boolean
 
 function DrilldownConnector(props: {
   bounds: DrilldownConnectorBounds;
-  onClose: () => void;
+  onClose?: () => void;
 }) {
   const sourceStart = clampPercent(props.bounds.startPercent);
   const sourceEnd = clampPercent(props.bounds.endPercent);
@@ -245,20 +259,21 @@ function DrilldownConnector(props: {
         <line x1={targetStart} y1="20" x2={targetStart} y2="28" />
         <line x1={targetEnd} y1="20" x2={targetEnd} y2="28" />
       </svg>
-      <button
-        type="button"
-        className="profile-inline-drilldown-close"
-        aria-label="Collapse drilldown"
-        onClick={props.onClose}
-      >
-        x
-      </button>
+      {props.onClose ? (
+        <button
+          type="button"
+          className="profile-inline-drilldown-close"
+          aria-label="Collapse drilldown"
+          onClick={props.onClose}
+        >
+          x
+        </button>
+      ) : null}
     </div>
   );
 }
 
 function GraphNodeView(props: {
-  root: ProfileGraphNode;
   node: ProfileGraphNode;
   depth: number;
   expanded: ExpandedDrilldown | null;
@@ -340,7 +355,6 @@ function GraphNodeView(props: {
             <strong>{formatDuration(expandedChild.durationMs)}</strong>
           </div>
           <GraphNodeView
-            root={props.root}
             node={expandedChild}
             depth={props.depth + 1}
             expanded={props.expanded}
@@ -355,20 +369,18 @@ function GraphNodeView(props: {
 }
 
 function ProfileRowGraph(props: {
-  rowKey: string;
   label: string;
   root: ProfileGraphNode;
 }) {
   const [expanded, setExpanded] = useState<ExpandedDrilldown | null>(null);
 
   return (
-    <div key={props.rowKey} className="profile-row">
+    <div className="profile-row">
       <div className="profile-row-meta">
         <span>{props.label}</span>
         <strong>{formatDuration(props.root.durationMs)}</strong>
       </div>
       <GraphNodeView
-        root={props.root}
         node={props.root}
         depth={0}
         expanded={expanded}
@@ -411,25 +423,51 @@ function ProfileRowGraph(props: {
   );
 }
 
-function GraphSection(props: {
+function ProfileSectionHeader(props: {
+  icon: IconDefinition;
   title: string;
   description?: string;
-  rows: Array<{ key: string; label: string; root: ProfileGraphNode }>;
+}) {
+  return (
+    <div className="profile-section-header">
+      <div className="profile-section-heading">
+        <FontAwesomeIcon icon={props.icon} className="profile-section-icon" />
+        <strong>{props.title}</strong>
+      </div>
+      {props.description ? <span>{props.description}</span> : null}
+    </div>
+  );
+}
+
+function ProfileSummaryChip(props: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="profile-summary-chip">
+      <span className="profile-summary-chip-label">{props.label}</span>
+      <strong className="profile-summary-chip-value">{props.value}</strong>
+    </div>
+  );
+}
+
+function GraphSection(props: {
+  icon: IconDefinition;
+  title: string;
+  description?: string;
+  rows: GraphSectionRow[];
   emptyMessage?: string;
   className?: string;
 }) {
   return (
     <section className={`profile-section${props.className ? ` ${props.className}` : ""}`}>
-      <div className="profile-section-header">
-        <strong>{props.title}</strong>
-        {props.description ? <span>{props.description}</span> : null}
-      </div>
+      <ProfileSectionHeader icon={props.icon} title={props.title} description={props.description} />
       {props.rows.length === 0 ? (
         <div className="panel-empty">{props.emptyMessage ?? "No timings captured."}</div>
       ) : (
         <div className="profile-rows">
           {props.rows.map((row) => (
-            <ProfileRowGraph key={row.key} rowKey={row.key} label={row.label} root={row.root} />
+            <ProfileRowGraph key={row.key} label={row.label} root={row.root} />
           ))}
         </div>
       )}
@@ -440,30 +478,34 @@ function GraphSection(props: {
 function FrameGroupSection(props: {
   frames: FrameRowEntry[];
 }) {
-  const [expandedFrameKey, setExpandedFrameKey] = useState<string | null>(null);
-  const expandedFrame = props.frames.find((frame) => frame.key === expandedFrameKey) ?? null;
+  const [expandedFrame, setExpandedFrame] = useState<{
+    key: string;
+    bounds: DrilldownConnectorBounds;
+  } | null>(null);
+  const expandedFrameEntry = props.frames.find((frame) => frame.key === expandedFrame?.key) ?? null;
 
   return (
-    <section className="profile-section">
-      <div className="profile-section-header">
-        <strong>Frames</strong>
-        <span>Click a frame segment to inspect CPU and GPU timings.</span>
-      </div>
+    <section className="profile-section profile-section-emphasis">
+      <ProfileSectionHeader
+        icon={faForwardStep}
+        title="Captured Frames"
+        description="Click a frame segment to inspect CPU and GPU timings."
+      />
       {props.frames.length === 0 ? (
         <div className="panel-empty">No frames captured.</div>
       ) : (
         <div className="profile-row profile-frame-group">
           <div className="profile-row-meta">
             <span>Captured Frames</span>
-            {expandedFrame ? (
-              <strong>#{expandedFrame.label}</strong>
+            {expandedFrameEntry ? (
+              <strong>#{expandedFrameEntry.label}</strong>
             ) : (
               <strong>Select a frame</strong>
             )}
           </div>
           <div className="profile-bar">
             {props.frames.map((frame) => {
-              const expanded = expandedFrameKey === frame.key;
+              const expanded = expandedFrame?.key === frame.key;
               const widthPercent = 100 / Math.max(1, props.frames.length);
               const gpuSummary =
                 frame.gpuStatus === "captured"
@@ -484,8 +526,28 @@ function FrameGroupSection(props: {
                   aria-expanded={expanded}
                   aria-label={buttonLabel}
                   title={buttonLabel}
-                  onClick={() => {
-                    setExpandedFrameKey((current) => (current === frame.key ? null : frame.key));
+                  onClick={(event) => {
+                    const segmentRect = event.currentTarget.getBoundingClientRect();
+                    const parentRect = event.currentTarget.parentElement?.getBoundingClientRect();
+                    const startPercent =
+                      parentRect && parentRect.width > 0
+                        ? ((segmentRect.left - parentRect.left) / parentRect.width) * 100
+                        : 0;
+                    const endPercent =
+                      parentRect && parentRect.width > 0
+                        ? ((segmentRect.right - parentRect.left) / parentRect.width) * 100
+                        : 100;
+                    setExpandedFrame((current) =>
+                      current?.key === frame.key
+                        ? null
+                        : {
+                            key: frame.key,
+                            bounds: {
+                              startPercent,
+                              endPercent
+                            }
+                          }
+                    );
                   }}
                 >
                   <span className="profile-bar-segment-text">
@@ -495,12 +557,15 @@ function FrameGroupSection(props: {
               );
             })}
           </div>
-          {expandedFrame ? (
-            <div className="profile-frame-expanded">
-              <ProfileRowGraph rowKey={`${expandedFrame.key}:cpu`} label="CPU Total" root={expandedFrame.cpuRoot} />
-              {expandedFrame.gpuRoot ? (
-                <ProfileRowGraph rowKey={`${expandedFrame.key}:gpu`} label="GPU Total" root={expandedFrame.gpuRoot} />
-              ) : null}
+          {expandedFrameEntry && expandedFrame ? (
+            <div className="profile-frame-expanded-stack">
+              <DrilldownConnector bounds={expandedFrame.bounds} />
+              <div className="profile-frame-expanded">
+                <ProfileRowGraph label="CPU Total" root={expandedFrameEntry.cpuRoot} />
+                {expandedFrameEntry.gpuRoot ? (
+                  <ProfileRowGraph label="GPU Total" root={expandedFrameEntry.gpuRoot} />
+                ) : null}
+              </div>
             </div>
           ) : (
             <div className="panel-empty">Select a frame in the strip above to inspect it.</div>
@@ -670,42 +735,45 @@ export function ProfilingResultsPanel(props: ProfilingResultsPanelProps) {
         ]
       : [])
   ];
+  const profileTitle = "Performance Profile";
+  const gpuSummaryLine =
+    props.result.summary.gpu.metrics.averageFrameMs !== null
+      ? `${gpuStatusDescription(props.result.summary.gpu.status)} Average ${formatDuration(
+          props.result.summary.gpu.metrics.averageFrameMs
+        )} | Max ${formatDuration(props.result.summary.gpu.metrics.maxFrameMs)}`
+      : gpuStatusDescription(props.result.summary.gpu.status);
 
   return (
     <div className="panel-stack profile-panel">
       <div className="panel-section profile-panel-header">
-        <div>
-          <strong>Actor Profiling</strong>
-          <div className="panel-empty">
-            {props.result.frames.length} frames captured.
-            {" "}
-            CPU average {formatDuration(props.result.summary.cpu.averageFrameMs)}
-            {" "}
-            | max {formatDuration(props.result.summary.cpu.maxFrameMs)}
-            {" "}
-            | max process {formatDuration(props.result.summary.cpu.maxProcessMs)}
+        <div className="profile-panel-title-row">
+          <div className="profile-panel-title">
+            <FontAwesomeIcon icon={faChartColumn} className="profile-panel-title-icon" />
+            <strong>{profileTitle}</strong>
           </div>
-          <div className="panel-empty">
-            GPU: {gpuStatusDescription(props.result.summary.gpu.status)}
-            {props.result.summary.gpu.metrics.averageFrameMs !== null
-              ? ` Average ${formatDuration(props.result.summary.gpu.metrics.averageFrameMs)} | Max ${formatDuration(
-                  props.result.summary.gpu.metrics.maxFrameMs
-                )}`
-              : ""}
-          </div>
-          <div className="panel-empty">Click highlighted segments to drill down. Hover compact segments to see full labels.</div>
         </div>
+        <div className="profile-summary-chips">
+          <ProfileSummaryChip label="Frames" value={String(props.result.frames.length)} />
+          <ProfileSummaryChip label="CPU Avg" value={formatDuration(props.result.summary.cpu.averageFrameMs)} />
+          <ProfileSummaryChip label="CPU Max" value={formatDuration(props.result.summary.cpu.maxFrameMs)} />
+          <ProfileSummaryChip label="Process Max" value={formatDuration(props.result.summary.cpu.maxProcessMs)} />
+        </div>
+        <div className="profile-panel-subtext">{gpuSummaryLine}</div>
+        <div className="profile-panel-subtext">Click highlighted segments to drill down. Hover compact segments to see full labels.</div>
       </div>
 
       <GraphSection
+        icon={faChartColumn}
         title="Summaries"
         description="Aggregate frame timing views."
         rows={summaryRows}
+        className="profile-section-emphasis"
       />
 
       <FrameGroupSection frames={frameRows} />
 
       <GraphSection
+        icon={faCircleDot}
         title="Actor CPU Hotspots"
         description="Average actor update + draw CPU timings."
         className="profile-section-break"
@@ -718,6 +786,7 @@ export function ProfilingResultsPanel(props: ProfilingResultsPanelProps) {
       />
 
       <GraphSection
+        icon={faClone}
         title="Plugin CPU Hotspots"
         description="Average plugin actor update + draw CPU timings."
         rows={pluginAverageRoots.slice(0, 12).map((entry) => ({

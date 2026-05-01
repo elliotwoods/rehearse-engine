@@ -4,6 +4,8 @@ import { createActorFromDescriptor, listActorCreationOptions } from "@/features/
 import { loadPluginFromModule } from "@/features/plugins/pluginLoader";
 import { cameraStatesApproximatelyEqual, diffCameraStates, readViewportCameraState } from "@/render/cameraSync";
 
+import { toCompactYaml } from "./consoleUtils";
+
 export interface ConsoleMethodDoc {
   path: string;
   signature: string;
@@ -216,14 +218,7 @@ function serializeResult(result: unknown): string {
   if (result === undefined) {
     return "undefined";
   }
-  if (typeof result === "string") {
-    return result;
-  }
-  try {
-    return JSON.stringify(result, null, 2);
-  } catch {
-    return String(result);
-  }
+  return toCompactYaml(result).trim();
 }
 
 function findActiveViewportRuntime(): ViewportDebugRuntime | null {

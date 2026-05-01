@@ -26,7 +26,17 @@
       "WebFetch(domain:sparkjs.dev)",
       "WebFetch(domain:blog.42yeah.is)",
       "Bash(npm run build)",
-      "Bash(ls -d node_modules/three*)"
+      "Bash(ls -d node_modules/three*)",
+      "Bash(find:*)",
+      "Bash(npm run:*)",
+      "Bash(xargs wc:*)",
+      "Bash(node scripts/debug-session.mjs renderer --eval ':*)",
+      "Bash(node scripts/debug-session.mjs health)",
+      "Bash(curl:*)",
+      "Bash(ls:*)",
+      "Bash(git checkout:*)",
+      "Bash(git push:*)",
+      "Bash(npx vitest:*)"
     ]
   }
 }

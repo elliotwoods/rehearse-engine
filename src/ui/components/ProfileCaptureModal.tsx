@@ -41,8 +41,8 @@ export function ProfileCaptureModal(props: ProfileCaptureModalProps) {
         }
       }}
     >
-      <div className="render-modal profile-modal" role="dialog" aria-modal="true" aria-label="Actor profiling">
-        <h3>Capture Actor Profile</h3>
+      <div className="render-modal profile-modal" role="dialog" aria-modal="true" aria-label="Performance profile">
+        <h3>Capture Performance Profile</h3>
         <div className="render-modal-grid profile-modal-grid">
           <label>
             Frames
